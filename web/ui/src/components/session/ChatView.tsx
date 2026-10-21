@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
-import { ChevronRightIcon, ChevronsUpIcon, ClipboardIcon, ClockIcon, HandIcon, Loader2Icon, MessageSquareDashedIcon, SquareSlashIcon, TerminalIcon } from 'lucide-react'
+import { ChevronRightIcon, ChevronsUpIcon, ClipboardIcon, ClockIcon, GitBranchIcon, HandIcon, Loader2Icon, MessageSquareDashedIcon, SquareSlashIcon, TerminalIcon } from 'lucide-react'
 
 import type { Message, SessionDone } from '@/api/types'
 import { DoneCard } from '@/components/session/DoneCard'
@@ -12,6 +12,7 @@ import { useFollowScroll } from '@/hooks/useFollowScroll'
 import { useNow } from '@/hooks/useNow'
 import { clockTime } from '@/lib/format'
 import { SpeakButton } from '@/components/SpeakButton'
+import { canBranchFrom } from '@/lib/branch'
 import { msgKind, sameGroup, splitPasted, visibleMessages } from '@/lib/chat'
 import { pendingQuestion } from '@/lib/questions'
 import { pathCandidates, textPathCandidates } from '@/lib/paths'
@@ -47,6 +48,8 @@ export interface ChatViewProps {
   done?: SessionDone | null
   /** Close the session from the Done card (the card arms it first); absent = no Close button. */
   onCloseDone?: () => Promise<void>
+  /** "Branch from here" on prompts and replies with a ref; absent = no branching (pi, a gone session). */
+  onBranch?: ((m: Message) => void) | null
 }
 
 /** Longer pastes start collapsed. */
@@ -94,14 +97,45 @@ function CommandChip({ name, shell }: { name: string; shell: boolean }) {
   )
 }
 
-const Bubble = memo(function Bubble({ m, caption, actions }: { m: Message; caption: string; actions?: QuestionActions | null }) {
+/** The caption row's "Branch from here" (a new session with the conversation up to this message). */
+function BranchButton({ m, onBranch }: { m: Message; onBranch: (m: Message) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onBranch(m)}
+      title="Branch from here — a new session with the conversation up to this message"
+      aria-label="Branch from here"
+      className="-my-1 inline-flex size-6 items-center justify-center rounded-full text-dimmer hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
+      <GitBranchIcon className="size-3.5" />
+    </button>
+  )
+}
+
+const Bubble = memo(function Bubble({
+  m,
+  caption,
+  actions,
+  onBranch,
+}: {
+  m: Message
+  caption: string
+  actions?: QuestionActions | null
+  onBranch?: ((m: Message) => void) | null
+}) {
   const kind = msgKind(m)
   const text = typeof m.text === 'string' ? m.text : ''
+  const branch = onBranch ? <BranchButton m={m} onBranch={onBranch} /> : null
   if (kind === 'question' && Array.isArray(m.questions)) {
     return (
       <>
         <QuestionCard m={m} actions={actions} />
-        {caption ? <div className="-mt-2 px-1 pt-0.5 text-[0.625rem] text-dimmer tabular-nums">{caption}</div> : null}
+        {caption || branch ? (
+          <div className="-mt-2 flex items-center gap-1 px-1 pt-0.5 text-[0.625rem] text-dimmer tabular-nums">
+            {caption ? <span>{caption}</span> : null}
+            {branch}
+          </div>
+        ) : null}
       </>
     )
   }
@@ -132,7 +166,13 @@ const Bubble = memo(function Bubble({ m, caption, actions }: { m: Message; capti
   if (kind === 'system') {
     return <div className="max-w-[92%] self-center text-center text-[0.6875rem] text-dimmer [overflow-wrap:anywhere]">{text}</div>
   }
-  const cap = caption ? <div className="px-1 pt-0.5 text-[0.625rem] text-dimmer tabular-nums">{caption}</div> : null
+  const cap =
+    caption || branch ? (
+      <div className="flex items-center gap-1 px-1 pt-0.5 text-[0.625rem] text-dimmer tabular-nums">
+        {branch}
+        {caption ? <span>{caption}</span> : null}
+      </div>
+    ) : null
   if (kind === 'user') {
     // Queued: typed while Claude works; Claude Code hands it over between steps or at the turn's end.
     const queued = m.queued === true
@@ -163,6 +203,7 @@ const Bubble = memo(function Bubble({ m, caption, actions }: { m: Message; capti
     <div className="flex items-center gap-1 px-1 pt-0.5 text-[0.625rem] text-dimmer tabular-nums">
       {caption ? <span>{caption}</span> : null}
       <SpeakButton text={text} id={speakId} className="-my-1" />
+      {branch}
     </div>
   )
   if (m.final === false) {
@@ -276,6 +317,7 @@ export function ChatView(p: ChatViewProps) {
             m={m}
             caption={sameGroup(m, list[i + 1]) ? '' : clockTime(m.ts, now)}
             actions={m === asking ? p.questionActions : null}
+            onBranch={p.onBranch && canBranchFrom(m) ? p.onBranch : null}
           />
         ))}
       </div>

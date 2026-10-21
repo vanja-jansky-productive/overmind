@@ -1,6 +1,8 @@
 // Typed client for the fleet web HTTP API. Same origin (the server serves this UI);
 // in dev, Vite proxies /api to a running server (see vite.config.ts).
 import type {
+  BranchRequest,
+  BranchResponse,
   AutoNameRun,
   Brief,
   BriefRegenerateResponse,
@@ -214,6 +216,8 @@ export const api = {
     request<OkResponse>(sessionPath(host, id, 'keys'), { ...o, method: 'POST', body: { key } }),
   answer: (host: string, id: string, toolUseId: string, answers: QuestionAnswer[], o: Opts = {}) =>
     request<OkResponse>(sessionPath(host, id, 'answer'), { ...o, method: 'POST', body: { toolUseId, answers } }),
+  branch: (host: string, id: string, body: BranchRequest, o: Opts = {}) =>
+    request<BranchResponse>(sessionPath(host, id, 'branch'), { ...o, method: 'POST', body }),
   rename: (host: string, id: string, title: string, o: Opts = {}) =>
     request<RenameResponse>(sessionPath(host, id, 'rename'), { ...o, method: 'POST', body: { title } }),
   regenerateName: (host: string, id: string, o: Opts = {}) =>

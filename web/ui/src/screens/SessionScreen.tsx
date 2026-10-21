@@ -21,6 +21,7 @@ import { TaskChip } from '@/components/TaskChip'
 import { NewSessionDialog, NewSessionDrawer, type SpawnPrefill } from '@/components/NewSessionDrawer'
 import { StatusDot } from '@/components/StatusDot'
 import { StackBar } from '@/components/stack/StackBar'
+import { BranchDialog } from '@/components/session/BranchDialog'
 import { ChatView } from '@/components/session/ChatView'
 import { CompactHint } from '@/components/session/CompactHint'
 import { Composer, type ComposerApi } from '@/components/session/Composer'
@@ -46,6 +47,7 @@ import { useSwipeBack } from '@/hooks/useSwipeBack'
 import { useSessionTitle } from '@/hooks/useTitles'
 import { CHAT_LIMITS, CHAT_POLL_MS, nextChatLimit } from '@/lib/chat'
 import { continueDraft } from '@/lib/brief'
+import { canBranchSession } from '@/lib/branch'
 import { modelLabel, relTime, shortCwd } from '@/lib/format'
 import { harnessLabel } from '@/lib/harness'
 import { tailAnchor } from '@/lib/outbox'
@@ -150,6 +152,8 @@ export function SessionScreen({
   // Paths in Claude's messages that exist on the host → links → this preview.
   const sessionKey = `${host}/${id}`
   const [previewOf, setPreviewOf] = useState<{ key: string; file: FileStat } | null>(null)
+  const [branchFrom, setBranchFrom] = useState<Message | null>(null)
+  const openBranch = useCallback((m: Message) => setBranchFrom(m), [])
   const preview = previewOf?.key === sessionKey ? previewOf.file : null
   const openPreview = useCallback((file: FileStat) => setPreviewOf({ key: sessionKey, file }), [sessionKey])
   const fileLinks = useFileStats(host, id, openPreview)
@@ -494,6 +498,16 @@ export function SessionScreen({
       prefill={continueWith}
     />
   )
+  const branchForm = (
+    <BranchDialog
+      host={host}
+      sessionId={id}
+      harness={session?.harness || 'claude'}
+      from={branchFrom}
+      onClose={() => setBranchFrom(null)}
+      onOpenSession={(href) => navigate(href)}
+    />
+  )
 
   const column = (
     <>
@@ -602,6 +616,7 @@ export function SessionScreen({
             questionActions={questionActions}
             done={done}
             onCloseDone={closeDone}
+            onBranch={!gone && session && canBranchSession(session.harness) ? openBranch : null}
           />
         {(session?.harness || 'claude') === 'claude' && !lockedReason && !gone && !outbox.some((it) => it.state !== 'sent' && it.text.trim() === '/compact') ? (
           <CompactHint context={session?.context} onCompact={() => send('/compact')} />
@@ -693,6 +708,7 @@ export function SessionScreen({
           <DetailsDrawer {...menuProps} />
         )}
         {continueForm}
+        {branchForm}
       </div>
     )
   }
@@ -702,6 +718,7 @@ export function SessionScreen({
       {column}
       <DetailsDrawer {...menuProps} />
       {continueForm}
+      {branchForm}
     </div>
   )
 }

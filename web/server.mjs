@@ -15,6 +15,7 @@ import { createFleet } from './lib/fleet.mjs';
 import { createBackend } from './lib/backends.mjs';
 import { createTranscriptReader, locateTranscript } from './lib/transcript.mjs';
 import { createSpawner } from './lib/spawn.mjs';
+import { createBrancher } from './lib/branch.mjs';
 import { createKiller } from './lib/kill.mjs';
 import { createAutoNamer, createSpawnNamer } from './lib/autoname.mjs';
 import { createGrouper } from './lib/grouping.mjs';
@@ -254,6 +255,7 @@ const handleApi = createApi({
   backend,
   transcripts,
   spawner,
+  brancher: createBrancher({ spawner }),
   killer: createKiller({ run, tmux: config.tmux, closeIterm: (s) => backend.closeIterm(s) }),
   cli,
   autoNamer,

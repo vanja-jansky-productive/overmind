@@ -1,6 +1,7 @@
 // Claude Code transcript reader: turns ~/.claude/projects/<cwd>/<session>.jsonl into a
 // chat-like message list (user prompts + assistant text), dropping tool calls, tool
 // results, thinking, hooks and bookkeeping entries.
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -129,6 +130,9 @@ export function classifyUserText(raw) {
  * attachment (absorbed mid-turn). The attachment is a user message; prompts still in the queue
  * come last, `queued: true`.
  */
+/** A Claude entry's `uuid` as the message's `ref`: where a branch is cut (lib/branch.mjs). */
+const refOf = (entry) => (typeof entry.uuid === 'string' && entry.uuid ? { ref: entry.uuid } : {});
+
 export function parseTranscript(text) {
   const out = [];
   let lastAssistantId = null;
@@ -185,7 +189,7 @@ export function parseTranscript(text) {
       const classified = classifyUserText(raw);
       if (!classified) continue;
       const { kind, ...rest } = classified;
-      out.push({ role: kind === 'user' ? 'user' : 'system', kind, ...rest, ts });
+      out.push({ role: kind === 'user' ? 'user' : 'system', kind, ...rest, ts, ...refOf(entry) });
       lastAssistantId = null;
       continue;
     }
@@ -201,8 +205,9 @@ export function parseTranscript(text) {
           prev.text = `${prev.text}\n\n${body}`;
           prev.final = prev.final || final;
           prev.ts = ts ?? prev.ts;
+          if (entry.uuid) prev.ref = entry.uuid; // a branch from the bubble keeps all of it
         } else {
-          out.push({ role: 'assistant', kind: 'assistant', text: body, ts, final });
+          out.push({ role: 'assistant', kind: 'assistant', text: body, ts, final, ...refOf(entry) });
         }
         lastAssistantId = msg.id ?? null;
       }
@@ -210,7 +215,7 @@ export function parseTranscript(text) {
         if (b?.type !== 'tool_use' || b.name !== QUESTION_TOOL || !b.id) continue;
         const questions = normalizeQuestions(b.input);
         if (!questions) continue;
-        const q = { role: 'assistant', kind: 'question', id: b.id, questions, text: questionsText(questions), ts, final: true };
+        const q = { role: 'assistant', kind: 'question', id: b.id, questions, text: questionsText(questions), ts, final: true, ...refOf(entry) };
         out.push(q);
         asked.set(b.id, q);
         lastAssistantId = null;
@@ -227,6 +232,14 @@ export function parseTranscript(text) {
 }
 
 // ------------------------------------------------------------------ Codex and pi
+
+/**
+ * A Codex rollout line has no id of its own: a message's `ref` (what a branch is cut at, see
+ * lib/branch.mjs) is a hash of its raw line, stable however much of the file was read.
+ */
+export function codexRef(line) {
+  return `c-${createHash('sha1').update(line).digest('hex').slice(0, 16)}`;
+}
 
 /** Codex wraps its own context (AGENTS.md, environment, permissions) in user messages. */
 function isCodexContext(text) {
@@ -256,10 +269,10 @@ export function parseCodexTranscript(text) {
       if (!body) continue;
       if (p.role === 'user') {
         if (isCodexContext(body)) continue;
-        out.push({ role: 'user', kind: 'user', text: body, ts });
+        out.push({ role: 'user', kind: 'user', text: body, ts, ref: codexRef(line) });
         lastAssistant = null;
       } else if (p.role === 'assistant') {
-        lastAssistant = { role: 'assistant', kind: 'assistant', text: body, ts, final: true };
+        lastAssistant = { role: 'assistant', kind: 'assistant', text: body, ts, final: true, ref: codexRef(line) };
         out.push(lastAssistant);
       }
       continue;

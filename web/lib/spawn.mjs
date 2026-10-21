@@ -79,8 +79,11 @@ export function applyHarnessDefaults(launcher, harness, model, defaults = {}) {
   };
 }
 
-/** Build the shell line typed into the new pane (`promptFile`: read the prompt from there). */
-export function launchCommand({ launcher = 'claude', harness = 'claude', name, prompt, model, effort = null, promptFile }) {
+/**
+ * Build the shell line typed into the new pane (`promptFile`: read the prompt from there;
+ * `resume`: a session id to continue — a branch, lib/branch.mjs).
+ */
+export function launchCommand({ launcher = 'claude', harness = 'claude', name, prompt, model, effort = null, promptFile, resume }) {
   // No name → plain `claude`: it derives `<cwd>-9d` and the auto-namer (lib/autoname.mjs)
   // replaces that with a task-shaped name, tmux session included, once the session is idle.
   // Codex has no name flag: its tmux session carries the name, and Codex titles the thread.
@@ -88,6 +91,7 @@ export function launchCommand({ launcher = 'claude', harness = 'claude', name, p
   if (model) parts.push('--model', shq(model));
   if (effort && EFFORT_RE.test(effort)) parts.push(...effortArgs(harness, effort));
   if (name && harness !== 'codex') parts.push('-n', shq(name));
+  if (resume) parts.push(harness === 'codex' ? 'resume' : '--resume', shq(resume));
   if (promptFile) parts.push(`"$(cat ${shq(promptFile)})"`);
   else if (prompt && prompt.trim()) parts.push(shqTyped(prompt));
   return parts.join(' ');
@@ -245,8 +249,8 @@ export function createSpawner({
     await wait(enterDelayMs);
   }
 
-  /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness, ghIdentity, embed }} */
-  async function spawn({ name, dir, prompt, nameGiven = true, model = '', harness = 'claude', ghIdentity = null, embed = null }) {
+  /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness, ghIdentity, embed, resume? }} */
+  async function spawn({ name, dir, prompt, nameGiven = true, model = '', harness = 'claude', ghIdentity = null, embed = null, resume = null }) {
     if (ghIdentity && !ghIdentities.some((i) => i.name === ghIdentity)) {
       throw Object.assign(new Error(`no GitHub identity "${ghIdentity}" in this host's fleet config`), { status: 400 });
     }
@@ -268,7 +272,7 @@ export function createSpawner({
     let base = launchers[harness] || (harness === 'claude' ? launcher : harness);
     if (ghIdentity) base = await ghIdentityLauncher(ghIdentity, base);
     const picked = applyHarnessDefaults(base, harness, model, harnessDefaults()?.[harness] ?? {});
-    const launch = { launcher: base, harness, name: nameGiven ? name : null, prompt, model: picked.model, effort: picked.effort };
+    const launch = { launcher: base, harness, name: nameGiven ? name : null, prompt, model: picked.model, effort: picked.effort, resume };
     let command = launchCommand(launch);
     if (Buffer.byteLength(command) > TYPED_LINE_MAX) {
       const d = new Date();
@@ -288,7 +292,7 @@ export function createSpawner({
     if (embed) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@fleet_embed', embed], { timeout: 5000 }).catch(() => {});
     const trusted = await acceptTrustPrompt(name, { harness });
     if (!trusted) await ensureStarted(name, { harness });
-    return { name, dir, tmuxSession: name, command, trusted, model: picked.model || null, harness, ghIdentity, embed };
+    return { name, dir, tmuxSession: name, command, trusted, model: picked.model || null, harness, ghIdentity, embed, ...(resume ? { resume } : {}) };
   }
 
   /**

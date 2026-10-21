@@ -42,8 +42,8 @@ import { MAX_FIRST, MAX_TASK, MODES, SlackError, isPersonTarget, linkMinutes, pa
 
 export const API_VERSION = 1;
 
-const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|messages|send|keys|answer|kill|sleep|rename|autoname)$/;
-const POST_ACTIONS = new Set(['send', 'keys', 'answer', 'kill', 'sleep', 'rename', 'autoname']);
+const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|messages|send|keys|answer|kill|sleep|rename|autoname|branch)$/;
+const POST_ACTIONS = new Set(['send', 'keys', 'answer', 'kill', 'sleep', 'rename', 'autoname', 'branch']);
 
 const GROUP_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/;
 const MEMBER_HOST_RE = /^[^/\s]{1,128}$/;
@@ -167,6 +167,7 @@ export const DEFAULT_QUICK_REPLIES = [
  *   backend     lib/backends.mjs instance (peek/send/keys)
  *   transcripts lib/transcript.mjs reader
  *   spawner     lib/spawn.mjs spawner
+ *   brancher    lib/branch.mjs#createBrancher (…/branch: a new session from a message; absent → 501)
  *   killer      lib/kill.mjs killer (kill action; absent → 501)
  *   cli         lib/fleet-cli.mjs instance — `rename`, `nameOne`, `usage`, `prs`, `prCheckout`, `tasks`, `taskShow`, `taskStatus`, `schedule`, `scheduleAdd`, `scheduleCancel` (absent → 501)
  *   autoNamer   lib/autoname.mjs instance (autoname route + health; absent → 501)
@@ -209,6 +210,7 @@ export function createApi({
   backend,
   transcripts,
   spawner,
+  brancher = null,
   killer = null,
   cli = null,
   autoNamer = null,
@@ -451,6 +453,20 @@ export function createApi({
     }
 
     if (action === 'answer') return answerQuestion(id, body);
+
+    if (action === 'branch') {
+      if (!brancher) throw new HttpError('branching is not available on this server', 501);
+      const session = await resolveLocalSession(id);
+      let result;
+      try {
+        result = await brancher.branch(session, body);
+      } catch (err) {
+        if (err?.status) throw new HttpError(err.message, err.status);
+        throw err;
+      }
+      refreshFleet();
+      return { status: 200, body: { ok: true, host: config.self, ...result, spawn: { ok: true, host: config.self, ...result.spawn } } };
+    }
 
     // keys
     const check = validateKey(body.key);
