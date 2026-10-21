@@ -36,6 +36,7 @@ import type {
   NotesTree,
   OkResponse,
   PeekResponse,
+  ScreenResponse,
   QuestionAnswer,
   RegenerateNameResponse,
   RenameResponse,
@@ -138,6 +139,11 @@ export const api = {
 
   peek: (host: string, id: string, lines = 200, o: Opts = {}) =>
     request<PeekResponse>(`${sessionPath(host, id, 'peek')}?lines=${lines}`, o),
+  /** The pane's visible screen for the live terminal (tmux only; 409 otherwise). */
+  screen: (host: string, id: string, o: Opts = {}) => request<ScreenResponse>(sessionPath(host, id, 'screen'), o),
+  /** Raw terminal input (keys, escape sequences, mouse reports) written to the pane as is. */
+  input: (host: string, id: string, data: string, o: Opts = {}) =>
+    request<{ ok: true }>(sessionPath(host, id, 'input'), { ...o, method: 'POST', body: { data } }),
   messages: (host: string, id: string, limit = 60, o: Opts = {}) =>
     request<MessagesResponse>(`${sessionPath(host, id, 'messages')}?limit=${limit}`, o),
 

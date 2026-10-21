@@ -31,6 +31,7 @@ import { FilePreview } from '@/components/session/FilePreview'
 import { OutboxBubbles } from '@/components/session/OutboxBubbles'
 import type { QuestionActions } from '@/components/session/QuestionCard'
 import { DetailsDrawer, DetailsPanel, type DetailsPanelProps } from '@/components/session/DetailsPanel'
+import { LiveTerm } from '@/components/session/LiveTerm'
 import { TermView } from '@/components/session/TermView'
 import { ScratchpadButton } from '@/components/Scratchpad'
 import { Button } from '@/components/ui/button'
@@ -132,6 +133,9 @@ export function SessionScreen({
   const [mode, setMode] = usePersistentState<DetailMode>('fleet.detailMode', 'chat', parseMode)
   const [termLines] = usePersistentState<number>('fleet.termLines', 200, parseSize(TERM_LINES))
   const { termFont, hideNotes, sendDelay } = usePrefs()
+  // Terminal view: the live, typeable terminal (tmux) or the plain text capture with scrollback.
+  const [termLive, setTermLive] = usePersistentState<boolean>('fleet.termLive', true, (raw) => raw !== 'false')
+  const [liveUnsupportedFor, setLiveUnsupportedFor] = useState<string | null>(null)
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [jumpSignal, setJumpSignal] = useState(0)
@@ -229,7 +233,9 @@ export function SessionScreen({
   )
 
   const refreshChat = usePoller(pollChat, CHAT_POLL_MS, { enabled: mode === 'chat' })
-  const refreshPeek = usePoller(pollPeek, PEEK_POLL_MS, { enabled: mode === 'term' })
+  const canLive = String(session?.backend ?? '') === 'tmux' && liveUnsupportedFor !== `${host}/${id}`
+  const live = mode === 'term' && termLive && canLive
+  const refreshPeek = usePoller(pollPeek, PEEK_POLL_MS, { enabled: mode === 'term' && !live })
   const refreshActive = mode === 'chat' ? refreshChat : refreshPeek
 
   // Limit / lines changes re-poll now (the poller always calls the latest fn).
@@ -645,7 +651,30 @@ export function SessionScreen({
             questionActions={questionActions}
           />
         ) : (
-          <TermView text={peek?.text ?? null} failed={!!peekErr} fontSize={termFont} jumpSignal={jumpSignal} />
+          <>
+            {live ? (
+              <LiveTerm
+                key={`${host}/${id}`}
+                host={host}
+                id={id}
+                fontSize={termFont}
+                onUnsupported={() => setLiveUnsupportedFor(`${host}/${id}`)}
+                onError={(message) => toast.error(message, { id: 'live-term' })}
+              />
+            ) : (
+              <TermView text={peek?.text ?? null} failed={!!peekErr} fontSize={termFont} jumpSignal={jumpSignal} />
+            )}
+            {canLive ? (
+              <button
+                type="button"
+                onClick={() => setTermLive(!termLive)}
+                title={termLive ? 'Plain text with scrollback' : 'Live terminal: type, click options'}
+                className="absolute top-2 right-3 z-10 rounded-full border bg-popover/90 px-2.5 py-1 text-xs text-dimmer shadow-sm backdrop-blur-sm hover:text-foreground"
+              >
+                {termLive ? 'Scrollback' : 'Live'}
+              </button>
+            ) : null}
+          </>
         )}
         {(session?.harness || 'claude') === 'claude' && !lockedReason && !gone && !outbox.some((it) => it.state !== 'sent' && it.text.trim() === '/compact') ? (
           <CompactHint context={session?.context} onCompact={() => send('/compact')} />
