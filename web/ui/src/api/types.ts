@@ -380,6 +380,8 @@ export interface Message {
   declined?: boolean
   /** kind 'user': typed while Claude works, still in its queue (always last). */
   queued?: boolean
+  /** Where a branch from this message is cut (POST …/branch `ref`); absent = can't branch from it. */
+  ref?: string
 }
 
 /** GET /api/hosts/:host/sessions/:id/messages */
@@ -418,6 +420,26 @@ export interface SpawnResponse {
   tmuxSession: string
   command: string
   trusted: boolean
+}
+
+/** POST /api/hosts/:host/sessions/:id/branch: a new session from the conversation up to `ref`. */
+export interface BranchRequest {
+  ref: string
+  /** Agent of the new session; absent = the source's. */
+  harness?: HarnessId | string
+  model?: string
+  /** A prompt branched from is re-sent (this replaces it when given); after a reply, the first message. */
+  prompt?: string
+  name?: string
+}
+
+export interface BranchResponse {
+  ok: boolean
+  host: string
+  harness: string
+  /** The new session's id when the transcript was copied (same agent); null for a hand-over to another agent. */
+  sessionId: string | null
+  spawn: SpawnResponse
 }
 
 export interface KillResponse {

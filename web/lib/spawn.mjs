@@ -52,14 +52,18 @@ export const TYPED_LINE_MAX = 900;
 export const HARNESSES = ['claude', 'codex', 'pi'];
 export const HARNESS_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi' };
 
-/** Build the shell line typed into the new pane (`promptFile`: read the prompt from there). */
-export function launchCommand({ launcher = 'claude', harness = 'claude', name, prompt, model, promptFile }) {
+/**
+ * Build the shell line typed into the new pane (`promptFile`: read the prompt from there;
+ * `resume`: a session id to continue — a branch, lib/branch.mjs).
+ */
+export function launchCommand({ launcher = 'claude', harness = 'claude', name, prompt, model, promptFile, resume }) {
   // No name → plain `claude`: it derives `<cwd>-9d` and the auto-namer (lib/autoname.mjs)
   // replaces that with a task-shaped name, tmux session included, once the session is idle.
   // Codex has no name flag: its tmux session carries the name, and Codex titles the thread.
   const parts = [launcher];
   if (model) parts.push('--model', shq(model));
   if (name && harness !== 'codex') parts.push('-n', shq(name));
+  if (resume) parts.push(harness === 'codex' ? 'resume' : '--resume', shq(resume));
   if (promptFile) parts.push(`"$(cat ${shq(promptFile)})"`);
   else if (prompt && prompt.trim()) parts.push(shqTyped(prompt));
   return parts.join(' ');
@@ -196,7 +200,7 @@ export function createSpawner({
   }
 
   /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness }} */
-  async function spawn({ name, dir, prompt, nameGiven = true, model = '', harness = 'claude' }) {
+  async function spawn({ name, dir, prompt, nameGiven = true, model = '', harness = 'claude', resume = null }) {
     let st;
     try {
       st = await fs.stat(dir);
@@ -209,7 +213,7 @@ export function createSpawner({
     }
     // oh-my-zsh's "Would you like to update? [Y/n]" reads one key: the first typed character.
     await run(tmux, ['new-session', '-d', '-s', name, '-c', dir, '-e', 'DISABLE_AUTO_UPDATE=true'], { timeout: 8000 });
-    const launch = { launcher: launchers[harness] || (harness === 'claude' ? launcher : harness), harness, name: nameGiven ? name : null, prompt, model };
+    const launch = { launcher: launchers[harness] || (harness === 'claude' ? launcher : harness), harness, name: nameGiven ? name : null, prompt, model, resume };
     let command = launchCommand(launch);
     if (Buffer.byteLength(command) > TYPED_LINE_MAX) {
       const d = new Date();
@@ -226,7 +230,7 @@ export function createSpawner({
     await run(tmux, ['send-keys', '-t', `${name}:`, 'Enter'], { timeout: 8000 });
     const trusted = await acceptTrustPrompt(name, { harness });
     if (!trusted) await ensureStarted(name, { harness });
-    return { name, dir, tmuxSession: name, command, trusted, model: model || null, harness };
+    return { name, dir, tmuxSession: name, command, trusted, model: model || null, harness, ...(resume ? { resume } : {}) };
   }
 
   /**

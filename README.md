@@ -7,7 +7,9 @@ session on a machine (in tmux panes or iTerm tabs), shows what each one is doing
 peek at, steer, rename, spawn and hand work off to them. [Codex](https://github.com/openai/codex)
 and [pi](https://pi.dev) sessions are found and driven too — pick the agent and its model when you
 spawn (`fleet spawn --harness codex`, or the web New session form); see
-[docs/cli.md → Harnesses](docs/cli.md#harnesses). It also manages the tmux sessions on an
+[docs/cli.md → Harnesses](docs/cli.md#harnesses). In the web chat, any prompt or reply of a Claude Code or
+Codex session can be **branched**: the branch icon under it opens a new session with the
+conversation up to and including that message — same or other agent, any model. It also manages the tmux sessions on an
 always-on **workstation** over ssh, so the same command works from your laptop and on the
 workstation itself.
 
