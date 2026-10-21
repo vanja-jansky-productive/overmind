@@ -23,6 +23,8 @@ function fakeHost(self, sessions) {
     peek: async (s, lines) => (calls.push(['peek', s.session_id, lines]), `screen of ${s.name}`),
     send: async (s, text) => void calls.push(['send', s.session_id, text]),
     keys: async (s, key) => void calls.push(['keys', s.session_id, key]),
+    screen: async (s) => (calls.push(['screen', s.session_id]), { cols: 80, rows: 2, cursor: { x: 0, y: 1, visible: true }, altScreen: true, appCursor: false, mouse: { tracking: 'all', sgr: true, utf8: false }, lines: [`screen of ${s.name}`, ''] }),
+    input: async (s, data) => void calls.push(['input', s.session_id, data]),
   };
   const transcripts = { messages: async () => ({ messages: [{ role: 'user', text: 'hi' }], total: 1, truncated: false, updatedAt: 1 }) };
   const spawner = { spawn: async (req) => (calls.push(['spawn', req]), { name: req.name, dir: req.dir, tmuxSession: req.name, command: 'claude', trusted: false }) };
@@ -206,6 +208,26 @@ test('peek/send/keys are served locally or proxied exactly once', async (t) => {
   // a request that already went through a proxy is never forwarded again
   const chained = await get(`${urls.laptop}/api/hosts/workstation/sessions/bbbbbbbb/peek?local=1`);
   assert.equal(chained.status, 404);
+});
+
+test('live terminal: screen and input are served locally or proxied', async (t) => {
+  const { urls, lap, remote } = await startPair(t);
+  const screen = await get(`${urls.laptop}/api/hosts/workstation/sessions/bbbbbbbb/screen`);
+  assert.equal(screen.status, 200);
+  assert.equal(screen.body.host, 'workstation');
+  assert.deepEqual(screen.body.lines, ['screen of two', '']);
+  assert.equal(screen.body.mouse.tracking, 'all');
+  assert.deepEqual(remote.calls.at(-1), ['screen', 'bbbbbbbb-0000-0000-0000-000000000002']);
+
+  assert.equal((await post(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/input`, { data: '\x1b[B\r' })).status, 200);
+  assert.deepEqual(lap.calls.at(-1), ['input', 'aaaaaaaa-0000-0000-0000-000000000001', '\x1b[B\r']);
+  assert.equal((await post(`${urls.laptop}/api/hosts/workstation/sessions/bbbbbbbb/input`, { data: '2' })).status, 200);
+  assert.deepEqual(remote.calls.at(-1), ['input', 'bbbbbbbb-0000-0000-0000-000000000002', '2']);
+
+  assert.equal((await post(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/input`, { data: '' })).status, 400);
+  assert.equal((await post(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/input`, { data: 5 })).status, 400);
+  assert.equal((await get(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/input`)).status, 405);
+  assert.equal((await post(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/screen`, {})).status, 405);
 });
 
 test('spawn validates against this host\'s spawnDirs and proxies to peers', async (t) => {

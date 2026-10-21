@@ -16,7 +16,7 @@ import {
   validateSendText,
 } from '../lib/util.mjs';
 import { resolveStaticPath, readJsonBody, contentTypeFor, HttpError } from '../lib/http.mjs';
-import { createBackend, BackendError, createScriptProvider, ITERM_SCRIPT, TYPE_CHUNK, typeChunks } from '../lib/backends.mjs';
+import { createBackend, BackendError, createScriptProvider, ITERM_SCRIPT, parseScreen, SCREEN_FORMAT, TYPE_CHUNK, typeChunks } from '../lib/backends.mjs';
 import { createFleet, trimTitle, TITLE_MAX } from '../lib/fleet.mjs';
 import { createFleetCli } from '../lib/fleet-cli.mjs';
 import { ensurePath, ensureUtf8Locale } from '../lib/config.mjs';
@@ -290,6 +290,49 @@ test('tmux send types a long line in pieces so Claude keeps all of it', async ()
   }
   assert.equal(typed.map((c) => c.args[5]).join(''), text);
   assert.deepEqual(calls.at(-1).args, ['send-keys', '-t', '%1', 'Enter']);
+});
+
+test('tmux screen reads the pane state and its coloured rows', async () => {
+  const { calls, run } = recorder(async (file, args) =>
+    args[0] === 'display-message' ? { stdout: '80 3 4 2 1 1 0 0 0 1 1 0\n', stderr: '' } : { stdout: '\x1b[31mred\x1b[0m\n❯ 1. Yes\n', stderr: '' },
+  );
+  const backend = createBackend({ run, tmux: 'tmux', scriptPath: script, sleep: noSleep });
+  const frame = await backend.screen({ backend: 'tmux', handle: '%9' });
+  assert.deepEqual(calls[0].args, ['display-message', '-p', '-t', '%9', SCREEN_FORMAT]);
+  assert.deepEqual(calls[1].args, ['capture-pane', '-p', '-e', '-N', '-t', '%9']);
+  assert.deepEqual(frame, {
+    cols: 80,
+    rows: 3,
+    cursor: { x: 4, y: 2, visible: true },
+    altScreen: true,
+    appCursor: false,
+    mouse: { tracking: 'all', sgr: true, utf8: false },
+    lines: ['\x1b[31mred\x1b[0m', '❯ 1. Yes', ''],
+  });
+});
+
+test('screen is tmux-only (409 for iTerm)', async () => {
+  const { run } = recorder();
+  const backend = createBackend({ run, tmux: 'tmux', scriptPath: script, sleep: noSleep });
+  await assert.rejects(backend.screen({ backend: 'iterm', handle: 'w0t0p0' }), (e) => e instanceof BackendError && e.status === 409);
+});
+
+test('parseScreen maps the mouse flags to a tracking mode', () => {
+  assert.equal(parseScreen('80 24 0 0 1 0 1 1 0 0 0 0', '').mouse.tracking, 'click');
+  assert.equal(parseScreen('80 24 0 0 1 0 1 0 1 0 0 0', '').mouse.tracking, 'drag');
+  assert.equal(parseScreen('80 24 0 0 0 0 0 0 0 0 0 0', '').mouse.tracking, 'none');
+  assert.equal(parseScreen('80 24 0 0 1 0 1 0 0 0 0 0', '').appCursor, true);
+  assert.equal(parseScreen('80 24 0 0 0 0 0 0 0 0 0 0', 'a\nb\n').lines.length, 24);
+});
+
+test('tmux input sends the raw bytes as hex, chunked', async () => {
+  const { calls, run } = recorder();
+  const backend = createBackend({ run, tmux: 'tmux', scriptPath: script, sleep: noSleep });
+  await backend.input({ backend: 'tmux', handle: '%1' }, '\x1b[<0;10;5M❯');
+  assert.deepEqual(calls[0].args, ['send-keys', '-t', '%1', '-H', '1b', '5b', '3c', '30', '3b', '31', '30', '3b', '35', '4d', 'e2', '9d', 'af']);
+  calls.length = 0;
+  await backend.input({ backend: 'tmux', handle: '%1' }, 'x'.repeat(600));
+  assert.deepEqual(calls.map((c) => c.args.length - 4), [256, 256, 88]);
 });
 
 test('typeChunks never splits a character', () => {

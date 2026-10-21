@@ -213,11 +213,88 @@ export function createBackend({
     await run(osascript, [scriptPath(), 'type', handle, text], { timeout: 15000 });
   }
 
+  /**
+   * The pane's visible screen for the live terminal view: each row with its SGR colours
+   * (`capture-pane -e`, not joined), the size, the cursor and the input modes the app turned on
+   * (application cursor keys, mouse tracking) — so the browser terminal encodes keys and clicks
+   * the way the app expects. tmux only: iTerm has no equivalent (409).
+   */
+  async function screen(session) {
+    const backend = backendOf(session);
+    const handle = requireHandle(session);
+    if (backend !== 'tmux') throw new BackendError('the live terminal needs a tmux session', 409);
+    const [info, cap] = await Promise.all([
+      run(tmux, ['display-message', '-p', '-t', handle, SCREEN_FORMAT], { timeout: 8000 }),
+      run(tmux, ['capture-pane', '-p', '-e', '-N', '-t', handle], { timeout: 8000 }),
+    ]);
+    return parseScreen(info.stdout, cap.stdout);
+  }
+
+  /**
+   * Raw terminal input — keystrokes, escape sequences, mouse reports — exactly as a terminal
+   * would write them to the app. tmux gets the bytes as hex (`send-keys -H`), which it passes
+   * through untouched; iTerm writes them as text (no newline).
+   */
+  async function input(session, data) {
+    const backend = backendOf(session);
+    const handle = requireHandle(session);
+    if (backend === 'tmux') {
+      const bytes = Buffer.from(data, 'utf8');
+      for (let i = 0; i < bytes.length; i += INPUT_CHUNK) {
+        const hex = [...bytes.subarray(i, i + INPUT_CHUNK)].map((b) => b.toString(16).padStart(2, '0'));
+        await run(tmux, ['send-keys', '-t', handle, '-H', ...hex], { timeout: 8000 });
+      }
+      return;
+    }
+    await run(osascript, [scriptPath(), 'type', handle, data], { timeout: 15000 });
+  }
+
   /** Close the iTerm tab/pane hosting the session (best effort; the process should be dead already). */
   async function closeIterm(session) {
     const handle = requireHandle(session);
     await run(osascript, [scriptPath(), 'close', handle], { timeout: 15000 });
   }
 
-  return { peek, send, keys, type, closeIterm };
+  return { peek, send, keys, type, screen, input, closeIterm };
+}
+
+// Bytes per `send-keys -H` call (each byte is one argument).
+const INPUT_CHUNK = 256;
+
+const SCREEN_FIELDS = [
+  'pane_width',
+  'pane_height',
+  'cursor_x',
+  'cursor_y',
+  'cursor_flag',
+  'alternate_on',
+  'keypad_cursor_flag',
+  'mouse_standard_flag',
+  'mouse_button_flag',
+  'mouse_all_flag',
+  'mouse_sgr_flag',
+  'mouse_utf8_flag',
+];
+export const SCREEN_FORMAT = SCREEN_FIELDS.map((f) => `#{${f}}`).join(' ');
+
+/**
+ * `display-message -p SCREEN_FORMAT` + `capture-pane -p -e -N` → the live terminal's frame:
+ * `{ cols, rows, cursor: { x, y, visible }, altScreen, appCursor, mouse: { tracking, sgr, utf8 }, lines }`.
+ * `tracking` is the mouse mode the app asked for: none | click (1000) | drag (1002) | all (1003).
+ */
+export function parseScreen(info, captured) {
+  const v = Object.fromEntries(String(info).trim().split(/\s+/).map((x, i) => [SCREEN_FIELDS[i], Number(x) || 0]));
+  const rows = Math.max(1, v.pane_height || 24);
+  const lines = String(captured).replace(/\n$/, '').split('\n').slice(0, rows);
+  while (lines.length < rows) lines.push('');
+  const tracking = v.mouse_all_flag ? 'all' : v.mouse_button_flag ? 'drag' : v.mouse_standard_flag ? 'click' : 'none';
+  return {
+    cols: Math.max(1, v.pane_width || 80),
+    rows,
+    cursor: { x: v.cursor_x, y: v.cursor_y, visible: v.cursor_flag === 1 },
+    altScreen: v.alternate_on === 1,
+    appCursor: v.keypad_cursor_flag === 1,
+    mouse: { tracking, sgr: v.mouse_sgr_flag === 1, utf8: v.mouse_utf8_flag === 1 },
+    lines,
+  };
 }

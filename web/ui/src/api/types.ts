@@ -516,6 +516,27 @@ export interface PeekResponse {
   capturedAt: number
 }
 
+/** One frame of a tmux pane for the live terminal (GET …/screen). */
+export interface ScreenFrame {
+  cols: number
+  rows: number
+  cursor: { x: number; y: number; visible: boolean }
+  altScreen: boolean
+  /** The app turned on application cursor keys (arrows are ESC O A, not ESC [ A). */
+  appCursor: boolean
+  mouse: { tracking: 'none' | 'click' | 'drag' | 'all'; sgr: boolean; utf8: boolean }
+  /** The visible rows, with their SGR colour sequences. */
+  lines: string[]
+}
+
+/** GET /api/hosts/:host/sessions/:id/screen */
+export interface ScreenResponse extends ScreenFrame {
+  host: string
+  id: string
+  backend: Backend | string
+  capturedAt: number
+}
+
 export type MessageRole = 'user' | 'assistant' | 'system'
 export type MessageKind = 'user' | 'assistant' | 'command' | 'system' | 'question'
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { HttpError, readJsonBody } from './http.mjs';
-import { clampLines, findSession, resolveHost, sleep as defaultSleep, validateKey, validateSendText, validateTitle } from './util.mjs';
+import { clampLines, findSession, resolveHost, sleep as defaultSleep, validateInputData, validateKey, validateSendText, validateTitle } from './util.mjs';
 import { answerSteps, parseScreenPrompt, questionsText, screenShowsPrompt, validateAnswer } from './questions.mjs';
 import { resolveAllowedDir, validateSpawnRequest } from './spawn.mjs';
 import {
@@ -42,8 +42,8 @@ import { MAX_FIRST, MAX_TASK, MODES, SlackError, isPersonTarget, linkMinutes, pa
 
 export const API_VERSION = 1;
 
-const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|messages|send|keys|answer|kill|sleep|rename|autoname|branch)$/;
-const POST_ACTIONS = new Set(['send', 'keys', 'answer', 'kill', 'sleep', 'rename', 'autoname', 'branch']);
+const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|screen|input|messages|send|keys|answer|kill|sleep|rename|autoname|branch)$/;
+const POST_ACTIONS = new Set(['input', 'send', 'keys', 'answer', 'kill', 'sleep', 'rename', 'autoname', 'branch']);
 
 const GROUP_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/;
 const MEMBER_HOST_RE = /^[^/\s]{1,128}$/;
@@ -342,6 +342,12 @@ export function createApi({
       };
     }
 
+    if (action === 'screen') {
+      const session = await resolveLocalSession(id);
+      const frame = await backend.screen(session);
+      return { status: 200, body: { host: config.self, id: session.session_id, backend: session.backend, ...frame, capturedAt: Date.now() } };
+    }
+
     if (action === 'messages') {
       const limit = clampLines(url.searchParams.get('limit'), 60, 1, 500);
       const session = await resolveLocalSession(id);
@@ -449,6 +455,14 @@ export function createApi({
       if (!check.ok) throw new HttpError(check.error, 400);
       const session = await resolveLocalSession(id);
       await backend.send(session, check.text);
+      return { status: 200, body: { ok: true } };
+    }
+
+    if (action === 'input') {
+      const check = validateInputData(body.data);
+      if (!check.ok) throw new HttpError(check.error, 400);
+      const session = await resolveLocalSession(id);
+      await backend.input(session, check.data);
       return { status: 200, body: { ok: true } };
     }
 

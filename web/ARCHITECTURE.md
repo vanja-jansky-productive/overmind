@@ -28,7 +28,7 @@ server.mjs            wiring: config → deps → API → HTTP server → listen
 lib/config.mjs        shared fleet config loader + binary resolution
 lib/fleet-cli.mjs     the ONLY place that invokes the `fleet` CLI (`list --json`, `name --all --apply`, `usage --json`, `config set`, `--local stack … --json`, `--local restore … --json`, …)
 lib/fleet.mjs         local discovery: cache (2s TTL), in-flight de-dup, never throws
-lib/backends.mjs      peek/send/keys straight to tmux / iTerm2 (osascript)
+lib/backends.mjs      peek/send/keys/screen/input straight to tmux / iTerm2 (osascript)
 lib/transcript.mjs    transcript JSONL → chat messages (Claude Code; Codex rollouts and pi sessions via the row's `transcript` path)
 lib/spawn-dirs.mjs    Settings → Start directories: validate a `spawnDirs` list, write it via `fleet config set`, hot-reload
 lib/repos.mjs         Settings → Git repos: `fleet repos` list/sync/timer, validate + write the `repos` config key
@@ -155,7 +155,9 @@ add a header). `lib/backends.mjs` drives the backends directly, mirroring the CL
 - **tmux** (handle = pane id): peek `capture-pane -p -J -t <h> -S -<n>`; send
   `send-keys -t <h> -l -- <text>` in pieces of at most 512 bytes (a longer burst reaches
   Claude as a paste, or loses its first ~1 KB), then `send-keys -t <h> Enter` (multi-line text:
-  `load-buffer` + `paste-buffer -p`); keys `send-keys -t <h> <Key>`.
+  `load-buffer` + `paste-buffer -p`); keys `send-keys -t <h> <Key>`. Live terminal: screen
+  `display-message -p` (size, cursor, alt screen, cursor-key and mouse modes) + `capture-pane -p -e -N`
+  (the visible rows with their colours); input `send-keys -t <h> -H <hex bytes…>` (raw, untouched).
 - **iterm** (handle = iTerm session id): one AppleScript written to a temp file, values passed
   as argv (never interpolated). Send = `write text … without newline`, 0.2s, `write text ""`
   (bracketed paste would swallow a trailing newline).
@@ -172,6 +174,8 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 | GET | `/api/settings` | | `{ apiVersion, self, hosts: [names], quickReplies: [{ label, text }], uploads: { maxMB }, models: [{ id, label }], notes: { enabled, name? }, stacks: { enabled, model, generate }, focus: { host } }` — `stacks.model` / `generate` = the config's `stacks.model` (default `"sonnet"`) / `stacks.enabled` |
 | GET | `/api/fleet` | `?local=1` = this host only | `{ self, hosts: [Host], snapshotAt }` — self first, then peers (`snapshotAt` only on the merged view) |
 | GET | `/api/hosts/:host/sessions/:id/peek` | `?lines=200` (10..2000) | `{ host, id, backend, lines, text, capturedAt }` |
+| GET | `/api/hosts/:host/sessions/:id/screen` | | the live terminal's frame (tmux only, else **409**): `{ host, id, backend, cols, rows, cursor: { x, y, visible }, altScreen, appCursor, mouse: { tracking: none\|click\|drag\|all, sgr, utf8 }, lines: [row with SGR colours], capturedAt }` |
+| POST | `/api/hosts/:host/sessions/:id/input` | `{ data }` (1..8000 chars) | `{ ok: true }` — raw terminal input (keys, escape sequences, mouse reports) written to the pane as is (tmux `send-keys -H`; iTerm `write text` without newline). Types into a live agent. Send one key / mouse event per request: Claude Code reads two escape sequences in one write as Esc |
 | GET | `/api/hosts/:host/sessions/:id/messages` | `?limit=60` (1..500) | `{ host, id, status, backend, name, limit, messages: [Message], total, truncated, updatedAt, capturedAt }` |
 | POST | `/api/hosts/:host/sessions/:id/send` | `{ text }` (1..8000 chars, not blank) | `{ ok: true }` |
 | POST | `/api/hosts/:host/sessions/:id/keys` | `{ key }`, one of `Enter`, `Escape`, `Up`, `Down` | `{ ok: true }` |
