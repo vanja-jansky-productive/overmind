@@ -139,4 +139,5 @@ Layout: `src/server.rs` (URL resolution, health probe, starting the server), `sr
 navigation / new-window policy), `src/shell.rs` (traffic-light position, the page's
 initialization script, the drag capability's URL pattern), `src/main.rs` (window, menu, plugins), `start/index.html` (the
 start page), `tauri.conf.json`, `icons/` (`icon.svg` is the web icon on the macOS icon grid;
-`icon.png` is rendered from it).
+`icon.png` is rendered from it). Every icon — these and `web/ui/public`'s — comes from
+`node scripts/icon/generate.mjs` (an SVG Overmind drawn in code, rendered with headless Chrome).
