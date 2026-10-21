@@ -74,6 +74,13 @@ export function validateSendText(text) {
   return { ok: true, text };
 }
 
+/** Raw terminal input for the live terminal (`input`): keystrokes as a terminal writes them. */
+export function validateInputData(data) {
+  if (typeof data !== 'string' || data.length === 0) return { ok: false, error: 'data must be a non-empty string' };
+  if (data.length > 8000) return { ok: false, error: 'data too long (max 8000 chars)' };
+  return { ok: true, data };
+}
+
 /** Same cap as the CLI (`fleet rename`, core::title::MAX_TITLE). */
 export const MAX_TITLE = 64;
 

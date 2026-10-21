@@ -135,7 +135,7 @@ src/
                       GroupsStatus (last run + Regroup), StatusSummaryDots
   components/stack/   StackUi (mounted once in App: the sheet + the sibling form), StackSheet, StackChip (list rows),
                       StackColumnMenu (board column / mobile section ⋯), StackBar (under the session header)
-  components/session/ detail screen parts: ChatView, TermView, Composer, OutboxBubbles (pending / sending / sent /
+  components/session/ detail screen parts: ChatView, TermView, LiveTerm, Composer, OutboxBubbles (pending / sending / sent /
                       failed user bubbles; the terminal view's strip), FilePreview, DetailsPanel (the desktop
                       details column) / DetailsDrawer (mobile ⋯), BriefSection (its top), LatestButton
   components/desktop/ Sidebar (+ SidebarRail when collapsed, NotesLink), CommandPalette (⌘K), ShortcutsDialog (⌘?)
@@ -339,6 +339,15 @@ src/
     "Not sent: …" with **Retry** (back of the line) and **Edit** (text back in the composer). In
     the terminal view a strip above the composer shows pending / sending / failed messages, and a
     toast says sent / not sent.
+- **Live terminal** (terminal view, tmux sessions; `fleet.termLive`, the **Scrollback** / **Live**
+  toggle switches to the plain text capture): `LiveTerm` mirrors the pane into xterm.js
+  (`GET …/screen` every 400 ms, sooner after input; `lib/term.ts` repaints the rows in place and
+  mirrors the app's cursor-key, mouse-click and bracketed-paste modes) and posts every key, paste,
+  click or wheel event as raw input (`POST …/input`) — **one request per event, never merged**:
+  Claude Code reads two escape sequences in one write as Esc, which cancels a permission prompt.
+  The numbered option menu on screen (`❯ 1. Yes / 2. … / 3. No`, Codex's `› 1.`) is also offered as
+  buttons; a tap re-reads the screen, refuses when the menu changed, then sends arrows + Enter
+  (or the digit when nothing is highlighted). iTerm sessions (screen → 409) fall back to the text view.
   - Leaving the session (back, another session, the Board flyout switching or closing) sends
     what is still counting down right away; so does the page going to the background (iOS
     freezes timers). On `pagehide` (tab / app closing) the rest go as keepalive fetches, best
