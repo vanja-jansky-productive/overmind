@@ -11,7 +11,7 @@ describe('sessionTitle', () => {
     expect(sessionTitle(null)).toBe('(unnamed)')
   })
 
-  it('shows an optimistic title until the fleet reflects it or it expires', () => {
+  it('shows an optimistic title until the overmind reflects it or it expires', () => {
     const s = { display_title: 'old' }
     const at = 1_000
     expect(sessionTitle(s, { title: 'new', at }, at + 10)).toBe('new')

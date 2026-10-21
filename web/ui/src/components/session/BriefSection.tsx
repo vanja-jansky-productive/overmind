@@ -45,7 +45,7 @@ const KIND_ICON: Record<string, typeof FileIcon> = {
 /** Kinds whose `path` is a file the preview can show. */
 const FILE_KINDS = new Set(['File', 'Spec'])
 /** The Files group is collapsed until the viewer opens it (remembered per viewer). */
-const FILES_OPEN_KEY = 'fleet.briefFilesOpen'
+const FILES_OPEN_KEY = 'overmind.briefFilesOpen'
 
 export interface BriefSectionProps {
   host: string

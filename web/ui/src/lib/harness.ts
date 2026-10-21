@@ -41,5 +41,5 @@ export function pickHarness(offered: HarnessInfo[], remembered: string | null): 
 
 /** Where the picked model is remembered: Claude keeps the old key. */
 export function modelKey(harness: string): string {
-  return harness === 'claude' ? 'fleet.spawnModel' : `fleet.spawnModel.${harness}`
+  return harness === 'claude' ? 'overmind.spawnModel' : `overmind.spawnModel.${harness}`
 }

@@ -9,7 +9,7 @@ import { parseRate } from '@/lib/operator'
 /** One reader for the whole app: any agent message, the operator's replies and its announcements. */
 export function SpeechProvider({ children }: { children: ReactNode }) {
   const settings = useSettings()
-  const [rate, setRate] = usePersistentState<number>('fleet.speech.rate', 1, parseRate)
+  const [rate, setRate] = usePersistentState<number>('overmind.speech.rate', 1, parseRate)
   const speech = useSpeech({ server: settings.speak, rate })
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const { speak: say, stop, unlock, state } = speech

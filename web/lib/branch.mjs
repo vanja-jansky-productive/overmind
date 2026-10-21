@@ -218,7 +218,7 @@ const stamp = (d) => {
  * `spawner`: lib/spawn.mjs (its `spawn` takes `resume`); `tmuxHasSession` for a free name.
  * `branch(session, request)` → `{ source, ref, harness, sessionId, transcript, handoff, spawn }`.
  */
-export function createBrancher({ spawner, home = claudeHome(), codex = codexHome(), promptDir = path.join(os.homedir(), '.claude', 'fleet-prompts'), now = () => new Date(), newId = randomUUID } = {}) {
+export function createBrancher({ spawner, home = claudeHome(), codex = codexHome(), promptDir = path.join(os.homedir(), '.claude', 'overmind-prompts'), now = () => new Date(), newId = randomUUID } = {}) {
   async function freeName(base) {
     const root = (sanitizeName(base) || 'branch').slice(0, 34);
     for (let i = 1; i < 50; i += 1) {

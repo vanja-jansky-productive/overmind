@@ -112,27 +112,27 @@ test('inWorkHours', () => {
 });
 
 test('config: inbox runs only on inbox.host, with its knobs checked', () => {
-  const base = { version: 1, self: 'workstation', hosts: { workstation: {}, laptop: { web: 'http://100.x.y.z:7777' } } };
+  const base = { version: 1, self: 'workstation', hosts: { workstation: {}, laptop: { web: 'http://100.x.y.z:7878' } } };
   const on = normalizeConfig({ ...base, inbox: { host: 'workstation', scanMinutes: 20, language: 'Croatian' } }, { env: {}, home: HOME });
   assert.equal(on.inbox.enabled, true);
   assert.equal(on.inbox.scanMinutes, 20);
   assert.equal(on.inbox.language, 'Croatian');
   assert.equal(normalizeConfig({ ...base, inbox: { host: 'laptop' } }, { env: {}, home: HOME }).inbox.enabled, false);
   assert.equal(normalizeConfig(base, { env: {}, home: HOME }).inbox.enabled, false);
-  assert.equal(normalizeConfig({ ...base, inbox: { host: 'workstation' } }, { env: { FLEET_WEB_INBOX: '0' }, home: HOME }).inbox.enabled, false);
+  assert.equal(normalizeConfig({ ...base, inbox: { host: 'workstation' } }, { env: { OVERMIND_WEB_INBOX: '0' }, home: HOME }).inbox.enabled, false);
   assert.throws(() => normalizeConfig({ ...base, inbox: { workHours: [19, 8] } }, { env: {}, home: HOME }), /workHours/);
 });
 
 const flush = () => new Promise((r) => setImmediate(r));
 
 function setup({ now, agentText = '[]' } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-inbox-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-inbox-'));
   const calls = { agent: 0, ask: 0, prompts: [] };
   const clock = { t: now };
   const inbox = createInbox({
     settings: { host: 'workstation', scanMinutes: 30, workHours: [8, 19], workDays: [1, 2, 3, 4, 5], model: 'haiku', briefModel: 'haiku', briefMinutes: 45, language: 'English', comms: true },
     cli: { prs: async () => ({ prs: [pr({})] }), tasks: async () => { throw new Error('no token'); } },
-    getFleet: async () => ({ hosts: [] }),
+    getOvermind: async () => ({ hosts: [] }),
     ask: async ({ prompt }) => { calls.ask++; calls.prompts.push(prompt); return '- do the PR'; },
     agent: async ({ prompt }) => { calls.agent++; calls.prompts.push(prompt); return { text: agentText, costUsd: 0.01 }; },
     file: path.join(dir, 'inbox.json'),

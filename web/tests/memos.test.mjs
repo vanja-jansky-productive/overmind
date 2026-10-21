@@ -15,7 +15,7 @@ function audioReq(body, type = 'audio/webm;codecs=opus') {
 }
 
 function setup({ fail = new Set(), title = 'Kickoff s Markom o API-ju' } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-memos-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-memos-'));
   const calls = { transcribe: [], ask: 0 };
   const transcriber = {
     async transcribeAudio(audio, type, prompt) {
@@ -123,7 +123,7 @@ test('no title model (or no speech) → a date title', async () => {
 test('the vocabulary steers every segment\'s transcription', async () => {
   assert.match(memoPrompt(['Claude', ' beads ', '']), /Pojmovi: Claude, beads\.$/);
   assert.ok(memoPrompt(Array(500).fill('term')).length < 1700, 'capped');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-memos-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-memos-'));
   const prompts = [];
   const transcriber = { transcribeAudio: async (a, t, prompt) => (prompts.push(prompt), { text: 'x' }) };
   const memos = createMemos({ dir: path.join(root, 'm'), audioDir: path.join(root, 'a'), transcriber, vocabulary: ['Productive'] });

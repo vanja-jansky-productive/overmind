@@ -47,7 +47,7 @@ export interface SidebarProps {
 
 /** Desktop left column: header + summary, search, status/host filters, the session list. */
 export function Sidebar({ list, now, cursorKey, selectedKey, searchRef, onSearchNav, onNew, onCollapse, viewMode, onViewMode }: SidebarProps) {
-  const { fleet, error, query, setQuery, status, setStatus, setHostFilter, hosts, hostNames, host, view, hostCounts, summary, unreachable, note } = list
+  const { overmind, error, query, setQuery, status, setStatus, setHostFilter, hosts, hostNames, host, view, hostCounts, summary, unreachable, note } = list
   const listRef = useRef<HTMLDivElement>(null)
 
   // Keep the cursor row visible (j/k past the edge).
@@ -78,8 +78,8 @@ export function Sidebar({ list, now, cursorKey, selectedKey, searchRef, onSearch
       <div data-tauri-drag-region className="shrink-0 space-y-2 border-b px-3 pt-3 pb-2.5">
         {/* The desktop app's traffic lights sit over this row (see index.css → Desktop app). */}
         <div data-tauri-drag-region="deep" className="titlebar-lead flex min-h-8 items-center gap-2 [--titlebar-offset:0.75rem]">
-          <h1 className="text-lg font-bold tracking-tight">Fleet</h1>
-          {fleet ? (
+          <h1 className="text-lg font-bold tracking-tight">Overmind</h1>
+          {overmind ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums" aria-label="Status summary">
               {summary.waiting > 0 ? (
                 <span className="flex items-center gap-1 font-semibold text-status-waiting" title="Needs you">
@@ -152,11 +152,11 @@ export function Sidebar({ list, now, cursorKey, selectedKey, searchRef, onSearch
           aria-label="Filter by status"
           className="no-scrollbar w-full flex-wrap"
         >
-          {visibleStatusFilters(fleet ? view.counts : null, status).map((f) => (
+          {visibleStatusFilters(overmind ? view.counts : null, status).map((f) => (
             <ToggleGroupItem key={f.id} value={f.id} className={chip} title={f.id === 'scheduled' ? 'Sessions started by bots' : undefined}>
               <StatusFilterLabel filter={f} />
               <span className="text-[0.6875rem] text-dimmer tabular-nums group-data-[state=on]/toggle:text-accent-foreground/70">
-                {fleet ? view.counts[f.id] : ''}
+                {overmind ? view.counts[f.id] : ''}
               </span>
             </ToggleGroupItem>
           ))}
@@ -188,7 +188,7 @@ export function Sidebar({ list, now, cursorKey, selectedKey, searchRef, onSearch
         {error ? (
           <Alert variant="destructive" className="mb-2">
             <AlertDescription>
-              {fleet ? `Refresh failed: ${error} — showing last known data` : `Could not reach fleet web: ${error}`}
+              {overmind ? `Refresh failed: ${error} — showing last known data` : `Could not reach overmind web: ${error}`}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -199,7 +199,7 @@ export function Sidebar({ list, now, cursorKey, selectedKey, searchRef, onSearch
             </AlertDescription>
           </Alert>
         ))}
-        {!fleet ? (
+        {!overmind ? (
           <SessionListSkeleton />
         ) : view.sessions.length > 0 ? (
           <nav aria-label="Sessions" className="flex flex-col gap-1.5">
@@ -223,11 +223,11 @@ export function Sidebar({ list, now, cursorKey, selectedKey, searchRef, onSearch
           </nav>
         ) : unreachable.length === 0 ? (
           <div className="px-4 py-10 text-center text-sm text-dimmer">
-            {allSessions(fleet).length > 0 ? 'Nothing matches.' : 'No Claude sessions running.'}
+            {allSessions(overmind).length > 0 ? 'Nothing matches.' : 'No Claude sessions running.'}
           </div>
         ) : null}
-        {fleet ? <DormantSection now={now} host={host} query={query} desktop className="mt-4" /> : null}
-        {fleet ? <ClosedSection now={now} host={host} query={query} desktop className="mt-3" /> : null}
+        {overmind ? <DormantSection now={now} host={host} query={query} desktop className="mt-4" /> : null}
+        {overmind ? <ClosedSection now={now} host={host} query={query} desktop className="mt-3" /> : null}
       </div>
 
       <div className="shrink-0 border-t px-2 py-1.5 text-xs text-dimmer">

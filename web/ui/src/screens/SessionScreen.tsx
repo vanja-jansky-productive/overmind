@@ -40,7 +40,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useFileDrop } from '@/hooks/useAttach'
 import { useBrief } from '@/hooks/useBrief'
 import { useFileStats } from '@/hooks/useFileLinks'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useNow } from '@/hooks/useNow'
 import { useOutbox } from '@/hooks/useOutbox'
 import { usePersistentState } from '@/hooks/usePersistentState'
@@ -123,20 +123,20 @@ export function SessionScreen({
   embedded = false,
 }: SessionScreenProps) {
   const pane = layout === 'pane'
-  const { fleet, refresh: refreshFleet, applyFleet } = useFleet()
+  const { overmind, refresh: refreshOvermind, applyOvermind } = useOvermind()
   const settings = useSettings()
   const [, navigate] = useLocation()
   const now = useNow(1000)
-  const session = findSession(fleet, host, id)
-  const hostEntry = fleet?.hosts.find((h) => h.name === host) ?? null
+  const session = findSession(overmind, host, id)
+  const hostEntry = overmind?.hosts.find((h) => h.name === host) ?? null
 
   // View prefs (localStorage). Text size, terminal text and
   // progress notes are global (the Settings screen).
-  const [mode, setMode] = usePersistentState<DetailMode>('fleet.detailMode', 'chat', parseMode)
-  const [termLines] = usePersistentState<number>('fleet.termLines', 200, parseSize(TERM_LINES))
+  const [mode, setMode] = usePersistentState<DetailMode>('overmind.detailMode', 'chat', parseMode)
+  const [termLines] = usePersistentState<number>('overmind.termLines', 200, parseSize(TERM_LINES))
   const { termFont, hideNotes, sendDelay } = usePrefs()
   // Terminal view: the live, typeable terminal (tmux) or the plain text capture with scrollback.
-  const [termLive, setTermLive] = usePersistentState<boolean>('fleet.termLive', true, (raw) => raw !== 'false')
+  const [termLive, setTermLive] = usePersistentState<boolean>('overmind.termLive', true, (raw) => raw !== 'false')
   const [liveUnsupportedFor, setLiveUnsupportedFor] = useState<string | null>(null)
 
   const [menuOpen, setMenuOpen] = useState(false)
@@ -306,7 +306,7 @@ export function SessionScreen({
   const noTranscript = mode === 'chat' && chatErr instanceof ApiError && chatErr.status === 404 && !isSessionGone(chatErr)
   const errText = !activeErr || gone ? null : noTranscript ? (chat ? 'No transcript for this session yet' : null) : sessionErrorMessage(activeErr)
   const hostDown = hostEntry?.ok === false
-  const missing = !!fleet && !hostDown && !session
+  const missing = !!overmind && !hostDown && !session
 
   // --- actions -------------------------------------------------------------
   const afterSteer = () => {
@@ -486,8 +486,8 @@ export function SessionScreen({
     stack: stackMenu,
     onClosed: () => {
       // Drop it from the list now; the next polls confirm (discovery caches ~2s).
-      if (fleet) applyFleet(withoutSession(fleet, host, id))
-      setTimeout(refreshFleet, 2500)
+      if (overmind) applyOvermind(withoutSession(overmind, host, id))
+      setTimeout(refreshOvermind, 2500)
       navigate('/', { replace: true })
     },
   }
@@ -639,7 +639,7 @@ export function SessionScreen({
                 ? `${host} unreachable: ${hostEntry?.error || 'no response'}`
                 : gone
                   ? 'This session has ended.'
-                  : 'Not in the fleet list right now — it may have ended.'}
+                  : 'Not in the overmind list right now — it may have ended.'}
             </span>
           </div>
         </div>

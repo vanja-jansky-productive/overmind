@@ -112,7 +112,7 @@ export function createScriptProvider({ tmpdir = os.tmpdir(), fsImpl = fs } = {})
   let cached = null;
   return () => {
     if (cached && fsImpl.existsSync(cached)) return cached;
-    const file = path.join(tmpdir, `fleet-web-iterm-${process.pid}.applescript`);
+    const file = path.join(tmpdir, `overmind-web-iterm-${process.pid}.applescript`);
     fsImpl.writeFileSync(file, ITERM_SCRIPT, 'utf8');
     cached = file;
     return file;
@@ -178,7 +178,7 @@ export function createBackend({
       if (/[\r\n]/.test(text)) {
         // tmux (3.6) drops newlines typed by `send-keys -l`, so a multi-line message would reach
         // Claude as one line. Paste it as a bracketed paste instead: the TUI keeps the newlines.
-        const buf = `fleet-send-${process.pid}-${++pasteSeq}`;
+        const buf = `overmind-send-${process.pid}-${++pasteSeq}`;
         await run(tmux, ['load-buffer', '-b', buf, '-'], { input: text, timeout: 8000 });
         await run(tmux, ['paste-buffer', '-p', '-r', '-d', '-b', buf, '-t', handle], { timeout: 8000 });
       } else {

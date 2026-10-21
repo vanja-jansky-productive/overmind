@@ -52,10 +52,10 @@ export interface ShortcutContext {
   arrowsFree: boolean
 }
 
-/** Where the page runs: the OS (glyphs, which key is `mod`) and browser tab vs Fleet.app. */
+/** Where the page runs: the OS (glyphs, which key is `mod`) and browser tab vs Overmind.app. */
 export interface ShortcutEnv {
   mac: boolean
-  /** Inside Fleet.app (its initialization script sets `data-shell="desktop"`). */
+  /** Inside Overmind.app (its initialization script sets `data-shell="desktop"`). */
   app: boolean
 }
 
@@ -65,16 +65,16 @@ export type Combo = readonly string[]
 interface Binding {
   action: ShortcutAction
   combo: Combo
-  /** Fleet.app only: its native menu owns the combo (browsers reserve it) and dispatches a
-   *  `fleet:command` event; the page's keydown never matches it (no double fire). */
+  /** Overmind.app only: its native menu owns the combo (browsers reserve it) and dispatches a
+   *  `overmind:command` event; the page's keydown never matches it (no double fire). */
   app?: true
 }
 
 /**
  * The `mod` bindings, in display order (the first one an environment has is the hint).
  * Browser-reserved combos are avoided: ⌘N/⌘T/⌘W/⌘Q/⌘⇧N/⌘⇧T cannot be caught by a page,
- * ⌘L/⌘R/⌘1–9/⌘[/⌘] are the address bar, reload, tabs and history (Fleet.app's menu keeps
- * ⌘R, ⌘⇧R, ⌘W, ⌘[, ⌘]). New session is ⌘N in Fleet.app, ⌘⇧O (ChatGPT's "new chat") anywhere.
+ * ⌘L/⌘R/⌘1–9/⌘[/⌘] are the address bar, reload, tabs and history (Overmind.app's menu keeps
+ * ⌘R, ⌘⇧R, ⌘W, ⌘[, ⌘]). New session is ⌘N in Overmind.app, ⌘⇧O (ChatGPT's "new chat") anywhere.
  */
 export const BINDINGS: readonly Binding[] = [
   { action: 'palette', combo: ['mod', 'K'] },
@@ -90,7 +90,7 @@ export const BINDINGS: readonly Binding[] = [
   { action: 'rename', combo: ['mod', 'E'] },
   { action: 'notes', combo: ['mod', 'shift', 'E'] },
   { action: 'scratchpad', combo: ['mod', 'shift', 'S'] },
-  // The modules (again → back to the sessions). ⌘, is the macOS settings key: Fleet.app and
+  // The modules (again → back to the sessions). ⌘, is the macOS settings key: Overmind.app and
   // Safari pass it to the page, Chrome keeps it for its own settings.
   { action: 'inbox', combo: ['mod', 'shift', 'I'] },
   { action: 'operator', combo: ['mod', 'shift', 'K'] },
@@ -272,7 +272,7 @@ export const SHORTCUT_HELP: { title: string; items: ShortcutHelp[] }[] = [
     title: 'Modules (again: back to the sessions)',
     items: [
       { action: 'inbox', label: 'Inbox: everything waiting on you' },
-      { action: 'operator', label: 'Operator: talk to the fleet' },
+      { action: 'operator', label: 'Operator: talk to the overmind' },
       { action: 'memos', label: 'Voice memos: record a conversation' },
       { action: 'prs', label: 'Pull requests' },
       { action: 'tasks', label: 'Tasks (Productive)' },
@@ -301,7 +301,7 @@ export function comboLabel(combo: Combo, mac: boolean): string {
   return combo.map((t) => keyLabel(t, mac)).join(mac ? '' : '+')
 }
 
-/** The hint for an action here (`⌘N` in Fleet.app, `⌘⇧O` in a browser), or '' if it has none. */
+/** The hint for an action here (`⌘N` in Overmind.app, `⌘⇧O` in a browser), or '' if it has none. */
 export function shortcutHint(action: ShortcutAction, env: ShortcutEnv = shortcutEnv()): string {
   const c = combosFor(action, env)[0]
   return c ? comboLabel(c, env.mac) : ''
@@ -329,11 +329,11 @@ export function shortcutEnv(): ShortcutEnv {
   return { mac: isMacPlatform(), app: isDesktopApp() }
 }
 
-/** Fleet.app's native menu → the page: `window.dispatchEvent(new CustomEvent(…, { detail: action }))`. */
-export const APP_COMMAND_EVENT = 'fleet:command'
+/** Overmind.app's native menu → the page: `window.dispatchEvent(new CustomEvent(…, { detail: action }))`. */
+export const APP_COMMAND_EVENT = 'overmind:command'
 /** Actions the app's menu may ask for. */
 export const APP_COMMANDS: readonly ShortcutAction[] = ['new']
 
 /** Opens the keyboard shortcuts dialog from anywhere (the Settings screen); the desktop shell listens. */
-export const SHOW_SHORTCUTS_EVENT = 'fleet:show-shortcuts'
+export const SHOW_SHORTCUTS_EVENT = 'overmind:show-shortcuts'
 export const showShortcuts = () => window.dispatchEvent(new Event(SHOW_SHORTCUTS_EVENT))

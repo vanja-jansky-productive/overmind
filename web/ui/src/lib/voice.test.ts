@@ -4,7 +4,7 @@ import { appendTranscript, formatElapsed, micUnavailableReason, pickMimeType } f
 
 test('appendTranscript joins with exactly one space and ignores empty transcripts', () => {
   expect(appendTranscript('', 'Pozdrav.')).toBe('Pozdrav.')
-  expect(appendTranscript('fix the bug', 'in fleet')).toBe('fix the bug in fleet')
+  expect(appendTranscript('fix the bug', 'in overmind')).toBe('fix the bug in overmind')
   expect(appendTranscript('line one\n', 'two')).toBe('line one\ntwo')
   expect(appendTranscript('keep ', '  padded  ')).toBe('keep padded')
   expect(appendTranscript('unchanged', '   ')).toBe('unchanged')

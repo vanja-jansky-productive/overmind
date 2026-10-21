@@ -1,12 +1,12 @@
-# fleet
+# overmind
 
-Supervise a fleet of Claude Code sessions across your machines — from a terminal or from your phone.
+Command a swarm of Claude Code and Codex sessions across your machines — from a terminal or from your phone.
 
-`fleet` is one Rust CLI plus a small web app (a zero-dependency Node server and a React PWA). It finds every live Claude Code
+`overmind` is one Rust CLI plus a small web app (a zero-dependency Node server and a React PWA). It finds every live Claude Code
 session on a machine (in tmux panes or iTerm tabs), shows what each one is doing, and lets you
 peek at, steer, rename, spawn and hand work off to them. [Codex](https://github.com/openai/codex)
 and [pi](https://pi.dev) sessions are found and driven too — pick the agent and its model when you
-spawn (`fleet spawn --harness codex`, or the web New session form); see
+spawn (`overmind spawn --harness codex`, or the web New session form); see
 [docs/cli.md → Harnesses](docs/cli.md#harnesses). In the web chat, any prompt or reply of a Claude Code or
 Codex session can be **branched**: the branch icon under it opens a new session with the
 conversation up to and including that message — same or other agent, any model. It also manages the tmux sessions on an
@@ -19,29 +19,32 @@ The setup it is built for:
 - your laptop and phone reach it over [Tailscale](https://tailscale.com);
 - closing the laptop lid never interrupts an agent — the tmux server lives on the workstation.
 
+Overmind is a fork of [fleet](https://github.com/ilucin/fleet) by ilucin, and runs side by side with it: its own binary
+(`overmind`), config (`~/.config/overmind/`), state dirs and web port (**7878**, fleet's is 7777).
+
 ## Architecture
 
 ```
   laptop                         phone                           workstation (always on)
- ┌──────────────────────┐      ┌──────────────────┐            ┌──────────────────────────────┐
- │ fleet <cmd>          │      │ browser / PWA    │            │ tmux server (24/7)           │
- │  ├─ local sessions   │      │  (fleet web UI)  │            │  ├─ job-a: claude            │
- │  └─ -H workstation ──┼─ssh──┼──────────────────┼──────────▶ │  ├─ job-b: claude            │
- │                      │      │                  │   http     │  └─ fleet: fleet watch (TUI) │
- │ fleet web serve :7777│◀─────┼── http ──────────┼──────────▶ │ fleet web serve :7777        │
- └──────────────────────┘ peer │                  │  (tailnet) └──────────────────────────────┘
-            ▲                  └──────────────────┘                        ▲
-            └─────────────── Tailscale (WireGuard mesh, private IPs) ──────┘
+ ┌─────────────────────────┐   ┌────────────────────┐          ┌──────────────────────────────────┐
+ │ overmind <cmd>          │   │ browser / PWA      │          │ tmux server (24/7)               │
+ │  ├─ local sessions      │   │ (overmind web UI)  │          │  ├─ job-a: claude                │
+ │  └─ -H workstation ─────┼ssh┼────────────────────┼────────▶ │  ├─ job-b: claude                │
+ │                         │   │                    │   http   │  └─ overmind: overmind watch     │
+ │ overmind web serve :7878│◀──┼── http ────────────┼────────▶ │ overmind web serve :7878         │
+ └─────────────────────────┘   │                    │ (tailnet)└──────────────────────────────────┘
+            ▲                  └────────────────────┘                        ▲
+            └─────────────── Tailscale (WireGuard mesh, private IPs) ────────┘
 ```
 
-- **CLI** — `fleet` discovers sessions from Claude Code's own registry (`~/.claude/sessions/`),
+- **CLI** — `overmind` discovers sessions from Claude Code's own registry (`~/.claude/sessions/`),
   drives them through tmux or iTerm, and dispatches to other hosts by re-running itself over ssh
-  (`ssh <host> fleet <same args>`).
+  (`ssh <host> overmind <same args>`).
 - **Web** — every machine runs the same server. It serves its own sessions and merges in its
-  peers', so any one URL shows the whole fleet. Built for a phone: list, chat/terminal view,
+  peers', so any one URL shows the whole overmind. Built for a phone: list, chat/terminal view,
   send a message, spawn a session.
-- **Config** — one small JSON file per machine (`~/.config/fleet/config.json`), written by
-  `fleet init`, read by both the CLI and the web server.
+- **Config** — one small JSON file per machine (`~/.config/overmind/config.json`), written by
+  `overmind init`, read by both the CLI and the web server.
 
 Details: [docs/architecture.md](docs/architecture.md).
 
@@ -55,24 +58,24 @@ Build prerequisites: a Rust toolchain ([rustup](https://rustup.rs); the repo pin
 the linker. If a full Xcode is installed but its license was never accepted, linking fails with
 "You have not agreed to the Xcode license agreements" — run `sudo xcodebuild -license accept`, or
 build against the Command Line Tools instead:
-`DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo install --path crates/fleet`.
+`DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo install --path crates/overmind`.
 
 ```sh
-git clone https://github.com/ilucin/fleet && cd fleet
-cargo install --path crates/fleet     # installs `fleet` into ~/.cargo/bin
-fleet web build                       # build the web UI (npm ci + vite build → web/ui/dist)
+git clone https://github.com/vanja-jansky-productive/overmind && cd overmind
+cargo install --path crates/overmind  # installs `overmind` into ~/.cargo/bin
+overmind web build                    # build the web UI (npm ci + vite build → web/ui/dist)
 
-fleet init                            # interactive: this machine's name, hosts, spawn dirs, web port
-fleet install --host workstation      # copy the binary + web app (incl. built UI) to the workstation
-fleet doctor                          # reachability, versions on both ends, config sanity
+overmind init                         # interactive: this machine's name, hosts, spawn dirs, web port
+overmind install --host workstation   # copy the binary + web app (incl. built UI) to the workstation
+overmind doctor                       # reachability, versions on both ends, config sanity
 
-fleet list                            # Claude sessions on this machine
-fleet -H workstation list             # ...on the workstation
-fleet web serve                       # web UI on :7777 (run it on each machine)
+overmind list                         # Claude sessions on this machine
+overmind -H workstation list          # ...on the workstation
+overmind web serve                    # web UI on :7878 (run it on each machine)
 ```
 
-Then open `http://<workstation-tailscale-ip>:7777` on your phone and add it to the home screen. On a
-Mac, `crates/fleet-desktop/bundle.sh --install` builds **Fleet.app**, the same UI as a desktop app
+Then open `http://<workstation-tailscale-ip>:7878` on your phone and add it to the home screen. On a
+Mac, `crates/overmind-desktop/bundle.sh --install` builds **Overmind.app**, the same UI as a desktop app
 ([docs/desktop.md](docs/desktop.md)).
 
 Building the whole setup from scratch (always-on Mac, Tailscale, ssh, tmux, phone):
@@ -100,13 +103,13 @@ Global flags: `-H, --host <name>`, `--local`, `--json` (where it applies). Full 
 A few examples:
 
 ```sh
-fleet                                   # live dashboard (TUI); piped, it prints `list`
-fleet peek docs-refresh                 # what that session shows right now
-fleet send docs-refresh "run the tests" # type into it and press Enter
-fleet list -a --json                    # every host, one array, rows tagged with host
-fleet new billing-fix -C ~/Code/project # attach to (or create) a tmux session on the workstation
-fleet last                              # back to the previous tmux session
-fleet tmux stale                        # idle shells nothing is using
+overmind                                # live dashboard (TUI); piped, it prints `list`
+overmind peek docs-refresh              # what that session shows right now
+overmind send docs-refresh "run the tests" # type into it and press Enter
+overmind list -a --json                 # every host, one array, rows tagged with host
+overmind new billing-fix -C ~/Code/project # attach to (or create) a tmux session on the workstation
+overmind last                           # back to the previous tmux session
+overmind tmux stale                     # idle shells nothing is using
 ```
 
 ## Docs
@@ -114,8 +117,8 @@ fleet tmux stale                        # idle shells nothing is using
 - [docs/setup.md](docs/setup.md) — end-to-end guide: workstation, Tailscale, ssh, tmux, Claude Code, phone
 - [docs/architecture.md](docs/architecture.md) — components, config, discovery, JSON contracts, extension points
 - [docs/cli.md](docs/cli.md) — command reference
-- [docs/desktop.md](docs/desktop.md) — Fleet.app, the web UI as a macOS app (Tauri)
-- [docs/migration.md](docs/migration.md) — coming from `tb-fleet`, `ws` or `fleet-web`
+- [docs/desktop.md](docs/desktop.md) — Overmind.app, the web UI as a macOS app (Tauri)
+- [docs/migration.md](docs/migration.md) — coming from `tb-fleet`, `ws` or `overmind-web`
 - [web/](web/) — the web server and its HTTP API
 
 ## Security

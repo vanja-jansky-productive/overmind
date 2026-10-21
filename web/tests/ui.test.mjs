@@ -11,7 +11,7 @@ import { CLASSIC_UI, normalizeConfig, resolveUiDir } from '../lib/config.mjs';
 const HOME = '/home/tester';
 
 function tmpWebRoot(t, { built }) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-web-root-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-web-root-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'ui', 'dist', 'assets'), { recursive: true });
   if (built) {
@@ -36,13 +36,13 @@ test('resolveUiDir: explicit paths override, the retired "classic" means the def
   assert.equal(resolveUiDir('/srv/ui', { webRoot: built, home: HOME }), '/srv/ui');
 });
 
-test('normalizeConfig: web.ui / FLEET_WEB_UI pick the UI dir', (t) => {
+test('normalizeConfig: web.ui / OVERMIND_WEB_UI pick the UI dir', (t) => {
   const built = tmpWebRoot(t, { built: true });
   const opts = (env = {}) => ({ env, home: HOME, webRoot: built });
   assert.equal(normalizeConfig({}, opts()).uiDir, path.join(built, 'ui', 'dist'));
   assert.equal(normalizeConfig({ web: { ui: 'classic' } }, opts()).uiDir, path.join(built, 'ui', 'dist'));
   assert.equal(normalizeConfig({ web: { ui: '/y' } }, opts()).uiDir, '/y');
-  assert.equal(normalizeConfig({ web: { ui: '/y' } }, opts({ FLEET_WEB_UI: '/x' })).uiDir, '/x', 'env beats config');
+  assert.equal(normalizeConfig({ web: { ui: '/y' } }, opts({ OVERMIND_WEB_UI: '/x' })).uiDir, '/x', 'env beats config');
 });
 
 test('cacheControlFor: hashed /assets/ files are immutable, the rest revalidates', () => {

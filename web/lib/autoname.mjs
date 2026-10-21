@@ -1,6 +1,6 @@
 // Periodic auto-naming. Sessions started without a name carry Claude's cwd+hash fallback
-// (`project-9d`); the `fleet` CLI can generate task-shaped names and apply them via
-// Claude's own `/rename` (`fleet name --all --apply`, it holds sessions waiting on a prompt), but
+// (`project-9d`); the `overmind` CLI can generate task-shaped names and apply them via
+// Claude's own `/rename` (`overmind name --all --apply`, it holds sessions waiting on a prompt), but
 // nothing runs it on a schedule. The web server does: it already runs on every host, inside
 // tmux, which is also where `claude -p` (the name generator) has a logged-in keychain on a
 // headless machine; a plain ssh shell often does not.
@@ -13,7 +13,7 @@
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
-/** Turn `fleet name` human output into a summary. Lines look like:
+/** Turn `overmind name` human output into a summary. Lines look like:
  *  `project-1a  →  fix-login-flow`          (renamed; dry run appends `   (llm)`)
  *  `   ⧉ fix-login → fix-login-flow`        (tmux synced, indented note)
  *  `⏸ project-4f is mid-turn — nothing sent (--force overrides)` (held)
@@ -41,7 +41,7 @@ export function parseNameOutput(text) {
 
 /**
  * @param deps
- *   cli           lib/fleet-cli.mjs instance (`nameAll`)
+ *   cli           lib/overmind-cli.mjs instance (`nameAll`)
  *   intervalMs, initialDelayMs, log, dryRun
  */
 export function createAutoNamer({ cli, intervalMs = 5 * 60 * 1000, initialDelayMs = 60 * 1000, log = () => {}, dryRun = false }) {
@@ -127,13 +127,13 @@ export const SPAWN_NAME_DELAYS_MS = [8000, 10000, 12000, 15000, 20000, 25000, 30
 /**
  * A targeted naming pass for a session the web just spawned with a first prompt, so it gets
  * a task-shaped name within a minute or two instead of at the next periodic run. For each
- * try (after `delaysMs[i]`): find the session by its tmux name in the local fleet; skip the
+ * try (after `delaysMs[i]`): find the session by its tmux name in the local overmind; skip the
  * try while it has not registered or is still busy on its first turn; stop once it no longer
- * carries a Claude-derived name; else `fleet name <session_id> --apply` — done when renamed,
+ * carries a Claude-derived name; else `overmind name <session_id> --apply` — done when renamed,
  * retried when held (waiting on a prompt) or failed.
  * @param deps
- *   cli          lib/fleet-cli.mjs instance (`nameOne`)
- *   listSessions () => Promise<session[]> — this host's `fleet list --json` rows (fresh)
+ *   cli          lib/overmind-cli.mjs instance (`nameOne`)
+ *   listSessions () => Promise<session[]> — this host's `overmind list --json` rows (fresh)
  *   delaysMs, sleep, log
  */
 export function createSpawnNamer({ cli, listSessions, delaysMs = SPAWN_NAME_DELAYS_MS, sleep, log = () => {} }) {

@@ -1,6 +1,6 @@
 // Session briefs: the file format (docs/architecture.md → "Session briefs"). Pure functions,
 // no I/O — shared by the brief service (lib/briefs.mjs) and anything else that reads or writes
-// the files. `fleet brief` (crates/fleet/src/core/brief.rs) is a port: keep the two in step —
+// the files. `overmind brief` (crates/overmind/src/core/brief.rs) is a port: keep the two in step —
 // both pin the fixtures in testdata/briefs/ (regenerate with `node testdata/briefs/gen.mjs`).
 //
 //   ---

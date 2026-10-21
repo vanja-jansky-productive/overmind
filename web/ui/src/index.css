@@ -31,7 +31,7 @@
   --color-dimmer: var(--dimmer);
   --color-terminal: var(--terminal);
 
-  /* fleet: session status colours (text-status-busy, bg-status-waiting, …) */
+  /* overmind: session status colours (text-status-busy, bg-status-waiting, …) */
   --color-status-waiting: var(--status-waiting);
   --color-status-busy: var(--status-busy);
   --color-status-idle: var(--status-idle);
@@ -43,7 +43,7 @@
   /* PRs rotting between stale (waiting) and critical (error) — lib/prs.ts ROT_TONE */
   --color-status-rotting: color-mix(in oklab, var(--status-waiting), var(--status-error));
 
-  /* fleet: per-host badge colour slots 0..3 (see lib/format.ts hostColorSlot) */
+  /* overmind: per-host badge colour slots 0..3 (see lib/format.ts hostColorSlot) */
   --color-host-0: var(--host-0);
   --color-host-1: var(--host-1);
   --color-host-2: var(--host-2);
@@ -334,16 +334,16 @@
 }
 
 /* Typing indicator: three dots pulsing in turn. */
-@keyframes fleet-dot {
+@keyframes overmind-dot {
   0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }
 }
 @utility animate-dot {
-  animation: fleet-dot 1.2s infinite ease-in-out;
+  animation: overmind-dot 1.2s infinite ease-in-out;
 }
 
 /* The outbox's countdown ring (components/session/OutboxBubbles.tsx): full → empty. */
-@keyframes fleet-countdown {
+@keyframes overmind-countdown {
   to { stroke-dashoffset: var(--ring-len); }
 }
 
@@ -355,7 +355,7 @@
   }
 }
 
-/* Desktop app (Fleet.app, docs/desktop.md): no OS title bar; the traffic lights sit over the
+/* Desktop app (Overmind.app, docs/desktop.md): no OS title bar; the traffic lights sit over the
    top-left corner of the page. The app's initialization script sets data-shell="desktop",
    data-fullscreen and --titlebar-inset-left (0 in full screen, where the lights hide) /
    --titlebar-height on <html>. Nothing here applies in a browser.

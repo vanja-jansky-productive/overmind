@@ -1,6 +1,6 @@
-// Shared fleet config (owned by the `fleet` CLI, read here).
+// Shared overmind config (owned by the `overmind` CLI, read here).
 //
-// Path: $FLEET_CONFIG, else ${XDG_CONFIG_HOME:-~/.config}/fleet/config.json.
+// Path: $OVERMIND_CONFIG, else ${XDG_CONFIG_HOME:-~/.config}/overmind/config.json.
 // Shape (v1) — see config.example.json and ARCHITECTURE.md:
 //   { version, self, defaultHost, hosts: { name: { ssh, web } },
 //     web: { port, bind, dir, ui, editor, editorSsh, quickReplies, models: [ { id, label } ],
@@ -12,7 +12,7 @@
 //     stacks: { enabled, model },         (read by the CLI; the server only reports them)
 //     grouping: { enabled, model, host },   (enabled/model are read by the CLI)
 //     inbox: { host, scanMinutes, workHours, workDays, model, briefModel, briefMinutes, language, comms },
-//     tmux, fleetBin, claude, spawnDirs: [ { label, paths: { host: dir } } ] }
+//     tmux, overmindBin, claude, spawnDirs: [ { label, paths: { host: dir } } ] }
 //
 // A missing config file is not an error: the server runs as a single local host
 // ("local", 127.0.0.1, no peers). A present-but-broken file is a hard error.
@@ -22,15 +22,15 @@ import path from 'node:path';
 
 import { DEFAULT_EDITOR, EDITORS } from './editor.mjs';
 
-export const DEFAULT_PORT = 7777;
+export const DEFAULT_PORT = 7878;
 export const DEFAULT_SELF = 'local';
 export const SUPPORTED_VERSION = 1;
 export const DEFAULT_AUTONAME_MINUTES = 5;
 export const DEFAULT_GROUPING_MINUTES = 10;
-export const DEFAULT_UPLOADS_DIR = '~/.local/share/fleet/uploads';
+export const DEFAULT_UPLOADS_DIR = '~/.local/share/overmind/uploads';
 export const DEFAULT_UPLOAD_MAX_MB = 100;
-export const DEFAULT_MEMOS_DIR = '~/.local/share/fleet/memos';
-export const DEFAULT_MEMO_AUDIO_DIR = '~/.local/share/fleet/memo-audio';
+export const DEFAULT_MEMOS_DIR = '~/.local/share/overmind/memos';
+export const DEFAULT_MEMO_AUDIO_DIR = '~/.local/share/overmind/memo-audio';
 export const DEFAULT_UPLOAD_RETENTION_DAYS = 14;
 export const DEFAULT_STACKS_SYNC_MINUTES = 2;
 export const DEFAULT_STACKS_MODEL = 'sonnet';
@@ -60,16 +60,16 @@ export const DEFAULT_INBOX = Object.freeze({
   comms: true, // false: no Slack + email scan (no model calls but the brief)
 });
 
-/** Where brief files live: $FLEET_BRIEFS_DIR, else ${XDG_STATE_HOME:-~/.local/state}/fleet/briefs. */
+/** Where brief files live: $OVERMIND_BRIEFS_DIR, else ${XDG_STATE_HOME:-~/.local/state}/overmind/briefs. */
 export function briefsDir(env = process.env, home = os.homedir()) {
-  if (env.FLEET_BRIEFS_DIR) return path.resolve(expandHome(env.FLEET_BRIEFS_DIR, home));
-  return path.join(fleetStateDir(env, home), 'briefs');
+  if (env.OVERMIND_BRIEFS_DIR) return path.resolve(expandHome(env.OVERMIND_BRIEFS_DIR, home));
+  return path.join(overmindStateDir(env, home), 'briefs');
 }
 
-/** fleet's per-machine state: `${XDG_STATE_HOME:-~/.local/state}/fleet`. */
-export function fleetStateDir(env = process.env, home = os.homedir()) {
+/** overmind's per-machine state: `${XDG_STATE_HOME:-~/.local/state}/overmind`. */
+export function overmindStateDir(env = process.env, home = os.homedir()) {
   const base = env.XDG_STATE_HOME ? expandHome(env.XDG_STATE_HOME, home) : path.join(home, '.local', 'state');
-  return path.join(base, 'fleet');
+  return path.join(base, 'overmind');
 }
 
 /** A model id typed after `--model` in a shell: letters, digits and `._[]-` only. */
@@ -101,9 +101,9 @@ export function expandHome(p, home = os.homedir()) {
 
 /** Where the shared config lives. */
 export function configPath(env = process.env, home = os.homedir()) {
-  if (env.FLEET_CONFIG) return path.resolve(expandHome(env.FLEET_CONFIG, home));
+  if (env.OVERMIND_CONFIG) return path.resolve(expandHome(env.OVERMIND_CONFIG, home));
   const base = env.XDG_CONFIG_HOME ? expandHome(env.XDG_CONFIG_HOME, home) : path.join(home, '.config');
-  return path.join(base, 'fleet', 'config.json');
+  return path.join(base, 'overmind', 'config.json');
 }
 
 /** Prepend the usual Homebrew / user bin dirs so children launched by launchd find binaries. */
@@ -116,7 +116,7 @@ export function ensurePath(env = process.env, home = os.homedir()) {
 }
 
 /**
- * A UTF-8 locale for every child (tmux, the fleet CLI, `claude -p`). launchd and similar
+ * A UTF-8 locale for every child (tmux, the overmind CLI, `claude -p`). launchd and similar
  * start the server with none, and then tmux escapes its `-F` output (tabs become `_`,
  * so no pane matched and tmux sessions had no handle) and mangles UTF-8 in send-keys.
  */
@@ -149,10 +149,10 @@ export function resolveBinary(name, { explicit = null, env = process.env, extraD
   return name;
 }
 
-/** `fleet` binary: FLEET_BIN env > config.fleetBin > PATH > ~/.local/bin > ~/.cargo/bin. */
-export function resolveFleetBin(raw = {}, { env = process.env, home = os.homedir(), fsImpl = fs } = {}) {
-  return resolveBinary('fleet', {
-    explicit: env.FLEET_BIN || raw.fleetBin,
+/** `overmind` binary: OVERMIND_BIN env > config.overmindBin > PATH > ~/.local/bin > ~/.cargo/bin. */
+export function resolveOvermindBin(raw = {}, { env = process.env, home = os.homedir(), fsImpl = fs } = {}) {
+  return resolveBinary('overmind', {
+    explicit: env.OVERMIND_BIN || raw.overmindBin,
     env,
     home,
     fsImpl,
@@ -206,7 +206,7 @@ export const CLASSIC_UI = 'classic';
 
 /**
  * The static UI directory:
- *   explicit path (`web.ui` / FLEET_WEB_UI, `~` expanded) → that directory;
+ *   explicit path (`web.ui` / OVERMIND_WEB_UI, `~` expanded) → that directory;
  *   unset (or the retired `"classic"`) → <webRoot>/ui/dist; until it is built the server
  *   answers `/` with a "not built" placeholder.
  */
@@ -217,7 +217,7 @@ export function resolveUiDir(uiRaw, { webRoot = null, home = os.homedir() } = {}
 
 /**
  * Turn the raw shared config into what the server needs:
- *   { self, port, bind, peers: { name: url }, sshHosts: { name: ssh }, hostAddrs: { name: hostname }, editor, editorSsh, hosts: [names], fleetBin, tmux, claude,
+ *   { self, port, bind, peers: { name: url }, sshHosts: { name: ssh }, hostAddrs: { name: hostname }, editor, editorSsh, hosts: [names], overmindBin, tmux, claude,
  *     spawnDirs: [{ label, path }], uiDir, quickReplies, models: [{ id, label }], autoName: { enabled, intervalMinutes },
  *     grouping: { enabled, intervalMinutes, host }, uploads: { dir, maxMB, retentionDays },
  *     briefs: { enabled, model, idleMs, minIntervalMs, maxDeltaChars, maxCallsPerHour, minNewTurns,
@@ -264,14 +264,14 @@ export function normalizeConfig(
 
   let port = DEFAULT_PORT;
   if (web.port != null) port = parsePort(web.port, 'config.web.port');
-  const envPort = env.FLEET_WEB_PORT || env.PORT;
-  if (envPort) port = parsePort(envPort, 'FLEET_WEB_PORT/PORT');
+  const envPort = env.OVERMIND_WEB_PORT || env.PORT;
+  if (envPort) port = parsePort(envPort, 'OVERMIND_WEB_PORT/PORT');
 
   // No config → loopback only (there is no auth). With a config, default to all
   // interfaces so peers on the tailnet can reach this host.
   let bind = found ? '0.0.0.0' : '127.0.0.1';
   if (typeof web.bind === 'string' && web.bind) bind = web.bind;
-  if (env.FLEET_WEB_BIND) bind = env.FLEET_WEB_BIND;
+  if (env.OVERMIND_WEB_BIND) bind = env.OVERMIND_WEB_BIND;
 
   // web.editor: the "Open in editor" link scheme (lib/editor.mjs); null hides it.
   let editor = DEFAULT_EDITOR;
@@ -282,7 +282,7 @@ export function normalizeConfig(
   // web.editorSsh: the ssh destination other machines use for this one in editor links.
   const editorSsh = typeof web.editorSsh === 'string' && web.editorSsh.trim() ? web.editorSsh.trim() : null;
 
-  const uiRaw = env.FLEET_WEB_UI || (typeof web.ui === 'string' && web.ui ? web.ui : null);
+  const uiRaw = env.OVERMIND_WEB_UI || (typeof web.ui === 'string' && web.ui ? web.ui : null);
   const uiDir = resolveUiDir(uiRaw, { webRoot, home });
 
   const spawnDirs = spawnDirsFor(raw.spawnDirs, self.trim(), home);
@@ -319,7 +319,7 @@ export function normalizeConfig(
     });
   }
 
-  // web.autoName: the periodic `fleet name --all --apply` pass (lib/autoname.mjs).
+  // web.autoName: the periodic `overmind name --all --apply` pass (lib/autoname.mjs).
   const an = web.autoName == null ? {} : web.autoName;
   if (!isObject(an)) throw new Error('config.web.autoName must be an object { enabled, intervalMinutes }');
   if (an.enabled != null && typeof an.enabled !== 'boolean') throw new Error('config.web.autoName.enabled must be true or false');
@@ -330,11 +330,11 @@ export function normalizeConfig(
     intervalMinutes = m;
   }
   let autoNameEnabled = an.enabled === true; // opt-in: it types /rename into sessions and spends model calls
-  if (env.FLEET_WEB_AUTONAME != null && env.FLEET_WEB_AUTONAME !== '') autoNameEnabled = !/^(0|false|off|no)$/i.test(env.FLEET_WEB_AUTONAME);
+  if (env.OVERMIND_WEB_AUTONAME != null && env.OVERMIND_WEB_AUTONAME !== '') autoNameEnabled = !/^(0|false|off|no)$/i.test(env.OVERMIND_WEB_AUTONAME);
   const autoName = { enabled: autoNameEnabled, intervalMinutes };
 
-  // web.grouping: the periodic `fleet group` pass (lib/grouping.mjs); grouping.host: which
-  // host's server runs it for the whole fleet (peers proxy /api/groups there).
+  // web.grouping: the periodic `overmind group` pass (lib/grouping.mjs); grouping.host: which
+  // host's server runs it for the whole overmind (peers proxy /api/groups there).
   const wg = web.grouping == null ? {} : web.grouping;
   if (!isObject(wg)) throw new Error('config.web.grouping must be an object { enabled, intervalMinutes }');
   if (wg.enabled != null && typeof wg.enabled !== 'boolean') throw new Error('config.web.grouping.enabled must be true or false');
@@ -348,7 +348,7 @@ export function normalizeConfig(
   if (!isObject(g)) throw new Error('config.grouping must be an object { enabled, model, host }');
   if (g.host != null && (typeof g.host !== 'string' || !g.host.trim())) throw new Error('config.grouping.host must be a host name');
   let groupingEnabled = wg.enabled === true; // opt-in: it spends model calls
-  if (env.FLEET_WEB_GROUPING != null && env.FLEET_WEB_GROUPING !== '') groupingEnabled = !/^(0|false|off|no)$/i.test(env.FLEET_WEB_GROUPING);
+  if (env.OVERMIND_WEB_GROUPING != null && env.OVERMIND_WEB_GROUPING !== '') groupingEnabled = !/^(0|false|off|no)$/i.test(env.OVERMIND_WEB_GROUPING);
   const groupingHost = g.host == null ? null : g.host.trim();
   // With grouping.host set, only that host runs the pass — one source of truth.
   const grouping = {
@@ -358,7 +358,7 @@ export function normalizeConfig(
   };
 
   // inbox: the live to-do list (lib/inbox.mjs). One host runs it (`inbox.host`); the others
-  // proxy /api/inbox there. FLEET_WEB_INBOX=0 turns it off on this server.
+  // proxy /api/inbox there. OVERMIND_WEB_INBOX=0 turns it off on this server.
   const ib = raw.inbox == null ? {} : raw.inbox;
   if (!isObject(ib)) throw new Error('config.inbox must be an object { host, scanMinutes, workHours, workDays, … }');
   if (ib.host != null && (typeof ib.host !== 'string' || !ib.host.trim())) throw new Error('config.inbox.host must be a host name');
@@ -394,7 +394,7 @@ export function normalizeConfig(
   if (ib.comms != null && typeof ib.comms !== 'boolean') throw new Error('config.inbox.comms must be true or false');
   if (ib.comms != null) inbox.comms = ib.comms;
   inbox.enabled = inbox.host != null && inbox.host === self.trim();
-  if (env.FLEET_WEB_INBOX != null && env.FLEET_WEB_INBOX !== '' && /^(0|false|off|no)$/i.test(env.FLEET_WEB_INBOX)) inbox.enabled = false;
+  if (env.OVERMIND_WEB_INBOX != null && env.OVERMIND_WEB_INBOX !== '' && /^(0|false|off|no)$/i.test(env.OVERMIND_WEB_INBOX)) inbox.enabled = false;
 
   // web.uploads: where dropped/pasted files are stored (lib/uploads.mjs).
   const wu = web.uploads == null ? {} : web.uploads;
@@ -494,10 +494,10 @@ export function normalizeConfig(
     if (!Number.isFinite(n) || n < min) throw new Error(`config.web.briefs.${key} must be a number >= ${min}: ${wb[key]}`);
     briefs[key] = n;
   }
-  if (env.FLEET_WEB_BRIEFS != null && env.FLEET_WEB_BRIEFS !== '') briefs.enabled = !/^(0|false|off|no)$/i.test(env.FLEET_WEB_BRIEFS);
+  if (env.OVERMIND_WEB_BRIEFS != null && env.OVERMIND_WEB_BRIEFS !== '') briefs.enabled = !/^(0|false|off|no)$/i.test(env.OVERMIND_WEB_BRIEFS);
   briefs.dir = briefsDir(env, home);
 
-  // web.stacks: the background `fleet stack sync` (lib/stacks.mjs); top-level `stacks` is the
+  // web.stacks: the background `overmind stack sync` (lib/stacks.mjs); top-level `stacks` is the
   // CLI's (`enabled` = may call the model when a stack is created, `model`), reported in /api/settings.
   const ws = web.stacks == null ? {} : web.stacks;
   if (!isObject(ws)) throw new Error('config.web.stacks must be an object { syncMinutes }');
@@ -508,13 +508,13 @@ export function normalizeConfig(
     syncMinutes = m;
   }
   let stacksSync = true;
-  if (env.FLEET_WEB_STACKS != null && env.FLEET_WEB_STACKS !== '') stacksSync = !/^(0|false|off|no)$/i.test(env.FLEET_WEB_STACKS);
+  if (env.OVERMIND_WEB_STACKS != null && env.OVERMIND_WEB_STACKS !== '') stacksSync = !/^(0|false|off|no)$/i.test(env.OVERMIND_WEB_STACKS);
   // The CLI validates its own keys; here a bad value only falls back to the default.
   const st = isObject(raw.stacks) ? raw.stacks : {};
   const stacksModel = typeof st.model === 'string' && MODEL_ID_RE.test(st.model) ? st.model : DEFAULT_STACKS_MODEL;
   const stacks = { sync: stacksSync, syncMinutes, generate: st.enabled !== false, model: stacksModel };
 
-  // web.operator: the voice operator — a Claude session that watches the fleet (lib/operator.mjs).
+  // web.operator: the voice operator — a Claude session that watches the overmind (lib/operator.mjs).
   const wo = web.operator == null ? {} : web.operator;
   if (!isObject(wo)) throw new Error('config.web.operator must be an object { hosts, model, voice, clearIdleMinutes }');
   if (wo.hosts != null && (!Array.isArray(wo.hosts) || !wo.hosts.length || wo.hosts.some((h) => typeof h !== 'string' || !h.trim()))) {
@@ -532,7 +532,7 @@ export function normalizeConfig(
     voice: wo.voice ?? null,
     // Idle this long → /clear, a fresh conversation (0 = never).
     clearIdleMinutes: wo.clearIdleMinutes != null ? Number(wo.clearIdleMinutes) : 60,
-    dir: path.join(fleetStateDir(env, home), 'operator'),
+    dir: path.join(overmindStateDir(env, home), 'operator'),
   };
 
   // web.focus.host: the machine whose `focus` CLI the Focus toggle drives — the one you sit at
@@ -546,7 +546,7 @@ export function normalizeConfig(
   const rs = raw.restore == null ? {} : raw.restore;
   if (!isObject(rs)) throw new Error('config.restore must be an object { onBoot }');
   if (rs.onBoot != null && typeof rs.onBoot !== 'boolean') throw new Error('config.restore.onBoot must be true or false');
-  const restore = { onBoot: rs.onBoot === true, markerFile: path.join(fleetStateDir(env, home), 'web-restored-boot') };
+  const restore = { onBoot: rs.onBoot === true, markerFile: path.join(overmindStateDir(env, home), 'web-restored-boot') };
 
   return {
     self: self.trim(),
@@ -558,8 +558,8 @@ export function normalizeConfig(
     editor,
     editorSsh,
     hosts: [self.trim(), ...Object.keys(peers)],
-    fleetBin: resolveFleetBin(raw, { env, home, fsImpl }),
-    tmux: resolveBinary('tmux', { explicit: env.FLEET_TMUX || raw.tmux, env, home, fsImpl }),
+    overmindBin: resolveOvermindBin(raw, { env, home, fsImpl }),
+    tmux: resolveBinary('tmux', { explicit: env.OVERMIND_TMUX || raw.tmux, env, home, fsImpl }),
     claude: typeof raw.claude === 'string' && raw.claude ? expandHome(raw.claude, home) : 'claude',
     // How each harness launches in a spawned session (`claude`, `harnesses.<id>.command`).
     launchers: {
@@ -595,23 +595,23 @@ export function loadConfig({ env = process.env, home = os.homedir(), webRoot = n
   try {
     text = fsImpl.readFileSync(file, 'utf8');
   } catch (err) {
-    if (err?.code !== 'ENOENT') throw new Error(`cannot read fleet config ${file}: ${err.message}`);
+    if (err?.code !== 'ENOENT') throw new Error(`cannot read overmind config ${file}: ${err.message}`);
   }
   if (text != null) {
     found = true;
     try {
       raw = JSON.parse(text);
     } catch (err) {
-      throw new Error(`fleet config ${file} is not valid JSON: ${err.message}`);
+      throw new Error(`overmind config ${file} is not valid JSON: ${err.message}`);
     }
   } else {
-    log.warn?.(`[config] no fleet config at ${file} — running as a single local host. Run \`fleet init\` to set up hosts.`);
+    log.warn?.(`[config] no overmind config at ${file} — running as a single local host. Run \`overmind init\` to set up hosts.`);
   }
   let cfg;
   try {
     cfg = normalizeConfig(raw, { env, home, found, webRoot, fsImpl });
   } catch (err) {
-    throw new Error(`invalid fleet config ${file}: ${err.message}`);
+    throw new Error(`invalid overmind config ${file}: ${err.message}`);
   }
   return { ...cfg, configFile: found ? file : null };
 }

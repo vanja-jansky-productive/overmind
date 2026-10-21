@@ -21,7 +21,7 @@ import { Markdown } from '@/components/Markdown'
 import { SpeakButton } from '@/components/SpeakButton'
 import { ScreenHeader } from '@/components/ScreenHeader'
 import { Button } from '@/components/ui/button'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { usePoller } from '@/hooks/usePoller'
 import { useSettings } from '@/hooks/useSettings'
@@ -37,7 +37,7 @@ import { cn } from '@/lib/utils'
 const parseBool = (r: string) => (r === 'true' ? true : r === 'false' ? false : undefined)
 
 /**
- * `#/operator`: talk to the fleet. Tap the mic, speak, tap again: the words go to the operator
+ * `#/operator`: talk to the overmind. Tap the mic, speak, tap again: the words go to the operator
  * (a Claude session this server runs, web/lib/operator.mjs), and its reply is read aloud.
  * Sessions that start waiting on you are announced while the screen is open.
  */
@@ -45,7 +45,7 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
   const pane = layout === 'pane'
   const [, navigate] = useLocation()
   const settings = useSettings()
-  const { fleet } = useFleet()
+  const { overmind } = useOvermind()
   const [status, setStatus] = useState<OperatorStatus | null>(null)
   const [starting, setStarting] = useState(false)
   // The conversation, tagged with its session: a new one (after the idle /clear) starts empty.
@@ -54,8 +54,8 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
   // Sent, no reply yet: "thinking" until the operator answers.
   const [awaiting, setAwaiting] = useState(false)
   const [draft, setDraft] = useState('')
-  const [autoSpeak, setAutoSpeak] = usePersistentState<boolean>('fleet.operator.speak', true, parseBool)
-  const [announce, setAnnounce] = usePersistentState<boolean>('fleet.operator.announce', true, parseBool)
+  const [autoSpeak, setAutoSpeak] = usePersistentState<boolean>('overmind.operator.speak', true, parseBool)
+  const [announce, setAnnounce] = usePersistentState<boolean>('overmind.operator.announce', true, parseBool)
   const speech = useSpeechPlayer()
   const { rate, setRate } = speech
   // Replies can be read aloud: by the server (OpenAI voice) or, failing that, by this device.
@@ -72,7 +72,7 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
   const screenRef = useRef<HTMLDivElement>(null)
   useSwipeBack(screenRef, back, !pane)
 
-  // Find the operator; once started, until it shows in the fleet.
+  // Find the operator; once started, until it shows in the overmind.
   usePoller(
     async (signal) => {
       try {
@@ -123,18 +123,18 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
   }, [messages, turns, opStatus, autoSpeak, speak])
 
   // Announce sessions that start waiting on you.
-  const sessions = useMemo(() => allSessions(fleet), [fleet])
+  const sessions = useMemo(() => allSessions(overmind), [overmind])
   const waitingBefore = useRef<Set<string> | null>(null)
   const waiting = useMemo(() => sessions.filter((s) => s.status === 'waiting' && sessionKey(s) !== opKey), [sessions, opKey])
   const voiceRef = useRef<{ busy: boolean }>({ busy: false })
   useEffect(() => {
-    if (!fleet) return
+    if (!overmind) return
     const before = waitingBefore.current
     waitingBefore.current = waitingKeys(sessions)
     if (!before || !announce) return
     const fresh = newlyWaiting(sessions, before, opKey)
     if (fresh.length && speechState === 'idle' && !voiceRef.current.busy && !awaiting) void speak(waitingAnnouncement(fresh))
-  }, [fleet, sessions, announce, opKey, speak, speechState, awaiting])
+  }, [overmind, sessions, announce, opKey, speak, speechState, awaiting])
 
   const send = useCallback(
     async (text: string) => {
@@ -253,7 +253,7 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
   )
 
   const body = !settings.loaded ? null : !settings.operator ? (
-    <Empty>This server has no operator (update fleet-web).</Empty>
+    <Empty>This server has no operator (update overmind-web).</Empty>
   ) : !session ? (
     <Empty>
       <AudioLinesIcon className="size-10 text-muted-foreground" />
@@ -271,7 +271,7 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
   ) : (
     <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-4">
-        {messages && !turns.length ? <p className="py-10 text-center text-sm text-muted-foreground">Ask what the fleet is doing, who is waiting on you, what is next.</p> : null}
+        {messages && !turns.length ? <p className="py-10 text-center text-sm text-muted-foreground">Ask what the overmind is doing, who is waiting on you, what is next.</p> : null}
         {turns.map((t) =>
           t.role === 'user' ? (
             <div key={t.key} className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-[0.9375rem] [overflow-wrap:anywhere] text-primary-foreground">

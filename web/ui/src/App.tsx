@@ -7,7 +7,7 @@ import { StackUi } from '@/components/stack/StackUi'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { DormantProvider } from '@/providers/DormantProvider'
-import { FleetProvider } from '@/providers/FleetProvider'
+import { OvermindProvider } from '@/providers/OvermindProvider'
 import { PrefsProvider } from '@/providers/PrefsProvider'
 import { PrsProvider } from '@/providers/PrsProvider'
 import { SettingsProvider } from '@/providers/SettingsProvider'
@@ -32,7 +32,7 @@ import { UsageScreen } from '@/screens/UsageScreen'
 
 /**
  * Hash routing: `#/` (list), `#/s/<host>/<session_id>` (detail),
- * plus `#/settings` (this viewer's preferences), `#/usage` (the subscription limits), `#/inbox` (everything waiting on you), `#/bots` (agent sessions from a recipe; `#/jobs` is its old name), `#/operator` (talk to the fleet by voice), `#/prs` (the GitHub PRs that need you), `#/tasks` (your open Productive tasks), `#/memos[/<id>]` (voice memos) and `#/notes[/<host>[/<path>]]` (the notes explorer) and `#/review/<host>/<session_id>` (the diff reviewer).
+ * plus `#/settings` (this viewer's preferences), `#/usage` (the subscription limits), `#/inbox` (everything waiting on you), `#/bots` (agent sessions from a recipe; `#/jobs` is its old name), `#/operator` (talk to the overmind by voice), `#/prs` (the GitHub PRs that need you), `#/tasks` (your open Productive tasks), `#/memos[/<id>]` (voice memos) and `#/notes[/<host>[/<path>]]` (the notes explorer) and `#/review/<host>/<session_id>` (the diff reviewer).
  * No server-side SPA fallback needed; the PWA start_url is `/#/`. Desktop and mobile use the
  * same routes, so links work across both.
  */
@@ -47,7 +47,7 @@ export default function App() {
       <PrefsProvider>
       <SettingsProvider>
       <SpeechProvider>
-        <FleetProvider>
+        <OvermindProvider>
         <DormantProvider>
         <PrsProvider>
         <TasksProvider>
@@ -110,7 +110,7 @@ export default function App() {
         </TasksProvider>
         </PrsProvider>
         </DormantProvider>
-        </FleetProvider>
+        </OvermindProvider>
       </SpeechProvider>
       </SettingsProvider>
       </PrefsProvider>

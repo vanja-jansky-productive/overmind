@@ -13,11 +13,11 @@ import { MAX_STACK_LABEL, stackLabelChanged } from '@/lib/stacks'
 import { sessionKey } from '@/lib/shortcuts'
 import { cn } from '@/lib/utils'
 
-/** `fleet group` caps a hand-written label at this many characters. */
+/** `overmind group` caps a hand-written label at this many characters. */
 const GROUP_LABEL_MAX = 48
 
 /** Our drags carry this type, so text, links or files dragged over the board are ignored. */
-const DRAG_TYPE = 'application/x-fleet-board'
+const DRAG_TYPE = 'application/x-overmind-board'
 
 /** A column that is a group: sessions can be dropped on it, it can be renamed through `onEdit` (not Ungrouped, not a session stack — a stack renames through its own route, StackColumnTitle). */
 const isGroup = (c: BoardColumn) => !c.ungrouped && c.source !== 'stack'

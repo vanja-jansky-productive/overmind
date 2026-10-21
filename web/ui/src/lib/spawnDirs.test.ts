@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FleetResponse, SpawnDirEntry, SpawnDirsResponse } from '@/api/types'
+import type { OvermindResponse, SpawnDirEntry, SpawnDirsResponse } from '@/api/types'
 
 import {
   baseHost,
@@ -122,9 +122,9 @@ describe('server results', () => {
     expect(divergedHosts(LIST, loaded)).toEqual(['workstation'])
   })
   it('withOffered swaps in each saved host’s new spawnDirs', () => {
-    const fleet = { self: 'laptop', hosts: [{ name: 'laptop', ok: true, sessions: [], spawnDirs: [] }, { name: 'workstation', ok: true, sessions: [] }] } as FleetResponse
-    const next = withOffered(fleet, { laptop: resp('laptop') })
+    const overmind = { self: 'laptop', hosts: [{ name: 'laptop', ok: true, sessions: [], spawnDirs: [] }, { name: 'workstation', ok: true, sessions: [] }] } as OvermindResponse
+    const next = withOffered(overmind, { laptop: resp('laptop') })
     expect(next.hosts[0].spawnDirs?.map((d) => d.label)).toEqual(['Work', 'Notes'])
-    expect(next.hosts[1]).toBe(fleet.hosts[1])
+    expect(next.hosts[1]).toBe(overmind.hosts[1])
   })
 })

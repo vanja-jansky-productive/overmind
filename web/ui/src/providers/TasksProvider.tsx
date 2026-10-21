@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react'
 
 import { ApiError, api, isAbortError } from '@/api/client'
 import type { Task, TasksResponse } from '@/api/types'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { usePoller } from '@/hooks/usePoller'
 import { usePrs } from '@/hooks/usePrs'
@@ -21,11 +21,11 @@ const UNCONFIGURED_RE = /productive api token|tasks\.(token|organization)/i
  * the choice is remembered. Inside PrsProvider: sessions link to tasks through their PRs too.
  */
 export function TasksProvider({ children }: { children: ReactNode }) {
-  const { fleet } = useFleet()
+  const { overmind } = useOvermind()
   const prs = usePrs()
-  const hosts = useMemo(() => (fleet?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [fleet])
-  const [picked, setHost] = usePersistentState<string>('fleet.tasksHost', '')
-  const host = hosts.includes(picked) ? picked : (fleet?.self ?? hosts[0] ?? null)
+  const hosts = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [overmind])
+  const [picked, setHost] = usePersistentState<string>('overmind.tasksHost', '')
+  const host = hosts.includes(picked) ? picked : (overmind?.self ?? hosts[0] ?? null)
 
   // Last answer and failure per host (switching back paints at once; null error = ok).
   const [answers, setAnswers] = useState<Record<string, TasksResponse>>({})
@@ -43,9 +43,9 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         setErrors((e) => ({ ...e, [host]: null }))
       } catch (err) {
         if (isAbortError(err)) throw err
-        // 404/501: that host's server or CLI predates `fleet tasks`.
+        // 404/501: that host's server or CLI predates `overmind tasks`.
         const old = err instanceof ApiError && (err.status === 404 || err.status === 501)
-        const msg = old ? `${host} runs an older fleet — update it to see tasks` : (err as Error)?.message || 'could not load tasks'
+        const msg = old ? `${host} runs an older overmind — update it to see tasks` : (err as Error)?.message || 'could not load tasks'
         setErrors((e) => ({ ...e, [host]: msg }))
       }
     },
@@ -81,8 +81,8 @@ export function TasksProvider({ children }: { children: ReactNode }) {
 
   const unconfigured = !data && !!error && UNCONFIGURED_RE.test(error)
   const links = useMemo(
-    () => linkTasks(data?.tasks ?? [], prs.data?.prs ?? [], prs.links, allSessions(fleet)),
-    [data, prs.data, prs.links, fleet],
+    () => linkTasks(data?.tasks ?? [], prs.data?.prs ?? [], prs.links, allSessions(overmind)),
+    [data, prs.data, prs.links, overmind],
   )
   const value = useMemo<TasksState>(
     () => ({ hosts, host, setHost, data, error, unconfigured, loading, refresh, refreshing, reload, setStatus, links }),

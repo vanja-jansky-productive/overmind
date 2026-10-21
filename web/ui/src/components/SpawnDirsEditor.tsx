@@ -6,7 +6,7 @@ import { ApiError, api, isAbortError } from '@/api/client'
 import type { SpawnDirCheck, SpawnDirEntry, SpawnDirsError, SpawnDirsResponse } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import {
   SPAWN_DIR_LIMITS,
   baseHost,
@@ -36,10 +36,10 @@ const CHECK_DEBOUNCE_MS = 600
  * first — a dry run on all of them, then the writes), so the hosts' configs stay in sync.
  */
 export function SpawnDirsEditor() {
-  const { fleet, applyFleet, refresh } = useFleet()
-  const hostsKey = (fleet?.hosts ?? []).map((h) => h.name).join('\n')
+  const { overmind, applyOvermind, refresh } = useOvermind()
+  const hostsKey = (overmind?.hosts ?? []).map((h) => h.name).join('\n')
   const hosts = useMemo(() => (hostsKey ? hostsKey.split('\n') : []), [hostsKey])
-  const self = fleet?.self
+  const self = overmind?.self
 
   const [loads, setLoads] = useState<Record<string, Load>>({})
   const [base, setBase] = useState<SpawnDirEntry[] | null>(null)
@@ -182,8 +182,8 @@ export function SpawnDirsEditor() {
         setBase(first.spawnDirs)
         setRows(toDraft(first.spawnDirs))
       }
-      // The New session form reads the fleet: show the new lists now, then re-poll.
-      if (fleet && Object.keys(saved).length) applyFleet(withOffered(fleet, saved))
+      // The New session form reads the overmind: show the new lists now, then re-poll.
+      if (overmind && Object.keys(saved).length) applyOvermind(withOffered(overmind, saved))
       refresh()
       const failed = out.filter((r) => !r.ok)
       if (!failed.length) toast.success('Start directories saved', { description: `On ${out.map((r) => r.host).join(' and ')}` })
@@ -204,7 +204,7 @@ export function SpawnDirsEditor() {
 
   const update = (key: string, fn: (r: DraftRow) => DraftRow) => setRows((rs) => rs.map((r) => (r.key === key ? fn(r) : r)))
 
-  if (!fleet) return <p className="py-3 text-sm text-dimmer">Loading hosts…</p>
+  if (!overmind) return <p className="py-3 text-sm text-dimmer">Loading hosts…</p>
 
   const allFailed = hosts.length > 0 && hosts.every((h) => loads[h]?.state === 'error')
   const cols = hosts.length
@@ -212,7 +212,7 @@ export function SpawnDirsEditor() {
   return (
     <div className="space-y-3 py-3">
       <p className="text-xs text-dimmer">
-        Where a new session can start, per host (empty = not offered there). One list for the whole fleet: Save writes it to every host.
+        Where a new session can start, per host (empty = not offered there). One list for the whole overmind: Save writes it to every host.
       </p>
 
       {hosts

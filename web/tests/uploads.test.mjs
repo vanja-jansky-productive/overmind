@@ -11,7 +11,7 @@ import { createHttpServer } from '../lib/app.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
 import { createUploader, dayDir, sanitizeUploadName } from '../lib/uploads.mjs';
 
-function tmpDir(t, prefix = 'fleet-uploads-') {
+function tmpDir(t, prefix = 'overmind-uploads-') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
@@ -39,7 +39,7 @@ test('sanitizeUploadName keeps a safe basename + extension', () => {
 test('normalizeConfig: web.uploads defaults, ~ expansion, validation', () => {
   const home = '/home/tester';
   assert.deepEqual(normalizeConfig({}, { env: {}, home }).uploads, {
-    dir: '/home/tester/.local/share/fleet/uploads',
+    dir: '/home/tester/.local/share/overmind/uploads',
     maxMB: 100,
     retentionDays: 14,
   });
@@ -88,8 +88,8 @@ async function startPair(t, { maxBytes = 1024 } = {}) {
       { env: {}, home: '/home/tester' },
     );
     const uploader = createUploader({ dir: dirs[name], maxBytes, random: () => `r${String(++counter).padStart(5, '0')}` });
-    const fleet = { localHost: async () => ({ name, ok: true, sessions: [] }), invalidate() {} };
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, uploader, warmFleet: false });
+    const overmind = { localHost: async () => ({ name, ok: true, sessions: [] }), invalidate() {} };
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, uploader, warmOvermind: false });
     t.after(() => api.stop());
     handles[name] = api;
   }

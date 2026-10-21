@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { ApiError, api, isAbortError } from '@/api/client'
-import type { FleetResponse, GroupMember, GroupsResponse, Session } from '@/api/types'
+import type { OvermindResponse, GroupMember, GroupsResponse, Session } from '@/api/types'
 import { useDormant } from '@/hooks/useDormant'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { usePoller } from '@/hooks/usePoller'
@@ -28,9 +28,9 @@ export const GROUPS_POLL_MS = 30_000
 /** While the server says a pass is running: check back sooner. */
 export const GROUPS_RUNNING_POLL_MS = 4000
 
-/** `fleet.view`: List | Board. */
+/** `overmind.view`: List | Board. */
 export function useViewMode(): [ViewMode, (v: ViewMode) => void] {
-  return usePersistentState<ViewMode>('fleet.view', 'list', parseViewMode)
+  return usePersistentState<ViewMode>('overmind.view', 'list', parseViewMode)
 }
 
 /**
@@ -118,11 +118,11 @@ export function useGroups(enabled: boolean) {
 
 export type GroupsState = ReturnType<typeof useGroups>
 
-const ORDER_KEY = 'fleet.boardOrder'
+const ORDER_KEY = 'overmind.boardOrder'
 
 /**
  * The board's columns for `sessions` (already filtered), in a sticky order remembered in
- * `fleet.boardOrder`: a column keeps its place while statuses change; new ones are appended.
+ * `overmind.boardOrder`: a column keeps its place while statuses change; new ones are appended.
  * Session stacks become their own columns first (withStackColumns), so their ids are remembered too.
  * `moveColumn` is a drag on the board (per browser, like the rest of that order).
  */
@@ -130,7 +130,7 @@ export function useBoardColumns(
   enabled: boolean,
   sessions: Session[],
   groups: GroupsResponse | null,
-  fleet: FleetResponse | null,
+  overmind: OvermindResponse | null,
   /** The host filter: dormant cards of other hosts are left out. */
   host: string | null = null,
   /** The session search: dormant cards that do not match are left out. */
@@ -145,8 +145,8 @@ export function useBoardColumns(
       const d = dormantMember(m, index)
       return d && matchesDormantMember(d, query) ? d : null
     }
-    return stickyColumns(withStackColumns(boardColumns(sessions, effectiveGroups(groups, allSessions(fleet)).groups, dormantOf), sessions), order)
-  }, [enabled, sessions, groups, fleet, order, index, host, query])
+    return stickyColumns(withStackColumns(boardColumns(sessions, effectiveGroups(groups, allSessions(overmind)).groups, dormantOf), sessions), order)
+  }, [enabled, sessions, groups, overmind, order, index, host, query])
   if (sticky && (sticky.order.length !== order.length || sticky.order.some((id, i) => id !== order[i]))) setOrder(sticky.order)
   useEffect(() => {
     storage.set(ORDER_KEY, JSON.stringify(order))

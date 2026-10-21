@@ -18,7 +18,7 @@ export interface PendingTitle {
   at: number
 }
 
-/** An optimistic title stops standing in once the fleet shows it, or after this long. */
+/** An optimistic title stops standing in once the overmind shows it, or after this long. */
 export const PENDING_TTL_MS = 30_000
 
 type TitleFields = Pick<Session, 'display_title' | 'name' | 'gen_title' | 'session_id'>

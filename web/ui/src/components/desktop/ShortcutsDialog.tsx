@@ -5,7 +5,7 @@ import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { comboLabel, helpKeys, keyLabel, SHORTCUT_HELP, shortcutEnv } from '@/lib/shortcuts'
 
 /** ⌘? / ⌘/: every desktop shortcut, from the same table the key handler uses — the combos of
- *  this environment (Fleet.app's ⌘N only in the app; ⌘ ⇧ ⌥ on macOS, Ctrl / Shift / Alt elsewhere). */
+ *  this environment (Overmind.app's ⌘N only in the app; ⌘ ⇧ ⌥ on macOS, Ctrl / Shift / Alt elsewhere). */
 export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const env = shortcutEnv()
   const mod = keyLabel('mod', env.mac)

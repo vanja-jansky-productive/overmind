@@ -15,7 +15,7 @@ import { EMPTY_TREE, createDiffer, parseNameStatus, parsePatch, validRef } from 
 import { run } from '../lib/run.mjs';
 
 function repo(t) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-diff-')));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-diff-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const env = {
     ...process.env,
@@ -95,7 +95,7 @@ test('diff: branch commits + uncommitted + untracked against the merge-base; fin
   r.write('new.txt', 'hello\n'); // untracked
   r.write('ignored/x.txt', 'nope\n');
   const indexBefore = fs.readFileSync(path.join(r.dir, '.git/index'));
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-diff-idx-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-diff-idx-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
   const differ = createDiffer({ run, tmpDir });
 
@@ -148,7 +148,7 @@ test('diff: a repo without commits diffs against the empty tree; outside git is 
   assert.equal(d.base.sha, EMPTY_TREE);
   assert.equal(d.head, null);
   assert.deepEqual(d.files.map((f) => f.path), ['x.txt']);
-  const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-nogit-')));
+  const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-nogit-')));
   t.after(() => fs.rmSync(plain, { recursive: true, force: true }));
   await assert.rejects(differ.diff(plain), { status: 409 });
 });
@@ -158,10 +158,10 @@ test('HTTP: …/diff for a session, 404 unknown session, 405 non-GET, 501 withou
   r.write('x.txt', 'x\n');
   const id = 'aaaaaaaa-0000-0000-0000-000000000001';
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [{ session_id: id, cwd: r.dir, status: 'idle', backend: 'tmux' }] }) };
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [{ session_id: id, cwd: r.dir, status: 'idle', backend: 'tmux' }] }) };
   const handles = {};
   for (const [k, differ] of [['on', createDiffer({ run })], ['off', null]]) {
-    handles[k] = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, differ, warmFleet: false });
+    handles[k] = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, differ, warmOvermind: false });
     t.after(() => handles[k].stop());
   }
   const urls = {};
@@ -242,9 +242,9 @@ test('HTTP: …/diffs — the cwd checkout plus those of the files the session w
   fs.writeFileSync(path.join(wt, 'x.txt'), 'x\n');
   const id = 'aaaaaaaa-0000-0000-0000-000000000001';
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [{ session_id: id, cwd: meta.dir, status: 'idle', backend: 'tmux' }] }) };
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [{ session_id: id, cwd: meta.dir, status: 'idle', backend: 'tmux' }] }) };
   const touched = { get: async () => ({ version: '1', paths: [], worked: [path.join(wt, 'x.txt')] }) };
-  const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, differ: createDiffer({ run, home: '/nonexistent-home' }), touched, warmFleet: false });
+  const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, differ: createDiffer({ run, home: '/nonexistent-home' }), touched, warmOvermind: false });
   t.after(() => api.stop());
   const server = createHttpServer({ handleApi: api, uiDir: null });
   await new Promise((res) => server.listen(0, '127.0.0.1', res));

@@ -1,12 +1,12 @@
 // Jobs: GET /api/hosts/:host/jobs[/:name], POST …/jobs/:name/run|enabled. Two API servers
-// (laptop + workstation); the `fleet` CLI is faked.
+// (laptop + workstation); the `overmind` CLI is faked.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApi } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
-import { createFleet } from '../lib/fleet.mjs';
-import { createFleetCli } from '../lib/fleet-cli.mjs';
+import { createOvermind } from '../lib/overmind.mjs';
+import { createOvermindCli } from '../lib/overmind-cli.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
 import { createJobs, validJobName } from '../lib/jobs.mjs';
 
@@ -48,7 +48,7 @@ const JOB = {
   live: [],
 };
 
-/** A fake `fleet`: list, jobs (--json / show / run / enable / disable). */
+/** A fake `overmind`: list, jobs (--json / show / run / enable / disable). */
 function fakeRun(h) {
   const fail = (stderr) => Object.assign(new Error('exit 1'), { code: 1, stderr });
   return async (bin, args) => {
@@ -69,7 +69,7 @@ function fakeRun(h) {
         return { stdout: h.enabled ? 'triage: enabled — next run tomorrow 07:00\n' : 'triage: paused\n', stderr: '' };
       }
     }
-    throw new Error(`unexpected fleet ${args.join(' ')}`);
+    throw new Error(`unexpected overmind ${args.join(' ')}`);
   };
 }
 
@@ -85,16 +85,16 @@ async function startPair(t) {
   for (const [name, h] of Object.entries(hosts)) {
     const raw = { version: 1, self: name, hosts: { laptop: { ssh: null, web: urls.laptop }, workstation: { ssh: 'workstation', web: urls.workstation } } };
     const config = normalizeConfig(raw, { env: {}, home: '/nonexistent' });
-    const cli = createFleetCli({ run: fakeRun(h) });
+    const cli = createOvermindCli({ run: fakeRun(h) });
     const api = createApi({
       config,
       cli,
-      fleet: createFleet({ cli, self: name }),
+      overmind: createOvermind({ cli, self: name }),
       backend: {},
       transcripts: {},
       spawner: {},
       jobs: createJobs({ cli, self: name, home: `/home/${name}`, exists: (p) => p === `/home/${name}/notes/.git` }),
-      fleetRefreshMs: 60_000,
+      overmindRefreshMs: 60_000,
     });
     t.after(() => api.stop());
     handles[name] = api;

@@ -117,7 +117,7 @@ describe('pathCandidates', () => {
       'cat hidden/in/fence.md',
       '```',
       '',
-      'Run `npm run build` then `fleet web serve` · `README.md:3`',
+      'Run `npm run build` then `overmind web serve` · `README.md:3`',
     ].join('\n')
     expect(pathCandidates(md)).toEqual(['knowledge/school/1c.md', 'web/lib/files.mjs:40', 'src/App.tsx', 'docs/guide.md', 'README.md:3'])
   })

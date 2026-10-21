@@ -6,7 +6,7 @@
 export type PaletteId = 'default' | 'earth' | 'dusk'
 export type PaletteMode = 'light' | 'dark'
 
-export const PALETTE_KEY = 'fleet.palette'
+export const PALETTE_KEY = 'overmind.palette'
 export const DEFAULT_PALETTE: PaletteId = 'default'
 
 /** The three tokens a picker swatch previews: page, card, primary. `background` is also the
@@ -54,7 +54,7 @@ export const PALETTES: readonly Palette[] = [
   },
 ]
 
-/** A stored `fleet.palette` value → a known palette (anything else → Default). */
+/** A stored `overmind.palette` value → a known palette (anything else → Default). */
 export function parsePalette(v: string | null | undefined): PaletteId {
   return PALETTES.some((p) => p.id === v) ? (v as PaletteId) : DEFAULT_PALETTE
 }

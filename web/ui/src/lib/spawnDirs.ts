@@ -1,7 +1,7 @@
 // Settings → Start directories: the editable draft of the shared `spawnDirs` list (one
 // row per label, a directory per host) and its pure helpers. The server re-validates
 // everything (web/lib/spawn-dirs.mjs); these give instant feedback and the diff/dirty state.
-import type { FleetResponse, SpawnDirCheck, SpawnDirEntry, SpawnDirsError, SpawnDirsResponse } from '@/api/types'
+import type { OvermindResponse, SpawnDirCheck, SpawnDirEntry, SpawnDirsError, SpawnDirsResponse } from '@/api/types'
 
 export const SPAWN_DIR_LIMITS = { maxEntries: 30, maxLabel: 40, maxPath: 1024 } as const
 
@@ -135,7 +135,7 @@ export function divergedHosts(base: SpawnDirEntry[], loaded: Record<string, Spaw
     .map(([h]) => h)
 }
 
-/** The fleet with each saved host's `spawnDirs` replaced by what it now offers (the New session form reads it). */
-export function withOffered(fleet: FleetResponse, saved: Record<string, SpawnDirsResponse>): FleetResponse {
-  return { ...fleet, hosts: fleet.hosts.map((h) => (saved[h.name] ? { ...h, spawnDirs: saved[h.name].offered } : h)) }
+/** The overmind with each saved host's `spawnDirs` replaced by what it now offers (the New session form reads it). */
+export function withOffered(overmind: OvermindResponse, saved: Record<string, SpawnDirsResponse>): OvermindResponse {
+  return { ...overmind, hosts: overmind.hosts.map((h) => (saved[h.name] ? { ...h, spawnDirs: saved[h.name].offered } : h)) }
 }

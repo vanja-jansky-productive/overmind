@@ -14,7 +14,7 @@ export const BRIEF_GENERATING_POLL_MS = 2_500
 function briefError(err: unknown): string {
   if (err instanceof ApiError && err.status === 501) return err.message || 'Briefs are not available on this server'
   // An older server has no brief routes at all: its generic 404, not "unknown session".
-  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s fleet web server predates briefs — update and restart it'
+  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s overmind web server predates briefs — update and restart it'
   return sessionErrorMessage(err)
 }
 

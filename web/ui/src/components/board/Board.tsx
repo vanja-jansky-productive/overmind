@@ -58,7 +58,7 @@ export interface BoardProps {
  * reordered and cards dragged between them (BoardColumns).
  */
 export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, selectedKey, overlayInset, searchRef, onSearchNav, onOpen, onNew, view, onView }: BoardProps) {
-  const { fleet, error, query, setQuery, status, setStatus, setHostFilter, hosts, hostNames, host, view: lv, hostCounts, summary, unreachable, note } = list
+  const { overmind, error, query, setQuery, status, setStatus, setHostFilter, hosts, hostNames, host, view: lv, hostCounts, summary, unreachable, note } = list
   const boardRef = useRef<HTMLDivElement>(null)
 
   // The cursor card scrolls into view, clear of the flyout (↑/↓, ⌘K). A click moves the cursor
@@ -104,8 +104,8 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
         data-tauri-drag-region="deep"
         className="titlebar-lead flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 pt-3 pb-2.5 [--titlebar-pad:1rem]"
       >
-        <h1 className="text-lg font-bold tracking-tight">Fleet</h1>
-        {fleet ? (
+        <h1 className="text-lg font-bold tracking-tight">Overmind</h1>
+        {overmind ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums" aria-label="Status summary">
             {summary.waiting > 0 ? (
               <span className="flex items-center gap-1 font-semibold text-status-waiting" title="Needs you">
@@ -157,11 +157,11 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
         </div>
 
         <ToggleGroup type="single" value={status} onValueChange={(v) => v && setStatus(v as StatusFilterId)} aria-label="Filter by status">
-          {visibleStatusFilters(fleet ? lv.counts : null, status).map((f) => (
+          {visibleStatusFilters(overmind ? lv.counts : null, status).map((f) => (
             <ToggleGroupItem key={f.id} value={f.id} className={chip} title={f.id === 'scheduled' ? 'Sessions started by bots' : undefined}>
               <StatusFilterLabel filter={f} />
               <span className="text-[0.6875rem] text-dimmer tabular-nums group-data-[state=on]/toggle:text-accent-foreground/70">
-                {fleet ? lv.counts[f.id] : ''}
+                {overmind ? lv.counts[f.id] : ''}
               </span>
             </ToggleGroupItem>
           ))}
@@ -197,7 +197,7 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
           {error ? (
             <Alert variant="destructive">
               <AlertDescription>
-                {fleet ? `Refresh failed: ${error} — showing last known data` : `Could not reach fleet web: ${error}`}
+                {overmind ? `Refresh failed: ${error} — showing last known data` : `Could not reach overmind web: ${error}`}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -217,11 +217,11 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
         className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto overscroll-x-contain p-3"
         style={overlayInset ? { scrollPaddingRight: overlayInset + 12 } : undefined}
       >
-        {!fleet ? (
+        {!overmind ? (
           [0, 1, 2].map((i) => <Skeleton key={i} className="h-64 w-72 shrink-0 rounded-xl" />)
         ) : columns.length === 0 ? (
           <div className="w-full px-4 py-10 text-center text-sm text-dimmer">
-            {allSessions(fleet).length > 0 ? 'Nothing matches.' : 'No Claude sessions running.'}
+            {allSessions(overmind).length > 0 ? 'Nothing matches.' : 'No Claude sessions running.'}
           </div>
         ) : (
           <BoardColumns
@@ -235,8 +235,8 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
             onMoveColumn={onMoveColumn}
           />
         )}
-        {fleet ? <DormantSection now={now} host={host} query={query} desktop className="max-h-full w-72 shrink-0 overflow-y-auto rounded-xl border border-dashed p-2" /> : null}
-        {fleet && columns.length && overlayInset ? <div aria-hidden className="shrink-0" style={{ width: overlayInset }} /> : null}
+        {overmind ? <DormantSection now={now} host={host} query={query} desktop className="max-h-full w-72 shrink-0 overflow-y-auto rounded-xl border border-dashed p-2" /> : null}
+        {overmind && columns.length && overlayInset ? <div aria-hidden className="shrink-0" style={{ width: overlayInset }} /> : null}
       </div>
     </div>
   )

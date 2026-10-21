@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// fleet-web — zero-dependency server for the fleet HTTP API + the bundled PWA.
-// Config: the shared fleet config ($FLEET_CONFIG or ~/.config/fleet/config.json).
+// overmind-web — zero-dependency server for the overmind HTTP API + the bundled PWA.
+// Config: the shared overmind config ($OVERMIND_CONFIG or ~/.config/overmind/config.json).
 // See ARCHITECTURE.md.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { configPath, fleetStateDir, loadConfig, ensurePath, ensureUtf8Locale, resolveBinary } from './lib/config.mjs';
+import { configPath, overmindStateDir, loadConfig, ensurePath, ensureUtf8Locale, resolveBinary } from './lib/config.mjs';
 import { run } from './lib/run.mjs';
-import { createFleetCli } from './lib/fleet-cli.mjs';
+import { createOvermindCli } from './lib/overmind-cli.mjs';
 import { createFocus } from './lib/focus.mjs';
-import { createFleet } from './lib/fleet.mjs';
+import { createOvermind } from './lib/overmind.mjs';
 import { createBackend } from './lib/backends.mjs';
 import { createTranscriptReader, locateTranscript } from './lib/transcript.mjs';
 import { createSpawner } from './lib/spawn.mjs';
@@ -42,7 +42,7 @@ import { createApi } from './lib/api.mjs';
 import { createHttpServer } from './lib/app.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const NAME = 'fleet-web';
+const NAME = 'overmind-web';
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 const log = (line) => process.stdout.write(`${line}\n`);
@@ -56,12 +56,12 @@ let config;
 try {
   config = loadConfig({ env: process.env, webRoot: ROOT, log: console });
 } catch (err) {
-  process.stderr.write(`[fleet-web] ${err.message}\n`);
+  process.stderr.write(`[overmind-web] ${err.message}\n`);
   process.exit(2);
 }
 
-const cli = createFleetCli({ run, bin: config.fleetBin });
-const fleet = createFleet({ cli, self: config.self, ttlMs: 2000 });
+const cli = createOvermindCli({ run, bin: config.overmindBin });
+const overmind = createOvermind({ cli, self: config.self, ttlMs: 2000 });
 const backend = createBackend({ run, tmux: config.tmux });
 const autoNamer = createAutoNamer({
   cli,
@@ -73,7 +73,7 @@ const spawnNamer = config.autoName.enabled
   ? createSpawnNamer({
       cli,
       listSessions: async () => {
-        const host = await fleet.localHost({ force: true });
+        const host = await overmind.localHost({ force: true });
         return host.ok ? host.sessions : [];
       },
       log,
@@ -85,13 +85,13 @@ const uploader = createUploader({
   retentionDays: config.uploads.retentionDays,
   log,
 });
-// Only the grouping host runs the pass; the fleet accessors are bound once the API exists.
-let fleetAccess = null;
+// Only the grouping host runs the pass; the overmind accessors are bound once the API exists.
+let overmindAccess = null;
 const grouper = config.grouping.enabled
   ? createGrouper({
       cli,
-      getFleet: () => fleetAccess.buildFleet(),
-      peekFleet: () => fleetAccess.peekFleet(),
+      getOvermind: () => overmindAccess.buildOvermind(),
+      peekOvermind: () => overmindAccess.peekOvermind(),
       self: config.self,
       intervalMs: config.grouping.intervalMinutes * 60 * 1000,
       log,
@@ -105,7 +105,7 @@ const briefs = createBriefs({
   store: createBriefStore({ dir: config.briefs.dir }),
   extractor: createBriefExtractor({ locate: (cwd, id) => locateTranscript(cwd, id) }),
   listSessions: async () => {
-    const host = await fleet.localHost();
+    const host = await overmind.localHost();
     return host.ok ? host.sessions : null;
   },
   ask: createClaudeAsk({ bin: claudeBin, run }),
@@ -113,17 +113,17 @@ const briefs = createBriefs({
   log,
 });
 // Session stacks: the routes always work (the CLI owns the files); the background membership
-// sync runs every web.stacks.syncMinutes while a session is in a stack (FLEET_WEB_STACKS=0: off).
+// sync runs every web.stacks.syncMinutes while a session is in a stack (OVERMIND_WEB_STACKS=0: off).
 const stacks = createStacks({
   cli,
   self: config.self,
   listSessions: async () => {
-    const host = await fleet.localHost({ force: true });
+    const host = await overmind.localHost({ force: true });
     if (!host.ok) throw new Error(host.error);
     return host.sessions;
   },
   gateSessions: async () => {
-    const host = await fleet.localHost();
+    const host = await overmind.localHost();
     return host.ok ? host.sessions : null;
   },
   syncEnabled: config.stacks.sync,
@@ -135,14 +135,14 @@ const inbox = config.inbox.enabled
   ? createInbox({
       settings: config.inbox,
       cli,
-      getFleet: async () => fleetAccess.peekFleet() ?? (await fleetAccess.buildFleet()),
+      getOvermind: async () => overmindAccess.peekOvermind() ?? (await overmindAccess.buildOvermind()),
       ask: createClaudeAsk({ bin: claudeBin, run }),
       agent: createAgentAsk({ bin: claudeBin, run }),
-      file: path.join(fleetStateDir(process.env), 'inbox.json'),
+      file: path.join(overmindStateDir(process.env), 'inbox.json'),
       log,
     })
   : null;
-// Session recovery: dormant sessions after a reboot (`fleet --local restore … --json`).
+// Session recovery: dormant sessions after a reboot (`overmind --local restore … --json`).
 const dormant = createDormant({ cli, log });
 // Voice: an OpenAI key for speech-to-text (voice prompts) and one for text-to-speech (the
 // operator's replies) — OPENAI_TEXT_TO_SPEECH_API_KEY, else the transcription key.
@@ -153,7 +153,7 @@ const transcriber = createTranscriber({ getKey: transcribeKey, log });
 // Voice memos: segments transcribed with the same key, titled by `claude -p`.
 const memos = createMemos({ ...config.memos, transcriber, ask: createClaudeAsk({ bin: claudeBin, run }), log });
 const spawner = createSpawner({ run, tmux: config.tmux, launcher: config.claude, launchers: config.launchers });
-const operator = createOperator({ config, fleet, spawner, backend, log });
+const operator = createOperator({ config, overmind, spawner, backend, log });
 // One transcript reader: the chat and the review threads (their replies) share its cache.
 const transcripts = createTranscriptReader();
 // Files each session worked on: file links resolve against them, the diff reviewer finds the checkouts it edits.
@@ -161,7 +161,7 @@ const touched = createTouchedIndex();
 
 const handleApi = createApi({
   config,
-  fleet,
+  overmind,
   backend,
   transcripts,
   spawner,
@@ -182,16 +182,16 @@ const handleApi = createApi({
   differ: createDiffer({ run }),
   // Diff reviewer threads: typed into the session like a send, answers read from its transcript.
   reviews: createReviews({
-    dir: path.join(fleetStateDir(process.env), 'reviews'),
+    dir: path.join(overmindStateDir(process.env), 'reviews'),
     send: (session, text) => backend.send(session, text),
     messages: async (session) => (await transcripts.messages(session, 500))?.messages ?? null,
   }),
   notes: createNotes({ config: config.notes, home: os.homedir(), run }),
-  // Settings → Start directories: writes through `fleet config set`, hot-reloads config.spawnDirs.
+  // Settings → Start directories: writes through `overmind config set`, hot-reloads config.spawnDirs.
   spawnDirs: createSpawnDirsEditor({ config, configFile: config.configFile ?? configPath(process.env), cli }),
-  // Settings → Git repos: `fleet --local repos …` + `fleet config set repos`.
+  // Settings → Git repos: `overmind --local repos …` + `overmind config set repos`.
   repos: createRepos({ cli, configFile: config.configFile ?? configPath(process.env), self: config.self }),
-  // Jobs screen: `fleet --local jobs …` (list / show / run now / enable|disable).
+  // Jobs screen: `overmind --local jobs …` (list / show / run now / enable|disable).
   jobs: createJobs({ cli, self: config.self }),
   briefs,
   stacks,
@@ -203,7 +203,7 @@ const handleApi = createApi({
   logError,
 });
 
-fleetAccess = handleApi;
+overmindAccess = handleApi;
 
 const server = createHttpServer({ handleApi, uiDir: config.uiDir, log, logError });
 
@@ -213,48 +213,48 @@ server.on('error', (err) => {
 });
 
 server.listen(config.port, config.bind, () => {
-  log(`[fleet-web] self=${config.self} listening on http://${config.bind}:${config.port}`);
-  log(`[fleet-web] config=${config.configFile ?? '(none, defaults)'} peers=${Object.keys(config.peers).join(',') || '(none)'}`);
-  log(`[fleet-web] fleet=${config.fleetBin} tmux=${config.tmux} ui=${config.uiDir ?? '(none)'}`);
+  log(`[overmind-web] self=${config.self} listening on http://${config.bind}:${config.port}`);
+  log(`[overmind-web] config=${config.configFile ?? '(none, defaults)'} peers=${Object.keys(config.peers).join(',') || '(none)'}`);
+  log(`[overmind-web] overmind=${config.overmindBin} tmux=${config.tmux} ui=${config.uiDir ?? '(none)'}`);
   if (config.autoName.enabled) {
     autoNamer.start();
-    log(`[fleet-web] autoname every ${config.autoName.intervalMinutes}m (fleet name --all --apply)`);
+    log(`[overmind-web] autoname every ${config.autoName.intervalMinutes}m (overmind name --all --apply)`);
   } else {
-    log('[fleet-web] autoname off (web.autoName.enabled = false)');
+    log('[overmind-web] autoname off (web.autoName.enabled = false)');
   }
   uploader.start();
   // A running operator keeps its workspace current (its ./api helper names this server's port).
   operator.prepare().catch((err) => logError(err, 'operator workspace'));
   operator.start();
-  if (config.operator.clearIdleMinutes) log(`[fleet-web] operator: /clear after ${config.operator.clearIdleMinutes}m idle`);
-  log(`[fleet-web] memos ${config.memos.dir} (audio ${config.memos.audioDir})`);
-  log(`[fleet-web] uploads ${config.uploads.dir} (max ${config.uploads.maxMB} MB, kept ${config.uploads.retentionDays || '∞'} days)`);
+  if (config.operator.clearIdleMinutes) log(`[overmind-web] operator: /clear after ${config.operator.clearIdleMinutes}m idle`);
+  log(`[overmind-web] memos ${config.memos.dir} (audio ${config.memos.audioDir})`);
+  log(`[overmind-web] uploads ${config.uploads.dir} (max ${config.uploads.maxMB} MB, kept ${config.uploads.retentionDays || '∞'} days)`);
   if (grouper) {
     grouper.start();
-    log(`[fleet-web] grouping every ${config.grouping.intervalMinutes}m (fleet group, all hosts)`);
+    log(`[overmind-web] grouping every ${config.grouping.intervalMinutes}m (overmind group, all hosts)`);
   } else if (config.grouping.host && config.grouping.host !== config.self) {
-    log(`[fleet-web] grouping: served by ${config.grouping.host}`);
+    log(`[overmind-web] grouping: served by ${config.grouping.host}`);
   } else {
-    log('[fleet-web] grouping off (web.grouping.enabled = false)');
+    log('[overmind-web] grouping off (web.grouping.enabled = false)');
   }
   if (config.briefs.enabled) {
     briefs.start();
     const b = config.briefs;
-    log(`[fleet-web] briefs on (${b.dir}; ${b.model}, idle ${b.idleMs / 1000}s, every ≥ ${b.minIntervalMs / 60000}m per session, ≤ ${b.maxCallsPerHour}/h)`);
+    log(`[overmind-web] briefs on (${b.dir}; ${b.model}, idle ${b.idleMs / 1000}s, every ≥ ${b.minIntervalMs / 60000}m per session, ≤ ${b.maxCallsPerHour}/h)`);
   } else {
-    log(`[fleet-web] briefs: background generation off (web.briefs.enabled = false); ${config.briefs.dir}`);
+    log(`[overmind-web] briefs: background generation off (web.briefs.enabled = false); ${config.briefs.dir}`);
   }
   if (inbox) {
     inbox.start();
     const ib = config.inbox;
-    log(`[fleet-web] inbox on (${ib.comms ? `Slack + mail every ${ib.scanMinutes}m in work hours, ${ib.model}` : 'no Slack + mail'}; brief ${ib.briefModel}, ≥ ${ib.briefMinutes}m apart)`);
+    log(`[overmind-web] inbox on (${ib.comms ? `Slack + mail every ${ib.scanMinutes}m in work hours, ${ib.model}` : 'no Slack + mail'}; brief ${ib.briefModel}, ≥ ${ib.briefMinutes}m apart)`);
   } else if (config.inbox.host) {
-    log(`[fleet-web] inbox: served by ${config.inbox.host}`);
+    log(`[overmind-web] inbox: served by ${config.inbox.host}`);
   }
-  // The sync judges members on other hosts with the merged fleet (the warm snapshot when someone
+  // The sync judges members on other hosts with the merged overmind (the warm snapshot when someone
   // is watching, else one fresh build); a sibling started on a peer is found in that peer's list.
   stacks.attach({
-    fleetBody: async () => handleApi.peekFleet() ?? (await handleApi.buildFleet()),
+    overmindBody: async () => handleApi.peekOvermind() ?? (await handleApi.buildOvermind()),
     peerSessions: async (name) => {
       const url = config.peers[name];
       if (!url) return null;
@@ -264,12 +264,12 @@ server.listen(config.port, config.bind, () => {
   });
   stacks.start();
   log(config.stacks.sync
-    ? `[fleet-web] stacks: sync every ${config.stacks.syncMinutes}m while a session is in a stack (fleet stack sync)`
-    : '[fleet-web] stacks: background sync off (FLEET_WEB_STACKS=0)');
+    ? `[overmind-web] stacks: sync every ${config.stacks.syncMinutes}m while a session is in a stack (overmind stack sync)`
+    : '[overmind-web] stacks: background sync off (OVERMIND_WEB_STACKS=0)');
   if (config.restore.onBoot) {
-    log('[fleet-web] restore.onBoot: bringing back dormant sessions (fleet restore --all)');
+    log('[overmind-web] restore.onBoot: bringing back dormant sessions (overmind restore --all)');
     dormant.restoreOnBoot({ markerFile: config.restore.markerFile }).then((r) => {
-      if (r?.restored?.length) handleApi.refreshFleet();
+      if (r?.restored?.length) handleApi.refreshOvermind();
     });
   }
 });
@@ -278,7 +278,7 @@ let shuttingDown = false;
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  log(`[fleet-web] ${signal} received, shutting down`);
+  log(`[overmind-web] ${signal} received, shutting down`);
   autoNamer.stop();
   spawnNamer?.stop();
   grouper?.stop();
@@ -291,7 +291,7 @@ function shutdown(signal) {
   const timer = setTimeout(() => process.exit(0), 3000);
   timer.unref?.();
   server.close(() => {
-    log('[fleet-web] closed');
+    log('[overmind-web] closed');
     process.exit(0);
   });
   server.closeIdleConnections?.();

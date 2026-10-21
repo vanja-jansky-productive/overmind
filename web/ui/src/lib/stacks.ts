@@ -50,7 +50,7 @@ export function stacksKnown(s: Pick<Session, 'stack'> | null | undefined): boole
 
 /** One line for a failed stack request (toasts / the sheet). */
 export function stackErrorMessage(err: unknown): string {
-  if (stacksMissing(err)) return 'This host’s fleet web server predates session stacks — update and restart it'
+  if (stacksMissing(err)) return 'This host’s overmind web server predates session stacks — update and restart it'
   if (err instanceof ApiError) {
     if (err.status === 0) return 'network unreachable'
     if (err.status === 502 || err.status === 504) return 'host unreachable'
@@ -85,7 +85,7 @@ export function stackLabelChanged(next: string, prev: string | null | undefined)
   return t !== '' && t !== (prev ?? '').trim()
 }
 
-/** How long a saved rename's optimistic label may outlive the server's (a slow fleet snapshot). */
+/** How long a saved rename's optimistic label may outlive the server's (a slow overmind snapshot). */
 export const STACK_LABEL_TTL_MS = 30_000
 
 /** An optimistic stack label (hooks/useStackLabels.ts). */

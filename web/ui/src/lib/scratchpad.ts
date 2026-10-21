@@ -1,11 +1,11 @@
 import { storage } from '@/lib/storage'
 
 // The scratchpad: one plain-text buffer for copy → tweak → copy, autosaved to localStorage
-// (per browser / Fleet.app, survives reloads). On desktop it floats over the app without a
+// (per browser / Overmind.app, survives reloads). On desktop it floats over the app without a
 // backdrop, so the chat stays selectable while it is open; on mobile it is a bottom drawer.
 
-export const SCRATCH_KEY = 'fleet.scratchpad'
-export const SCRATCH_RECT_KEY = 'fleet.scratchpad.rect'
+export const SCRATCH_KEY = 'overmind.scratchpad'
+export const SCRATCH_RECT_KEY = 'overmind.scratchpad.rect'
 /** Typing pauses this long before the buffer is written (blur / close / pagehide write at once). */
 export const SAVE_DELAY_MS = 300
 

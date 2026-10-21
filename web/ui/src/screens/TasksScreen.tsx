@@ -20,7 +20,7 @@ import { DUE_TONE, dueInfo, groupTasks, IDLE_DAYS, idleDays, isIdle, parseTaskLo
 import { cn } from '@/lib/utils'
 
 /**
- * `#/tasks`: your open Productive tasks (`fleet tasks` on one host), by column — due soon or
+ * `#/tasks`: your open Productive tasks (`overmind tasks` on one host), by column — due soon or
  * overdue, in progress, to do. `pane` = the desktop layout (a board over the whole window, like
  * the pull requests); `screen` = mobile (the columns stacked, swipe back).
  */
@@ -32,10 +32,10 @@ export function TasksScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' 
   const sel = parseTaskLocation(location)
   const setOpen = (t: Task) => navigate(taskHref(t))
   const [q, setQ] = useState('')
-  const [project, setProject] = usePersistentState<string>('fleet.tasksProject', '')
+  const [project, setProject] = usePersistentState<string>('overmind.tasksProject', '')
   const now = useNow(30_000)
   // Tasks nobody touched in IDLE_DAYS are mostly leftovers: hidden unless asked for (remembered).
-  const [showIdle, setShowIdle] = usePersistentState<boolean>('fleet.tasksShowIdle', false, (r) => r === 'true')
+  const [showIdle, setShowIdle] = usePersistentState<boolean>('overmind.tasksShowIdle', false, (r) => r === 'true')
   const projects = taskProjects(data?.tasks ?? [])
   const projectId = projects.some((p) => p.id === project) ? project : null
   const groups = groupTasks(data, q, { project: projectId, hideIdle: !showIdle, now })
@@ -132,8 +132,8 @@ export function TasksScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' 
       <p className="font-medium">Productive is not set up on {host}</p>
       <p className="text-muted-foreground">{error}</p>
       <p className="text-xs text-dimmer">
-        On {host}: <code className="font-mono">fleet config set tasks.token &lt;API token&gt;</code> and{' '}
-        <code className="font-mono">fleet config set tasks.organization &lt;organization id&gt;</code>.
+        On {host}: <code className="font-mono">overmind config set tasks.token &lt;API token&gt;</code> and{' '}
+        <code className="font-mono">overmind config set tasks.organization &lt;organization id&gt;</code>.
       </p>
     </div>
   ) : (

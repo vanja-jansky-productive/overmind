@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react'
 
 import { ApiError, api, isAbortError } from '@/api/client'
 import type { PrsResponse, PullRequest } from '@/api/types'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { usePoller } from '@/hooks/usePoller'
 import { PrsContext, type PrsState } from '@/hooks/usePrs'
@@ -18,10 +18,10 @@ const POLL_MS = 60_000
  * one this UI is served from; the choice is remembered.
  */
 export function PrsProvider({ children }: { children: ReactNode }) {
-  const { fleet } = useFleet()
-  const hosts = useMemo(() => (fleet?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [fleet])
-  const [picked, setHost] = usePersistentState<string>('fleet.prsHost', '')
-  const host = hosts.includes(picked) ? picked : (fleet?.self ?? hosts[0] ?? null)
+  const { overmind } = useOvermind()
+  const hosts = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [overmind])
+  const [picked, setHost] = usePersistentState<string>('overmind.prsHost', '')
+  const host = hosts.includes(picked) ? picked : (overmind?.self ?? hosts[0] ?? null)
 
   // Last answer and failure per host (switching back paints at once; null error = ok).
   const [answers, setAnswers] = useState<Record<string, PrsResponse>>({})
@@ -39,9 +39,9 @@ export function PrsProvider({ children }: { children: ReactNode }) {
         setErrors((e) => ({ ...e, [host]: null }))
       } catch (err) {
         if (isAbortError(err)) throw err
-        // 404/501: that host's server or CLI predates `fleet prs`.
+        // 404/501: that host's server or CLI predates `overmind prs`.
         const old = err instanceof ApiError && (err.status === 404 || err.status === 501)
-        const msg = old ? `${host} runs an older fleet — update it to see pull requests` : (err as Error)?.message || 'could not load pull requests'
+        const msg = old ? `${host} runs an older overmind — update it to see pull requests` : (err as Error)?.message || 'could not load pull requests'
         setErrors((e) => ({ ...e, [host]: msg }))
       }
     },
@@ -70,7 +70,7 @@ export function PrsProvider({ children }: { children: ReactNode }) {
     [host, reload],
   )
 
-  const links = useMemo(() => linkSessions(data?.prs ?? [], data ? host : null, allSessions(fleet)), [data, host, fleet])
+  const links = useMemo(() => linkSessions(data?.prs ?? [], data ? host : null, allSessions(overmind)), [data, host, overmind])
   const value = useMemo<PrsState>(
     () => ({ hosts, host, setHost, data, error, loading, refresh, refreshing, reload, markSeen, links }),
     [hosts, host, setHost, data, error, loading, refresh, refreshing, reload, markSeen, links],

@@ -31,7 +31,7 @@ const segItem =
 /**
  * `#/settings`: the viewer's global preferences — text size (scales the whole app), theme
  * (colour palette), mode (light/dark), terminal text, progress notes, send delay. Stored in this browser (localStorage).
- * Plus the fleet's Start directories (the New session form's list) and Git repos (`fleet repos`), stored in each host's config. `screen` = the mobile page
+ * Plus the overmind's Start directories (the New session form's list) and Git repos (`overmind repos`), stored in each host's config. `screen` = the mobile page
  * (back button, swipe back); `pane` = the desktop main pane (✕ / Esc back to `#/`).
  */
 export function SettingsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }) {
@@ -158,7 +158,7 @@ export function SettingsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
         <ReposEditor />
       </Section>
       <InboxSchedule />
-      <FleetStatus />
+      <OvermindStatus />
       <ViewportInfo />
     </div>
   )
@@ -401,7 +401,7 @@ function ViewportInfo() {
 }
 
 /** Connection status: how fresh the list is and which hosts answer (the list header only shows a ⚠ on trouble). */
-function FleetStatus() {
+function OvermindStatus() {
   const now = useNow(5_000)
   const { note, hosts } = useSessionList(now)
   return (

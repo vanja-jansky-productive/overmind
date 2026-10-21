@@ -93,7 +93,7 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
   const panel = p.variant === 'panel'
   const [naming, setNaming] = useState(false)
 
-  // Regenerate: a fresh model-picked name for this session (`fleet name <id> --apply --refresh`).
+  // Regenerate: a fresh model-picked name for this session (`overmind name <id> --apply --refresh`).
   const regenerate = async () => {
     if (naming) return
     setNaming(true)
@@ -213,7 +213,7 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
               <div className="py-1.5">
                 <Row
                   label={attachLink ? 'Attach' : 'Attach command'}
-                  hint={attachCmd ? (attachLink ? 'Opens an iTerm tab attached to its tmux session' : 'Run in a terminal on any fleet host') : 'Only for tmux sessions — this one is an iTerm tab'}
+                  hint={attachCmd ? (attachLink ? 'Opens an iTerm tab attached to its tmux session' : 'Run in a terminal on any overmind host') : 'Only for tmux sessions — this one is an iTerm tab'}
                 >
                   <div className="flex gap-1.5">
                     <Button variant={attachLink ? 'ghost' : 'outline'} className="h-9 px-3" disabled={!attachCmd} aria-label="Copy attach command" title="Copy attach command" onClick={() => attachCmd && void copyWithToast(attachCmd)}>

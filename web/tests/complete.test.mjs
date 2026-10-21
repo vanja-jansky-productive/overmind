@@ -14,7 +14,7 @@ import { BUILTIN_COMMANDS, brainRefs, createCompleter, parseBrainrc, parseFrontm
 
 /** A fake $HOME: user skills + commands, two plugins (one disabled), a project, a brain. */
 function fixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-complete-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-complete-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   const w = (rel, text) => {
@@ -59,7 +59,7 @@ function fixture(t) {
   // A brain.
   w('.brainrc', 'brain_root: ~/brain\neditor: nano\n');
   w('brain/sheds.md', '---\ntitle: Sheds\n---\nbody');
-  w('brain/dev/fleet/fleet.md', '# Fleet notes\n');
+  w('brain/dev/overmind/overmind.md', '# Overmind notes\n');
   w('brain/a/log.md', 'x');
   w('brain/b/log.md', 'y');
   w('brain/.beads/x.md', 'no');
@@ -144,7 +144,7 @@ test('brain: notes under brain_root with titles and refs; absent without a ~/.br
   assert.deepEqual(b.notes, [
     { ref: 'a/log', path: 'a/log.md' },
     { ref: 'b/log', path: 'b/log.md' },
-    { ref: 'fleet', path: 'dev/fleet/fleet.md', title: 'Fleet notes' },
+    { ref: 'overmind', path: 'dev/overmind/overmind.md', title: 'Overmind notes' },
     { ref: 'sheds', path: 'sheds.md', title: 'Sheds' },
   ]);
   fs.rmSync(path.join(fx.home, '.brainrc'));
@@ -172,10 +172,10 @@ test('HTTP: …/complete locally and through a peer; bad kind 400, unknown sessi
       { self: name, hosts: { laptop: { web: urls.laptop }, workstation: { web: urls.workstation } } },
       { env: {}, home: '/home/tester' },
     );
-    const fleet = { localHost: async () => ({ name, ok: true, sessions: [{ session_id: ids[name], cwd: fx.proj, status: 'idle', backend: 'tmux' }] }) };
+    const overmind = { localHost: async () => ({ name, ok: true, sessions: [{ session_id: ids[name], cwd: fx.proj, status: 'idle', backend: 'tmux' }] }) };
     // The workstation has no completer: a peer hop must reach it (and get its 501).
     const completer = name === 'laptop' ? createCompleter({ home: fx.home, run: noGit }) : null;
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, completer, warmFleet: false });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, completer, warmOvermind: false });
     t.after(() => api.stop());
     handles[name] = api;
   }

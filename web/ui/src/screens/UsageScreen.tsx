@@ -19,7 +19,7 @@ const LEVEL_TEXT = { low: 'text-foreground', warn: 'text-status-waiting', hot: '
 
 /**
  * `#/usage`: the Claude subscription limits (current session, weekly, per-model weekly,
- * extra usage) of every account logged in across the fleet — hosts on one account share
+ * extra usage) of every account logged in across the overmind — hosts on one account share
  * one card. `screen` = the mobile page (back, swipe back); `pane` = the desktop main pane.
  */
 export function UsageScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }) {

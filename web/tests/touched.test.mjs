@@ -14,7 +14,7 @@ const SESSION = { session_id: 'cccccccc-0000-0000-0000-000000000003' };
 
 /** $HOME with a cwd repo, two other repos sharing a relative path, a secret, and a dir outside home. */
 function fixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-touched-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-touched-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   const cwd = path.join(home, 'Code', 'main');
@@ -92,7 +92,7 @@ test('cwd hit stays cwd; cwd miss → touched hit; stat path is absolute so raw/
   // raw / open take the same route, by the relative path as written or the absolute one.
   const r = await files.raw('knowledge/notes/x.md', fx.cwd, { session: SESSION });
   r.stream.destroy();
-  assert.equal(r.headers['x-fleet-kind'], 'markdown');
+  assert.equal(r.headers['x-overmind-kind'], 'markdown');
   await assert.rejects(files.raw('knowledge/notes/x.md', fx.cwd), { status: 404 }); // no session → no fallback
   const opened = await files.open('knowledge/notes/x.md', fx.cwd, { session: SESSION });
   assert.equal(opened.path, target);

@@ -7,9 +7,9 @@
 #
 # Refuses a checkout with uncommitted changes to tracked files (that is someone's work in
 # progress — deploy what is pushed, not what is lying around). The binary goes to
-# ~/.local/bin/fleet (where `fleet install` and the launchd agent expect it), replaced
-# atomically. Restart: the `fleet.web` launchd agent (`fleet web install-service`), else a tmux
-# session `fleet-web`, else it only tells you to restart the server yourself.
+# ~/.local/bin/overmind (where `overmind install` and the launchd agent expect it), replaced
+# atomically. Restart: the `overmind.web` launchd agent (`overmind web install-service`), else a tmux
+# session `overmind-web`, else it only tells you to restart the server yourself.
 set -eu
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -29,28 +29,28 @@ git pull --ff-only --quiet
 say "at $(git log --oneline -1)"
 
 say "build the CLI"
-cargo build --release --locked -q -p fleet
+cargo build --release --locked -q -p overmind
 mkdir -p "$HOME/.local/bin"
 # Copy then rename: overwriting a running binary in place can get it killed on macOS.
-cp target/release/fleet "$HOME/.local/bin/.fleet.new"
-mv -f "$HOME/.local/bin/.fleet.new" "$HOME/.local/bin/fleet"
-say "installed $("$HOME/.local/bin/fleet" --version)"
+cp target/release/overmind "$HOME/.local/bin/.overmind.new"
+mv -f "$HOME/.local/bin/.overmind.new" "$HOME/.local/bin/overmind"
+say "installed $("$HOME/.local/bin/overmind" --version)"
 
 say "build the web UI"
-"$HOME/.local/bin/fleet" web build --dir "$repo/web" --install >/dev/null
+"$HOME/.local/bin/overmind" web build --dir "$repo/web" --install >/dev/null
 
-port=$("$HOME/.local/bin/fleet" --local config get web.port 2>/dev/null || true)
-case "$port" in '' | *[!0-9]*) port=7777 ;; esac
+port=$("$HOME/.local/bin/overmind" --local config get web.port 2>/dev/null || true)
+case "$port" in '' | *[!0-9]*) port=7878 ;; esac
 
 uid=$(id -u)
-if launchctl print "gui/$uid/fleet.web" >/dev/null 2>&1; then
-  say "restart (launchd fleet.web)"
-  launchctl kickstart -k "gui/$uid/fleet.web"
-elif tmux has-session -t fleet-web 2>/dev/null; then
-  say "restart (tmux fleet-web)"
-  tmux respawn-pane -k -t fleet-web "while true; do '$HOME/.local/bin/fleet' web serve --dir '$repo/web'; sleep 2; done"
+if launchctl print "gui/$uid/overmind.web" >/dev/null 2>&1; then
+  say "restart (launchd overmind.web)"
+  launchctl kickstart -k "gui/$uid/overmind.web"
+elif tmux has-session -t overmind-web 2>/dev/null; then
+  say "restart (tmux overmind-web)"
+  tmux respawn-pane -k -t overmind-web "while true; do '$HOME/.local/bin/overmind' web serve --dir '$repo/web'; sleep 2; done"
 else
-  say "no fleet.web launchd agent or fleet-web tmux session — restart the web server yourself"
+  say "no overmind.web launchd agent or overmind-web tmux session — restart the web server yourself"
   exit 0
 fi
 

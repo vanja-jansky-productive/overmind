@@ -19,7 +19,7 @@ function uploadError(err: unknown, host: string): string {
       return 'network unreachable'
     case 404:
     case 501:
-      return /unknown host/i.test(err.message) ? err.message : `${host}'s server does not take uploads (update fleet there)`
+      return /unknown host/i.test(err.message) ? err.message : `${host}'s server does not take uploads (update overmind there)`
     case 502:
     case 504:
       return `${host} unreachable`

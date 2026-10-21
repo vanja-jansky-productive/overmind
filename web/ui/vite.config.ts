@@ -3,9 +3,9 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// Dev: `npm run dev` proxies /api to a running fleet web server
-// (FLEET_WEB_URL, default http://127.0.0.1:7777).
-const target = process.env.FLEET_WEB_URL || 'http://127.0.0.1:7777'
+// Dev: `npm run dev` proxies /api to a running overmind web server
+// (OVERMIND_WEB_URL, default http://127.0.0.1:7878).
+const target = process.env.OVERMIND_WEB_URL || 'http://127.0.0.1:7878'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

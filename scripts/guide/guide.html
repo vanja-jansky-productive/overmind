@@ -1,4 +1,4 @@
-<title>Fleet Field Guide</title>
+<title>Overmind Field Guide</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -100,13 +100,13 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
   <div class="meta">
     <span class="badge">Interno</span>
     <span>listopad 2026 · za AI tim</span>
-    <span class="tag">web</span><span class="tag">mobitel</span><span class="tag">Fleet.app</span><span class="tag">CLI</span><span class="tag">TUI</span><span class="tag">MCP</span>
+    <span class="tag">web</span><span class="tag">mobitel</span><span class="tag">Overmind.app</span><span class="tag">CLI</span><span class="tag">TUI</span><span class="tag">MCP</span>
   </div>
-  <h1>Fleet<span class="dot">.</span></h1>
-  <p class="lead">Svaka mogućnost Fleeta, ekran po ekran: kako vidiš, voziš i otvaraš Claude, Codex i pi sesije na svim mašinama, s desktopa i s mobitela.</p>
+  <h1>Overmind<span class="dot">.</span></h1>
+  <p class="lead">Svaka mogućnost Overminda, ekran po ekran: kako vidiš, voziš i otvaraš Claude, Codex i pi sesije na svim mašinama, s desktopa i s mobitela.</p>
   <div class="hero-links">
     <a href="{{SETUP_URL}}">Setup i arhitektura ↗</a>
-    <a href="https://github.com/ilucin/fleet">github.com/ilucin/fleet ↗</a>
+    <a href="https://github.com/vanja-jansky-productive/overmind">github.com/vanja-jansky-productive/overmind ↗</a>
   </div>
 </header>
 
@@ -133,17 +133,17 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
 </nav>
 
 <section class="row" id="ukratko">
-  <div class="label">Ukratko<b>Što je Fleet</b></div>
+  <div class="label">Ukratko<b>Što je Overmind</b></div>
   <div class="body">
     <h2>Jedna flota, pet sučelja</h2>
-    <p class="prose">Fleet nađe svaku živu sesiju coding agenta na svakoj mašini (tmux pane ili iTerm tab), pokaže što radi i pusti te da joj pišeš, odgovaraš, preimenuješ je, otvoriš novu ili posao prebaciš drugdje. Svaka mašina vrti isti mali web server, koji spaja sesije svojih peerova, pa bilo koji URL pokazuje cijelu flotu.</p>
+    <p class="prose">Overmind nađe svaku živu sesiju coding agenta na svakoj mašini (tmux pane ili iTerm tab), pokaže što radi i pusti te da joj pišeš, odgovaraš, preimenuješ je, otvoriš novu ili posao prebaciš drugdje. Svaka mašina vrti isti mali web server, koji spaja sesije svojih peerova, pa bilo koji URL pokazuje cijelu flotu.</p>
     <div class="cols c3">
       <div class="cell"><span class="k">web UI · desktop</span><p>Keyboard-first master–detail od 1024 px naviše: sidebar, chat, details panel, board.</p></div>
       <div class="cell"><span class="k">PWA · mobitel</span><p>Add to Home Screen preko Tailscalea. Swipe geste, quick replyji, mic za operatora.</p></div>
-      <div class="cell"><span class="k">Fleet.app</span><p>Tauri ljuska oko istog UI-ja: Dock, ⌘-Tab, pravi meniji, <kbd>⌘N</kbd>, Attach u iTerm.</p></div>
-      <div class="cell"><span class="k">fleet · CLI</span><p><code>list</code>, <code>peek</code>, <code>send</code>, <code>spawn</code>, <code>handoff</code>… s <code>-H &lt;host&gt;</code> na bilo kojoj mašini.</p></div>
-      <div class="cell"><span class="k">fleet watch · TUI</span><p>Živi dashboard u terminalu; javi kad sesija završi ili zapne.</p></div>
-      <div class="cell"><span class="k">fleet mcp · skill</span><p>Cijeli CLI kao MCP alati, pa agenti sami upravljaju flotom.</p></div>
+      <div class="cell"><span class="k">Overmind.app</span><p>Tauri ljuska oko istog UI-ja: Dock, ⌘-Tab, pravi meniji, <kbd>⌘N</kbd>, Attach u iTerm.</p></div>
+      <div class="cell"><span class="k">overmind · CLI</span><p><code>list</code>, <code>peek</code>, <code>send</code>, <code>spawn</code>, <code>handoff</code>… s <code>-H &lt;host&gt;</code> na bilo kojoj mašini.</p></div>
+      <div class="cell"><span class="k">overmind watch · TUI</span><p>Živi dashboard u terminalu; javi kad sesija završi ili zapne.</p></div>
+      <div class="cell"><span class="k">overmind mcp · skill</span><p>Cijeli CLI kao MCP alati, pa agenti sami upravljaju flotom.</p></div>
     </div>
     <p class="prose">Tri harnessa: <b>Claude Code</b>, <b>Codex</b> i <b>pi</b>. Svi se nađu, prikazuju i voze isto; harness i model biraš kod spawna. Svi screenshotovi u ovom vodiču su s izmišljenim demo podacima (firma „Acme”, hostovi <code>laptop</code>, <code>workstation</code>, <code>devbox</code>).</p>
   </div>
@@ -164,7 +164,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
         <li>Pretraga <kbd>⌘F</kbd> po imenu, naslovu i cwd-u; filtrira i Dormant i Recently closed.</li>
         <li>Naslov se uređuje na licu mjesta (klik, <kbd>⌘E</kbd>, <kbd>F2</kbd>, long press na mobitelu). Claudeov <code>/rename</code> je izvor istine, tmux ime ga prati. Bez imena, haiku sam smisli kratki naslov nakon prvog odgovora.</li>
         <li>Sesija u stacku nosi chip sa slojevima; sesija koju je pokrenuo job nosi chip sa satom.</li>
-        <li>Banner kad je neki host nedostupan. Tab title je <code>(3) Invoice rounding fix · Fleet</code>.</li>
+        <li>Banner kad je neki host nedostupan. Tab title je <code>(3) Invoice rounding fix · Overmind</code>.</li>
       </ul>
     </div>
     <div class="shots phones">
@@ -220,7 +220,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
   <div class="body">
     <h2>Handover bilješka koja se piše sama</h2>
     <div class="prose">
-      <p>Svaka sesija ima <b>brief</b>: sažetak u 1–2 rečenice, todoe s checkboxovima i napretkom (<code>3/5</code>) i resurse izvučene iz transcripta (git branch i worktree, PR-ovi, issueji, specovi, fileovi, linkovi). Generira ga haiku tek nakon 60 s mirovanja; ručne izmjene uvijek pobjeđuju. <b>New session from here…</b> otvori formu s briefom kao prvim promptom i izborom <b>Hand off</b> (zasebna sesija; CLI: <code>fleet spawn --from</code>) ili <b>Sibling</b> (ista sesija u stacku, stvori ga ako ga nema).</p>
+      <p>Svaka sesija ima <b>brief</b>: sažetak u 1–2 rečenice, todoe s checkboxovima i napretkom (<code>3/5</code>) i resurse izvučene iz transcripta (git branch i worktree, PR-ovi, issueji, specovi, fileovi, linkovi). Generira ga haiku tek nakon 60 s mirovanja; ručne izmjene uvijek pobjeđuju. <b>New session from here…</b> otvori formu s briefom kao prvim promptom i izborom <b>Hand off</b> (zasebna sesija; CLI: <code>overmind spawn --from</code>) ili <b>Sibling</b> (ista sesija u stacku, stvori ga ako ga nema).</p>
     </div>
     <div class="shots pair">
       <figure><img src="img/d-details-bottom.webp" alt="Donji dio details panela: New session from here, attach command, close" width="1600" height="1000" loading="lazy"><figcaption>Donji dio panela: New session from here, attach komanda, tmux/pid/id, Close session (dva klika)</figcaption></figure>
@@ -228,7 +228,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
     </div>
     <ul class="prose">
       <li><b>Open in VS Code / Cursor</b> za cwd i svaki worktree; za drugi host otvara Remote SSH.</li>
-      <li><b>Attach command</b> (<code>fleet -H workstation enter …</code>) za copy; u Fleet.app gumb Attach otvara iTerm tab.</li>
+      <li><b>Attach command</b> (<code>overmind -H workstation enter …</code>) za copy; u Overmind.app gumb Attach otvara iTerm tab.</li>
       <li><b>Auto-name → Run now</b> i zadnji run naminga.</li>
     </ul>
     <h3>File preview</h3>
@@ -293,7 +293,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
       <figure><img src="img/d-stack.webp" alt="Stack sheet: sesije stacka na dva hosta i StackBrief" width="1600" height="1000" loading="lazy"><figcaption>Stack sheet: 3 žive sesije na dva hosta, jedna zatvorena, StackBrief s resursima</figcaption></figure>
       <figure class="phone"><img src="img/m-stack.webp" alt="Mobitel: stack sheet preko cijelog ekrana" width="640" height="1385" loading="lazy"><figcaption>Isto na mobitelu</figcaption></figure>
     </div>
-    <p class="prose">StackBrief se uređuje cijeli (s konfliktom ako ga je netko drugi promijenio u međuvremenu), stack se preimenuje klikom na labelu, a Delete stack ostavlja sesije da rade. CLI: <code>fleet stack spawn --on devbox</code>.</p>
+    <p class="prose">StackBrief se uređuje cijeli (s konfliktom ako ga je netko drugi promijenio u međuvremenu), stack se preimenuje klikom na labelu, a Delete stack ostavlja sesije da rade. CLI: <code>overmind stack spawn --on devbox</code>.</p>
   </div>
 </section>
 
@@ -301,7 +301,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
   <div class="label">08 · Nova sesija<b>Spawn s bilo kojeg uređaja</b><code>⌘⇧O · ⌘N</code></div>
   <div class="body">
     <h2>Nova sesija na bilo kojem hostu</h2>
-    <p class="prose">Biraš host, direktorij (Start directories iz postavki), agenta (Claude Code, Codex, pi), model i opcionalni prvi prompt, s prilozima i glasovnim unosom. <kbd>⌘Enter</kbd> pokreće. Ime ne upisuješ: sesija dobije naslov nakon prvog odgovora. Neposlani prompt ostaje kao draft tjedan dana. Kad sesija krene, Fleet je sam otvori.</p>
+    <p class="prose">Biraš host, direktorij (Start directories iz postavki), agenta (Claude Code, Codex, pi), model i opcionalni prvi prompt, s prilozima i glasovnim unosom. <kbd>⌘Enter</kbd> pokreće. Ime ne upisuješ: sesija dobije naslov nakon prvog odgovora. Neposlani prompt ostaje kao draft tjedan dana. Kad sesija krene, Overmind je sam otvori.</p>
     <div class="shots pair">
       <figure><img src="img/d-new.webp" alt="Dijalog New session: host, directory, agent, model, first prompt" width="1600" height="1000" loading="lazy"><figcaption>Dijalog na desktopu</figcaption></figure>
       <figure class="phone"><img src="img/m-new.webp" alt="Mobitel: forma za novu sesiju" width="640" height="1385" loading="lazy"><figcaption>Forma na mobitelu</figcaption></figure>
@@ -334,8 +334,8 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
     <div class="shots pair">
       <figure><img src="img/d-scratch.webp" alt="Plutajući scratchpad preko chata" width="1600" height="1000" loading="lazy"><figcaption>Scratchpad: plutajući tekst koji se sam sprema; app ispod ostaje upotrebljiv</figcaption></figure>
       <div class="prose">
-        <h3 style="margin-top:0">Fleet.app</h3>
-        <p>Isti UI kao macOS app (Tauri 2, system WebKit, ~10 MB). Pravi meniji, <kbd>⌘N</kbd> kao <i>File → New Session</i>, nativni title bar, Attach otvara iTerm tab s <code>fleet -H &lt;host&gt; enter</code>. Otvara lokalni server ili <code>desktop.url</code> (npr. onaj na workstationu); svaki server pokazuje cijelu flotu.</p>
+        <h3 style="margin-top:0">Overmind.app</h3>
+        <p>Isti UI kao macOS app (Tauri 2, system WebKit, ~10 MB). Pravi meniji, <kbd>⌘N</kbd> kao <i>File → New Session</i>, nativni title bar, Attach otvara iTerm tab s <code>overmind -H &lt;host&gt; enter</code>. Otvara lokalni server ili <code>desktop.url</code> (npr. onaj na workstationu); svaki server pokazuje cijelu flotu.</p>
       </div>
     </div>
   </div>
@@ -366,7 +366,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
 </section>
 
 <section class="row" id="prs">
-  <div class="label">12 · Pull requests<b>Što čeka tebe</b><code>#/prs · fleet prs</code></div>
+  <div class="label">12 · Pull requests<b>Što čeka tebe</b><code>#/prs · overmind prs</code></div>
   <div class="body">
     <h2>PR-ovi koji te trebaju, po kolonama</h2>
     <p class="prose">Preko <code>gh</code> na odabranom hostu: <b>Unseen mentions</b>, <b>Waiting on me</b>, moji u reviewu, spremni za merge, moji draftovi i <b>Waiting on author</b>. Rub kartice ide od zelenog do crvenog kako PR stari („rotting”). Checks, review status, veličina, komentari. PR jednim klikom ide u worktree i dobije sesiju s promptom koji kaže o čemu je PR; sesije i PR-ovi su povezani u oba smjera.</p>
@@ -374,12 +374,12 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
       <figure><img src="img/d-prs.webp" alt="PR board sa šest kolona" width="1600" height="1000" loading="lazy"><figcaption>Mention s excerptom i „Seen”, worktree oznaka, failed checks, stari PR-ovi crveni</figcaption></figure>
       <figure class="phone"><img src="img/m-prs.webp" alt="Mobitel: kolone PR-ova jedna ispod druge" width="640" height="1385" loading="lazy"><figcaption>Na mobitelu kolone idu jedna ispod druge</figcaption></figure>
     </div>
-    <p class="prose">CLI: <code>fleet prs</code>, <code>fleet pr checkout</code>, <code>fleet pr spawn</code>, <code>fleet pr seen</code>, <code>fleet pr cleanup-worktrees</code> (makne worktreeje gotovih PR-ova).</p>
+    <p class="prose">CLI: <code>overmind prs</code>, <code>overmind pr checkout</code>, <code>overmind pr spawn</code>, <code>overmind pr seen</code>, <code>overmind pr cleanup-worktrees</code> (makne worktreeje gotovih PR-ova).</p>
   </div>
 </section>
 
 <section class="row" id="bots">
-  <div class="label">13 · Bots<b>Agenti iz recepta</b><code>#/bots · fleet bots</code></div>
+  <div class="label">13 · Bots<b>Agenti iz recepta</b><code>#/bots · overmind bots</code></div>
   <div class="body">
     <h2>Bots: routines na tvojim mašinama</h2>
     <p class="prose">Cron raspored u configu hosta, prompt inline ili iz filea, harness i model po botu. Raspored je napisan ljudski („Weekdays at 07:00”). Svaki run se pamti s outcomeom (spawned, skipped, missed, failed), a sve sesije koje bot sesija pokrene pripadaju istom runu, prikazane kao stablo. Prekidač za pauzu, <b>Run now</b> (s „Run anyway” ako prethodni još radi), prompt file otvoriš u editoru.</p>
@@ -394,7 +394,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
   <div class="label">14 · Notes<b>Markdown explorer</b><code>#/notes · ⌘⇧E</code></div>
   <div class="body">
     <h2>Bilješke bilo kojeg hosta</h2>
-    <p class="prose">Ako host ima <code>web.notes.root</code>, Fleet pokazuje stablo foldera, nedavno mijenjane bilješke i pretragu (riječi, <code>"fraze"</code>, <code>#tag</code>) s istaknutim pogocima. Bilješka se prikazuje renderirana s frontmatterom kao tablicom i <code>[[wiki]]</code> linkovima. <b>Send to session</b> stavi putanju bilješke u composer odabrane sesije. Paleta <kbd>⌘K</kbd> pretražuje i bilješke.</p>
+    <p class="prose">Ako host ima <code>web.notes.root</code>, Overmind pokazuje stablo foldera, nedavno mijenjane bilješke i pretragu (riječi, <code>"fraze"</code>, <code>#tag</code>) s istaknutim pogocima. Bilješka se prikazuje renderirana s frontmatterom kao tablicom i <code>[[wiki]]</code> linkovima. <b>Send to session</b> stavi putanju bilješke u composer odabrane sesije. Paleta <kbd>⌘K</kbd> pretražuje i bilješke.</p>
     <div class="shots two">
       <figure><img src="img/d-notes.webp" alt="Notes explorer: stablo, recent, otvorena bilješka Billing" width="1600" height="1000" loading="lazy"><figcaption>Stablo, nedavno mijenjano i bilješka s frontmatterom</figcaption></figure>
       <figure><img src="img/d-notes-search.webp" alt="Pretraga bilješki za rounding s istaknutim pogocima" width="1600" height="1000" loading="lazy"><figcaption>Pretraga s istaknutim pogocima i brojem linije</figcaption></figure>
@@ -407,7 +407,7 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
 </section>
 
 <section class="row" id="usage">
-  <div class="label">15 · Usage<b>Limiti pretplate</b><code>#/usage · fleet usage</code></div>
+  <div class="label">15 · Usage<b>Limiti pretplate</b><code>#/usage · overmind usage</code></div>
   <div class="body">
     <h2>Koliko je još ostalo do limita</h2>
     <p class="prose">Isti brojevi kao Claude Codeov <code>/usage</code>, za svaki account logiran na nekoj mašini (hostovi na istom accountu dijele karticu): trenutna sesija, tjedni limit za sve modele, tjedni po modelu, extra usage. Limit koji trenutno veže je označen kao <i>binding</i>, a reset piše kad.</p>
@@ -416,16 +416,16 @@ footer { padding-block: 36px 64px; font-size: 13px; color: var(--muted); display
 </section>
 
 <section class="row" id="oporavak">
-  <div class="label">16 · Oporavak<b>Nakon reboota</b><code>fleet restore</code></div>
+  <div class="label">16 · Oporavak<b>Nakon reboota</b><code>overmind restore</code></div>
   <div class="body">
     <h2>Dormant i Recently closed</h2>
-    <p class="prose">Fleet stalno sprema snapshot tmux layouta. Nakon reboota sesije postanu <b>dormant</b>: vide se ispod liste i na boardu, s tmux imenom, Claude naslovima, brojem windowa i paneova. <b>Resume</b> vrati isti layout i svaki Claude pane s <code>--resume</code>, pa grupe, stackovi i briefovi ostaju. <b>Recently closed</b> čuva zatvorene sesije 7 dana, za slučaj da si zatvorio krivu.</p>
+    <p class="prose">Overmind stalno sprema snapshot tmux layouta. Nakon reboota sesije postanu <b>dormant</b>: vide se ispod liste i na boardu, s tmux imenom, Claude naslovima, brojem windowa i paneova. <b>Resume</b> vrati isti layout i svaki Claude pane s <code>--resume</code>, pa grupe, stackovi i briefovi ostaju. <b>Recently closed</b> čuva zatvorene sesije 7 dana, za slučaj da si zatvorio krivu.</p>
     <div class="shots pair">
       <figure><img src="img/d-dormant.webp" alt="Dno sidebara: Dormant sekcija s Resume i Forget, Recently closed" width="1600" height="1000" loading="lazy"><figcaption>Dormant <code>legacy-import</code> (2 windowa, 3 panea) s Resume i Forget; ispod Recently closed</figcaption></figure>
-      <div class="prose"><pre><code>fleet restore              # lista dormant sesija
-fleet restore legacy-import
-fleet restore --all
-fleet restore --closed     # nedavno zatvorene</code></pre></div>
+      <div class="prose"><pre><code>overmind restore              # lista dormant sesija
+overmind restore legacy-import
+overmind restore --all
+overmind restore --closed     # nedavno zatvorene</code></pre></div>
     </div>
   </div>
 </section>
@@ -452,24 +452,24 @@ fleet restore --closed     # nedavno zatvorene</code></pre></div>
 </section>
 
 <section class="row" id="terminal">
-  <div class="label">18 · Terminal<b>CLI i TUI</b><code>fleet</code></div>
+  <div class="label">18 · Terminal<b>CLI i TUI</b><code>overmind</code></div>
   <div class="body">
     <h2>Isto, iz terminala</h2>
-    <p class="prose">Goli <code>fleet</code> je živi dashboard: sesije sortirane da one koje te trebaju budu gore, prompt i repo ispod naslova, događaji (pojavila se, završila, zapela dulje od 300 s) u donjem panelu. Brojevi 1–0 skaču na sesiju.</p>
-    <figure><img src="img/tui.webp" alt="fleet watch TUI: lista sesija i panel s događajima" width="1600" height="940" loading="lazy"><figcaption><code>fleet watch</code> s demo flotom</figcaption></figure>
-<pre><code>fleet list -a                          # sve sesije, svi hostovi (--json: jedan array)
-fleet peek invoice                     # što sesija trenutno pokazuje
-fleet send invoice "run the tests"     # utipkaj i stisni Enter
-fleet -H workstation spawn "migrate the index" --dir ~/Code/acme-api --harness codex
-fleet spawn --from invoice             # nova sesija iz briefa
-fleet handoff --dir ~/Code/acme-api     # prebaci ovaj posao u novu sesiju, s briefom
-fleet pr spawn acme-web#1310           # PR u worktree + sesija na njemu
-fleet name --apply                     # daj svim sesijama prava imena
-fleet enter invoice · fleet last       # uđi u tmux sesiju bilo gdje · natrag na prethodnu
-fleet tmux stale                       # idle shellovi koje nitko ne koristi
-fleet brief invoice · fleet stack …    # briefovi i stackovi
-fleet repos sync · fleet jobs run dependency-audit
-fleet doctor                           # dostupnost hostova, verzije, config</code></pre>
+    <p class="prose">Goli <code>overmind</code> je živi dashboard: sesije sortirane da one koje te trebaju budu gore, prompt i repo ispod naslova, događaji (pojavila se, završila, zapela dulje od 300 s) u donjem panelu. Brojevi 1–0 skaču na sesiju.</p>
+    <figure><img src="img/tui.webp" alt="overmind watch TUI: lista sesija i panel s događajima" width="1600" height="940" loading="lazy"><figcaption><code>overmind watch</code> s demo flotom</figcaption></figure>
+<pre><code>overmind list -a                          # sve sesije, svi hostovi (--json: jedan array)
+overmind peek invoice                     # što sesija trenutno pokazuje
+overmind send invoice "run the tests"     # utipkaj i stisni Enter
+overmind -H workstation spawn "migrate the index" --dir ~/Code/acme-api --harness codex
+overmind spawn --from invoice             # nova sesija iz briefa
+overmind handoff --dir ~/Code/acme-api     # prebaci ovaj posao u novu sesiju, s briefom
+overmind pr spawn acme-web#1310           # PR u worktree + sesija na njemu
+overmind name --apply                     # daj svim sesijama prava imena
+overmind enter invoice · overmind last       # uđi u tmux sesiju bilo gdje · natrag na prethodnu
+overmind tmux stale                       # idle shellovi koje nitko ne koristi
+overmind brief invoice · overmind stack …    # briefovi i stackovi
+overmind repos sync · overmind jobs run dependency-audit
+overmind doctor                           # dostupnost hostova, verzije, config</code></pre>
     <p class="prose">Target se resolva po naslovu, imenu, prefiksu session id-ja ili pidu. Komande koje tipkaju u živog agenta nikad ne pogađaju: ako dvije sesije jednako odgovaraju, dobiješ grešku s kandidatima.</p>
   </div>
 </section>
@@ -479,13 +479,13 @@ fleet doctor                           # dostupnost hostova, verzije, config</co
   <div class="body">
     <h2>Agenti upravljaju flotom sami</h2>
     <div class="cols c2">
-      <div class="cell"><span class="k">fleet mcp</span><p>Svaka CLI komanda kao MCP tool, generiran iz CLI definicija. stdio za Claude Code, <code>--http</code> sa bearer tokenom za ostale.</p></div>
-      <div class="cell"><span class="k">fleet skill install</span><p>Skill koji uči Claudea kad i kako koristiti fleet: „what's my fleet doing”, „spawn a session to…”, „take this to another terminal”.</p></div>
-      <div class="cell"><span class="k">tailnet je granica</span><p>Web app nema autentikacije: tko dođe do porta 7777 može tipkati u sesije. Zato radi samo preko Tailscalea, nikad javno.</p></div>
+      <div class="cell"><span class="k">overmind mcp</span><p>Svaka CLI komanda kao MCP tool, generiran iz CLI definicija. stdio za Claude Code, <code>--http</code> sa bearer tokenom za ostale.</p></div>
+      <div class="cell"><span class="k">overmind skill install</span><p>Skill koji uči Claudea kad i kako koristiti overmind: „what's my overmind doing”, „spawn a session to…”, „take this to another terminal”.</p></div>
+      <div class="cell"><span class="k">tailnet je granica</span><p>Web app nema autentikacije: tko dođe do porta 7878 može tipkati u sesije. Zato radi samo preko Tailscalea, nikad javno.</p></div>
       <div class="cell"><span class="k">više u setup vodiču</span><p>Topologija, arhitektura, recept za always-on Mac i gotche: <a href="{{SETUP_URL}}">setup vodiču</a>.</p></div>
     </div>
   </div>
 </section>
 
-<footer><span>Fleet · interni vodič kroz mogućnosti</span><span>Svi screenshotovi s izmišljenim demo podacima</span></footer>
+<footer><span>Overmind · interni vodič kroz mogućnosti</span><span>Svi screenshotovi s izmišljenim demo podacima</span></footer>
 </div>

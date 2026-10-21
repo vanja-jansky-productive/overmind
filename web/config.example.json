@@ -3,11 +3,11 @@
   "self": "laptop",
   "defaultHost": "workstation",
   "hosts": {
-    "laptop": { "ssh": null, "web": "http://100.x.y.z:7777" },
-    "workstation": { "ssh": "workstation", "web": "http://100.x.y.z:7777" }
+    "laptop": { "ssh": null, "web": "http://100.x.y.z:7878" },
+    "workstation": { "ssh": "workstation", "web": "http://100.x.y.z:7878" }
   },
   "web": {
-    "port": 7777,
+    "port": 7878,
     "bind": "0.0.0.0",
     "dir": null,
     "ui": null,
@@ -21,14 +21,14 @@
     "autoName": { "enabled": true, "intervalMinutes": 5 },
     "grouping": { "enabled": true, "intervalMinutes": 10 },
     "briefs": { "enabled": false, "model": "haiku", "idleMs": 60000, "minIntervalMs": 900000, "maxDeltaChars": 12000, "maxCallsPerHour": 12 },
-    "uploads": { "dir": "~/.local/share/fleet/uploads", "maxMB": 100, "retentionDays": 14 },
+    "uploads": { "dir": "~/.local/share/overmind/uploads", "maxMB": 100, "retentionDays": 14 },
     "files": { "roots": [] },
-    "memos": { "dir": "~/Code/notes/memos", "audioDir": "~/.local/share/fleet/memo-audio", "model": "haiku", "vocabulary": ["Claude", "fleet", "PR"] },
+    "memos": { "dir": "~/Code/notes/memos", "audioDir": "~/.local/share/overmind/memo-audio", "model": "haiku", "vocabulary": ["Claude", "overmind", "PR"] },
     "notes": { "root": "~/Code/notes", "name": "Notes", "searchCmd": null, "exclude": ["drafts"] }
   },
   "grouping": { "enabled": true, "model": "haiku", "host": "workstation" },
   "tmux": null,
-  "fleetBin": null,
+  "overmindBin": null,
   "spawnDirs": [
     { "label": "Work", "paths": { "laptop": "~/Code/project", "workstation": "~/Code/project" } },
     { "label": "Notes", "paths": { "workstation": "~/Code/notes" } }

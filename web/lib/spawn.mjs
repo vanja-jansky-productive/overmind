@@ -1,5 +1,5 @@
 // Start a fresh agent session — Claude Code, Codex or pi — in a new tmux session (one tmux
-// session = one job, same convention as `fleet tmux new`). Mirrors `fleet spawn` (tmux): open the
+// session = one job, same convention as `overmind tmux new`). Mirrors `overmind spawn` (tmux): open the
 // pane in `dir`, then type `<harness> [--model <id>] [-n <name>] '<prompt>'` into the shell so the
 // user's PATH/profile apply.
 import { promises as fs } from 'node:fs';
@@ -9,7 +9,7 @@ import { MODEL_ID_RE } from './config.mjs';
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
-/** POSIX single-quote shell escaping (same as the fleet CLI's `shq`). */
+/** POSIX single-quote shell escaping (same as the overmind CLI's `shq`). */
 export function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -25,7 +25,7 @@ export function shqTyped(s) {
   return `$'${esc}'`;
 }
 
-/** Sanitize a user-typed name into a tmux-safe session name (like `fleet tmux new`). */
+/** Sanitize a user-typed name into a tmux-safe session name (like `overmind tmux new`). */
 export function sanitizeName(raw) {
   const cleaned = String(raw ?? '')
     .trim()
@@ -38,7 +38,7 @@ export function sanitizeName(raw) {
 
 export function defaultName(now = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
-  return `fw-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+  return `om-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
 }
 
 /**
@@ -140,7 +140,7 @@ export async function resolveAllowedDir(dir, roots, { home = os.homedir() } = {}
 }
 
 /**
- * `promptDir`: where prompts too long to type are written (like `fleet handoff` briefs,
+ * `promptDir`: where prompts too long to type are written (like `overmind handoff` briefs,
  * they are kept — the record of what the session was started with).
  */
 const SHELLS = new Set(['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'nu']);
@@ -163,7 +163,7 @@ export function createSpawner({
   launchers = {},
   enterDelayMs = 150,
   sleep,
-  promptDir = path.join(os.homedir(), '.claude', 'fleet-prompts'),
+  promptDir = path.join(os.homedir(), '.claude', 'overmind-prompts'),
 }) {
   const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
 
@@ -235,7 +235,7 @@ export function createSpawner({
 
   /**
    * A directory Claude has never run in stops at "Is this a project you trust?" with
-   * "No, exit" preselected; `fleet list` does not show the session until that is answered.
+   * "No, exit" preselected; `overmind list` does not show the session until that is answered.
    * The user picked the directory explicitly, so answer "Yes" (Down, Enter) for them.
    * Polls the pane for up to ~10s; returns true when the prompt was seen and accepted.
    */

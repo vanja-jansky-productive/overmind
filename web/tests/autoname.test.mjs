@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAutoNamer, createSpawnNamer, parseNameOutput } from '../lib/autoname.mjs';
-import { createFleetCli } from '../lib/fleet-cli.mjs';
+import { createOvermindCli } from '../lib/overmind-cli.mjs';
 
 test('parseNameOutput splits renamed / tmux / held / errors', () => {
   const out = [
@@ -24,17 +24,17 @@ test('parseNameOutput splits renamed / tmux / held / errors', () => {
   assert.deepEqual(parseNameOutput('no sessions still carry a Claude-derived name — nothing to rename').renamed, []);
 });
 
-test('fleet CLI nameAll runs `fleet name --all --apply` (tmux synced by the CLI) with NO_COLOR (dry run: `-n name --all`)', async () => {
+test('overmind CLI nameAll runs `overmind name --all --apply` (tmux synced by the CLI) with NO_COLOR (dry run: `-n name --all`)', async () => {
   const calls = [];
   const run = async (bin, args, opts) => (calls.push({ bin, args, opts }), { stdout: 'x', stderr: '' });
-  const cli = createFleetCli({ run, bin: '/x/fleet' });
+  const cli = createOvermindCli({ run, bin: '/x/overmind' });
   assert.deepEqual(await cli.nameAll(), { stdout: 'x', stderr: '' });
   assert.deepEqual(calls[0].args, ['name', '--all', '--settled', '--apply']);
-  assert.equal(calls[0].bin, '/x/fleet');
+  assert.equal(calls[0].bin, '/x/overmind');
   assert.equal(calls[0].opts.env.NO_COLOR, '1');
   await cli.nameAll({ dryRun: true });
   assert.deepEqual(calls[1].args, ['-n', 'name', '--all', '--settled']);
-  const missing = createFleetCli({ run: async () => { throw Object.assign(new Error('spawn'), { code: 'ENOENT' }); } });
+  const missing = createOvermindCli({ run: async () => { throw Object.assign(new Error('spawn'), { code: 'ENOENT' }); } });
   await assert.rejects(missing.nameAll(), /not found/);
 });
 
@@ -44,7 +44,7 @@ test('runOnce calls the CLI once for concurrent runs and records lastRun (tmux l
     nameAll: async () => {
       n += 1;
       await new Promise((r) => setTimeout(r, 5));
-      return { stdout: 'app-1a  →  fix-login-flow\n   ⧉ fw-101010 → fix-login-flow\n', stderr: '' };
+      return { stdout: 'app-1a  →  fix-login-flow\n   ⧉ om-101010 → fix-login-flow\n', stderr: '' };
     },
   };
   const an = createAutoNamer({ cli });
@@ -54,7 +54,7 @@ test('runOnce calls the CLI once for concurrent runs and records lastRun (tmux l
   assert.equal(an.lastRun.ok, true);
   assert.equal(an.lastRun.reason, 'manual');
   assert.equal(an.lastRun.renamed[0].to, 'fix-login-flow');
-  assert.deepEqual(an.lastRun.tmux, ['fw-101010 → fix-login-flow']);
+  assert.deepEqual(an.lastRun.tmux, ['om-101010 → fix-login-flow']);
 });
 
 test('runOnce records failures without throwing', async () => {
@@ -75,11 +75,11 @@ test('start schedules a first run after the initial delay, stop cancels it', asy
   assert.equal(an.lastRun.reason, 'scheduled');
 });
 
-test('fleet CLI nameOne runs `fleet name <id> --apply` with NO_COLOR', async () => {
+test('overmind CLI nameOne runs `overmind name <id> --apply` with NO_COLOR', async () => {
   const calls = [];
-  const cli = createFleetCli({ run: async (bin, args, opts) => (calls.push([bin, args, opts.env.NO_COLOR]), { stdout: 'a  →  b\n', stderr: '' }) });
+  const cli = createOvermindCli({ run: async (bin, args, opts) => (calls.push([bin, args, opts.env.NO_COLOR]), { stdout: 'a  →  b\n', stderr: '' }) });
   const out = await cli.nameOne({ target: 'abc-123' });
-  assert.deepEqual(calls[0], ['fleet', ['name', 'abc-123', '--apply'], '1']);
+  assert.deepEqual(calls[0], ['overmind', ['name', 'abc-123', '--apply'], '1']);
   assert.equal(out.stdout, 'a  →  b\n');
 });
 
@@ -87,13 +87,13 @@ test('spawn namer waits for registration and the first reply, then names that on
   const waits = [];
   const frames = [
     [], // not registered yet
-    [{ session_id: 'id-1', tmux_session: 'fw-101010', name_source: 'derived', status: 'busy' }], // first turn
-    [{ session_id: 'id-1', tmux_session: 'fw-101010', name_source: 'derived', status: 'waiting' }], // held
-    [{ session_id: 'id-1', tmux_session: 'fw-101010', name_source: 'derived', status: 'idle' }],
+    [{ session_id: 'id-1', tmux_session: 'om-101010', name_source: 'derived', status: 'busy' }], // first turn
+    [{ session_id: 'id-1', tmux_session: 'om-101010', name_source: 'derived', status: 'waiting' }], // held
+    [{ session_id: 'id-1', tmux_session: 'om-101010', name_source: 'derived', status: 'idle' }],
   ];
   let i = 0;
   const named = [];
-  const outputs = ['⏸ work-1a is waiting on you — nothing sent\n', 'work-1a  →  reply-ok\n   ⧉ fw-101010 → reply-ok\n'];
+  const outputs = ['⏸ work-1a is waiting on you — nothing sent\n', 'work-1a  →  reply-ok\n   ⧉ om-101010 → reply-ok\n'];
   const cli = { nameOne: async ({ target }) => (named.push(target), { stdout: outputs.shift(), stderr: '' }) };
   const logs = [];
   const namer = createSpawnNamer({
@@ -103,26 +103,26 @@ test('spawn namer waits for registration and the first reply, then names that on
     sleep: async (ms) => void waits.push(ms),
     log: (l) => logs.push(l),
   });
-  const p = namer.schedule('fw-101010');
-  assert.equal(namer.schedule('fw-101010'), p, 'one pass per session at a time');
+  const p = namer.schedule('om-101010');
+  assert.equal(namer.schedule('om-101010'), p, 'one pass per session at a time');
   const res = await p;
   assert.deepEqual(res, { ok: true, reason: 'renamed', tries: 4, renamed: 'reply-ok' });
   assert.deepEqual(named, ['id-1', 'id-1'], 'held once, retried');
   assert.deepEqual(waits, [1, 2, 3, 4]);
   assert.deepEqual(namer.pending, []);
-  assert.match(logs.at(-1), /fw-101010: → reply-ok tmux: fw-101010 → reply-ok/);
+  assert.match(logs.at(-1), /om-101010: → reply-ok tmux: om-101010 → reply-ok/);
 });
 
 test('spawn namer stops when the session is already named, gives up after its tries', async () => {
   const cli = { nameOne: async () => assert.fail('must not name a user-named session') };
   const named = createSpawnNamer({
     cli,
-    listSessions: async () => [{ session_id: 'id-2', tmux_session: 'fw-2', name_source: 'user', status: 'idle' }],
+    listSessions: async () => [{ session_id: 'id-2', tmux_session: 'om-2', name_source: 'user', status: 'idle' }],
     delaysMs: [1, 1],
     sleep: async () => {},
   });
-  assert.deepEqual(await named.schedule('fw-2'), { ok: true, reason: 'already named', tries: 1 });
+  assert.deepEqual(await named.schedule('om-2'), { ok: true, reason: 'already named', tries: 1 });
 
   const never = createSpawnNamer({ cli, listSessions: async () => { throw new Error('discovery down'); }, delaysMs: [1, 1, 1], sleep: async () => {} });
-  assert.deepEqual(await never.schedule('fw-3'), { ok: false, reason: 'gave up', tries: 3 });
+  assert.deepEqual(await never.schedule('om-3'), { ok: false, reason: 'gave up', tries: 3 });
 });

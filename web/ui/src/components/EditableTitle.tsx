@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 export interface EditableTitleProps {
   session: Session | null
   scope: TitleScope
-  /** When there is no session object yet (a pane opened before the fleet loaded). */
+  /** When there is no session object yet (a pane opened before the overmind loaded). */
   fallbackKey?: string
   /** Text style of the title (size, weight). */
   className?: string

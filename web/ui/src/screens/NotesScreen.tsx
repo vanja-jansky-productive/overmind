@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils'
 // The query outlives the screen (note → back → the same results).
 let lastQuery = ''
 
-const openKey = (host: string) => `fleet.notesOpen.${host}`
+const openKey = (host: string) => `overmind.notesOpen.${host}`
 function loadOpen(host: string | null): Set<string> {
   if (!host) return new Set()
   try {
@@ -48,7 +48,7 @@ export function NotesScreen({ layout = 'screen', searchRef }: NotesScreenProps) 
   const [location, navigate] = useLocation()
   const loc = parseNotesLocation(location) ?? { host: null, path: null }
   const hosts = useNotesHosts()
-  const [lastHost, setLastHost] = usePersistentState<string>('fleet.notesHost', '')
+  const [lastHost, setLastHost] = usePersistentState<string>('overmind.notesHost', '')
   const host = loc.host ?? hosts.find((h) => h.name === lastHost)?.name ?? hosts[0]?.name ?? null
   useEffect(() => {
     if (loc.host && loc.host !== lastHost) setLastHost(loc.host)
@@ -173,7 +173,7 @@ export function NotesScreen({ layout = 'screen', searchRef }: NotesScreenProps) 
 
   const notice = !hosts.length ? (
     <Empty title="No notes configured">
-      Point a host at a folder of markdown notes: <code className="font-mono">fleet config set web.notes.root ~/notes</code>, then restart its web server.
+      Point a host at a folder of markdown notes: <code className="font-mono">overmind config set web.notes.root ~/notes</code>, then restart its web server.
     </Empty>
   ) : error && !tree ? (
     <Empty title="Notes unavailable">{error}</Empty>

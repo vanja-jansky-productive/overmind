@@ -1,5 +1,5 @@
 // Settings → Git repos: GET/PUT /api/hosts/:host/repos, POST …/repos/sync|service. Two API
-// servers (laptop + workstation) with temp configs; the `fleet` CLI is faked.
+// servers (laptop + workstation) with temp configs; the `overmind` CLI is faked.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,8 +8,8 @@ import path from 'node:path';
 
 import { createApi } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
-import { createFleet } from '../lib/fleet.mjs';
-import { createFleetCli } from '../lib/fleet-cli.mjs';
+import { createOvermind } from '../lib/overmind.mjs';
+import { createOvermindCli } from '../lib/overmind-cli.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
 import { createRepos, reposSettings, spanSeconds, validateReposSettings } from '../lib/repos.mjs';
 
@@ -30,20 +30,20 @@ async function call(url, method = 'GET', body) {
 
 const ROW = { name: 'app', path: '~/Code/app', every: 86400, excluded: false, due: false, branch: 'main', ahead: 0, behind: 0, dirty: 0 };
 
-/** A fake `fleet`: list, repos (--json --all), repos sync, repos install-service, config set. */
+/** A fake `overmind`: list, repos (--json --all), repos sync, repos install-service, config set. */
 function fakeRun(h) {
   return async (bin, args, opts = {}) => {
     h.calls.push(args);
     if (args[0] === 'list') return { stdout: '[]', stderr: '' };
     if (args[0] === '--local' && args[1] === 'config' && args[2] === 'set') {
-      const file = opts.env.FLEET_CONFIG;
+      const file = opts.env.OVERMIND_CONFIG;
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       raw[args[3]] = JSON.parse(args[4]);
       fs.writeFileSync(file, `${JSON.stringify(raw, null, 2)}\n`);
       return { stdout: '', stderr: '' };
     }
     if (args[0] === '--local' && args[1] === 'repos') {
-      if (h.locked && args[2] === 'sync') throw Object.assign(new Error('exit 1'), { code: 1, stderr: 'Error: another `fleet repos sync` is running\n' });
+      if (h.locked && args[2] === 'sync') throw Object.assign(new Error('exit 1'), { code: 1, stderr: 'Error: another `overmind repos sync` is running\n' });
       if (args[2] === '--json') return { stdout: JSON.stringify([ROW]), stderr: '' };
       if (args[2] === 'sync') return { stdout: JSON.stringify([{ name: 'app', path: '~/Code/app', outcome: 'updated', pulled: 2 }]), stderr: '' };
       if (args[2] === 'install-service') {
@@ -52,17 +52,17 @@ function fakeRun(h) {
         return { stdout: '', stderr: '' };
       }
     }
-    throw new Error(`unexpected fleet ${args.join(' ')}`);
+    throw new Error(`unexpected overmind ${args.join(' ')}`);
   };
 }
 
 async function startPair(t) {
-  const root = tmpdir(t, 'fleet-repos-');
+  const root = tmpdir(t, 'overmind-repos-');
   const hosts = {};
   for (const name of ['laptop', 'workstation']) {
     const home = path.join(root, name);
     fs.mkdirSync(path.join(home, 'Library', 'LaunchAgents'), { recursive: true });
-    hosts[name] = { home, configFile: path.join(home, 'config.json'), calls: [], plist: path.join(home, 'Library', 'LaunchAgents', 'fleet.repos.plist') };
+    hosts[name] = { home, configFile: path.join(home, 'config.json'), calls: [], plist: path.join(home, 'Library', 'LaunchAgents', 'overmind.repos.plist') };
   }
   const urls = {};
   const handles = {};
@@ -80,16 +80,16 @@ async function startPair(t) {
     };
     fs.writeFileSync(h.configFile, `${JSON.stringify(raw, null, 2)}\n`);
     const config = normalizeConfig(raw, { env: {}, home: h.home });
-    const cli = createFleetCli({ run: fakeRun(h) });
+    const cli = createOvermindCli({ run: fakeRun(h) });
     const api = createApi({
       config,
       cli,
-      fleet: createFleet({ cli, self: name }),
+      overmind: createOvermind({ cli, self: name }),
       backend: {},
       transcripts: {},
       spawner: {},
       repos: createRepos({ cli, configFile: h.configFile, self: name, home: h.home }),
-      fleetRefreshMs: 60_000,
+      overmindRefreshMs: 60_000,
     });
     t.after(() => api.stop());
     handles[name] = api;

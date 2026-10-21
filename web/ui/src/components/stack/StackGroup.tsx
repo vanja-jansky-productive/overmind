@@ -32,7 +32,7 @@ export function StackGroup({
   const home = stackHome(first)
   const id = first.stack?.id ?? ''
   const { label } = useStackLabel(home, id, first.stack?.label || id)
-  const [expanded, setExpanded] = usePersistentState(`fleet.stackOpen.${stackKey}`, false, (raw) => raw === 'true')
+  const [expanded, setExpanded] = usePersistentState(`overmind.stackOpen.${stackKey}`, false, (raw) => raw === 'true')
   const open = expanded || forceOpen
   const rest = sessions.slice(1)
   return (

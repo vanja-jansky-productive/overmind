@@ -10,7 +10,7 @@ export interface TermViewProps {
   /** null = not loaded yet. */
   text: string | null
   failed: boolean
-  /** px at the default text size (`fleet.termFont`); rendered in rem, so it follows the text size. */
+  /** px at the default text size (`overmind.termFont`); rendered in rem, so it follows the text size. */
   fontSize: number
   jumpSignal: number
 }

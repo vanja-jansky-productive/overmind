@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 
 import { ApiError, api, isAbortError } from '@/api/client'
 import type { Job } from '@/api/types'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePoller } from '@/hooks/usePoller'
 import { flattenJobs, type HostJobs } from '@/lib/jobs'
 
@@ -13,15 +13,15 @@ const SHOW_POLL_MS = 15_000
 let last: HostJobs[] = []
 
 function errorText(err: unknown, what: string): string {
-  // 404: that host's server predates the jobs routes; 501: its CLI predates `fleet jobs`.
-  if (err instanceof ApiError && err.status === 404 && !/no (?:bot|job)/.test(err.message)) return 'runs an older fleet web — update it to see its bots'
+  // 404: that host's server predates the jobs routes; 501: its CLI predates `overmind jobs`.
+  if (err instanceof ApiError && err.status === 404 && !/no (?:bot|job)/.test(err.message)) return 'runs an older overmind web — update it to see its bots'
   return (err as Error)?.message || `could not load ${what}`
 }
 
 /** Every reachable host's jobs (GET …/jobs), polled while shown. `patch` applies a job changed here. */
 export function useJobs() {
-  const { fleet } = useFleet()
-  const hosts = useMemo(() => (fleet?.hosts ?? []).filter((h) => h.ok !== false).map((h) => h.name), [fleet])
+  const { overmind } = useOvermind()
+  const hosts = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok !== false).map((h) => h.name), [overmind])
   const [results, setResults] = useState<HostJobs[]>(last)
   const [loading, setLoading] = useState(last.length === 0)
   const hostsKey = hosts.join('\n')

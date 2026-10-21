@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useDiff } from '@/hooks/useDiff'
 import { useReview } from '@/hooks/useReview'
 import { useNow } from '@/hooks/useNow'
@@ -41,15 +41,15 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
   const loc = parseReviewLocation(location)
   const host = loc?.host ?? ''
   const id = loc?.id ?? ''
-  const { fleet } = useFleet()
-  const session = findSession(fleet, host, id)
+  const { overmind } = useOvermind()
+  const session = findSession(overmind, host, id)
   const { title } = useSessionTitle(session, `${host}/${id}`)
   const now = useNow(5_000)
   const { data, error, changedAt } = useDiff(host, id)
 
-  const [view, setView] = usePersistentState<DiffView>('fleet.diffView', pane ? 'split' : 'unified', parseView)
-  const [showTree, setShowTree] = usePersistentState<boolean>('fleet.reviewTree', true, parseBool)
-  const [showChat, setShowChat] = usePersistentState<boolean>('fleet.reviewChat', true, parseBool)
+  const [view, setView] = usePersistentState<DiffView>('overmind.diffView', pane ? 'split' : 'unified', parseView)
+  const [showTree, setShowTree] = usePersistentState<boolean>('overmind.reviewTree', true, parseBool)
+  const [showChat, setShowChat] = usePersistentState<boolean>('overmind.reviewChat', true, parseBool)
 
   const views = useMemo(() => repoViews(data?.repos ?? []), [data])
   const clean = useMemo(() => (data?.repos ?? []).filter((r) => !r.error && !r.files?.length), [data])
@@ -63,7 +63,7 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
   )
 
   // Viewed: per session, path → the diff's signature when ticked (a new change unticks it).
-  const viewedKey = `fleet.reviewViewed:${host}/${id}`
+  const viewedKey = `overmind.reviewViewed:${host}/${id}`
   const [viewedMap, setViewedMap] = useState<Record<string, string>>(() => storage.getJSON<Record<string, string>>(viewedKey) ?? {})
   const isViewed = useCallback((path: string) => viewedMap[path] != null && viewedMap[path] === signatures.get(path), [viewedMap, signatures])
   const toggleViewed = useCallback(

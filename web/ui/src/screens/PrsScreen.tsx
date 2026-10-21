@@ -30,7 +30,7 @@ import { groupPrs, isOthersDraft, parsePrLocation, prHref, prRef, reviewLabel, R
 import { cn } from '@/lib/utils'
 
 /**
- * `#/prs`: the GitHub pull requests that need you (`fleet prs` on one host), by column —
+ * `#/prs`: the GitHub pull requests that need you (`overmind prs` on one host), by column —
  * unseen @mentions of you, waiting on you, yours in review / ready / drafts, waiting on their author. `pane` = the
  * desktop layout (a board over the whole window, like the notes explorer); `screen` = mobile
  * (the columns stacked, swipe back).
@@ -45,7 +45,7 @@ export function PrsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' })
   const [q, setQ] = useState('')
   const now = useNow(30_000)
   // Other people's drafts are rarely yours to review: hidden unless asked for (remembered).
-  const [showDrafts, setShowDrafts] = usePersistentState<boolean>('fleet.prsShowDrafts', false, (r) => r === 'true')
+  const [showDrafts, setShowDrafts] = usePersistentState<boolean>('overmind.prsShowDrafts', false, (r) => r === 'true')
   const groups = groupPrs(data, q, { hideOthersDrafts: !showDrafts })
   const othersDrafts = data ? data.prs.filter((p) => isOthersDraft(p, data.user)).length : 0
 

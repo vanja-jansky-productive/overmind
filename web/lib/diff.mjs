@@ -151,7 +151,7 @@ export function createDiffer({ run, tmpDir = os.tmpdir(), home = os.homedir() })
   /** The working tree as a tree object: copy the index, `add -A` into the copy, write it. */
   async function worktreeTree(root) {
     const indexPath = path.resolve(root, (await revParse(root, ['--git-path', 'index'])) ?? '.git/index');
-    const tmp = path.join(tmpDir, `fleet-diff-${process.pid}-${Math.random().toString(16).slice(2)}.index`);
+    const tmp = path.join(tmpDir, `overmind-diff-${process.pid}-${Math.random().toString(16).slice(2)}.index`);
     try {
       await fsp.copyFile(indexPath, tmp).catch((err) => {
         if (err?.code !== 'ENOENT') throw err; // a repo without an index yet: start empty

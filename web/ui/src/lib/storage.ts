@@ -1,5 +1,5 @@
 // localStorage that never throws (private mode, blocked storage, quota). Keys are
-// namespaced `fleet.*`.
+// namespaced `overmind.*`.
 
 export const storage = {
   get(key: string): string | null {

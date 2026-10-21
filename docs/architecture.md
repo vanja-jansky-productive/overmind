@@ -1,12 +1,12 @@
 # Architecture
 
-`fleet` has one core and several front-ends. The core knows how to find Claude Code sessions (and
+`overmind` has one core and several front-ends. The core knows how to find Claude Code sessions (and
 Codex and pi ones — [Other harnesses](#other-harnesses)) on a
 machine, drive them, manage tmux sessions and reach other machines. The CLI, the TUI dashboard and
 the web app are views on top of it.
 
 ```
-                ┌────────────────────────── crates/fleet ──────────────────────────┐
+                ┌────────────────────────── crates/overmind ──────────────────────────┐
                 │  core (library)                                                  │
                 │   discovery ── Claude registry + ps + tmux/iTerm → Session[]     │
                 │   backend   ── peek / send / keys / focus / spawn (tmux, iTerm)  │
@@ -17,7 +17,7 @@ the web app are views on top of it.
                 ├──────────────────────────────────────────────────────────────────┤
                 │  cli (clap + text/JSON rendering)      tui (ratatui dashboard)   │
                 └──────────────────────────────────────────────────────────────────┘
-                              ▲ `fleet list --json` etc.
+                              ▲ `overmind list --json` etc.
                 ┌─────────────┴──────────── web/ ──────────────────────────────────┐
                 │  server.mjs (Node ≥ 22, zero deps) — HTTP API + static PWA       │
                 │  peers with the same server on other hosts                       │
@@ -26,7 +26,7 @@ the web app are views on top of it.
 
 ## Components
 
-### Core library (`crates/fleet/src/core`)
+### Core library (`crates/overmind/src/core`)
 
 Pure logic plus thin process wrappers; no printing. Everything a future front-end needs is here:
 
@@ -44,38 +44,38 @@ Pure logic plus thin process wrappers; no printing. Everything a future front-en
 - **tools** — binary lookup (`PATH` plus Homebrew fallbacks), `~` expansion.
 - **brief** / **stack** — the [session brief](#session-briefs) and [session stack](#session-stacks)
   files: format, merge rules, storage.
-- **repos** / **prs** — [`fleet repos`](cli.md#repos) (keep checkouts fresh) and
-  [`fleet prs`](cli.md#pull-requests) (the GitHub PRs that need you, through `gh`, joined with
+- **repos** / **prs** — [`overmind repos`](cli.md#repos) (keep checkouts fresh) and
+  [`overmind prs`](cli.md#pull-requests) (the GitHub PRs that need you, through `gh`, joined with
   those checkouts and their worktrees).
-- **tasks** — [`fleet tasks`](cli.md#productive-tasks): your open Productive tasks over its REST
+- **tasks** — [`overmind tasks`](cli.md#productive-tasks): your open Productive tasks over its REST
   API (`curl`), by column, cached, with each workflow's statuses; moving a task between statuses.
 - **snapshot** — [session recovery](#session-recovery): records what runs, marks it dormant after
   a reboot, restores it.
 
 ### CLI and TUI
 
-`crates/fleet/src/cli` parses arguments and renders text or JSON; `crates/fleet/src/tui` is the
-`watch` dashboard (ratatui). Neither contains discovery or backend logic. `cli/mcp.rs` (`fleet
+`crates/overmind/src/cli` parses arguments and renders text or JSON; `crates/overmind/src/tui` is the
+`watch` dashboard (ratatui). Neither contains discovery or backend logic. `cli/mcp.rs` (`overmind
 mcp`) is another view: an MCP server whose tools are generated from the clap command tree, each call
 re-running the binary with the matching argv — so the CLI stays the one contract.
 
 ### Host dispatch
 
-Every command has a target host: `-H/--host <name>`, else `FLEET_HOST`, else a default
+Every command has a target host: `-H/--host <name>`, else `OVERMIND_HOST`, else a default
 (`defaultHost` for tmux-session commands, this machine for everything else). `--local` forces the
 local machine.
 
 - target == `self` → run locally;
-- otherwise → `ssh <hosts.<name>.ssh> fleet <same args>`.
+- otherwise → `ssh <hosts.<name>.ssh> overmind <same args>`.
 
-The remote runs `fleet --local <args>` (so it never hops again), found as `hosts.<name>.fleetBin`,
-then `~/.local/bin/fleet`, then `PATH` (with `FLEET_CMD`/`FLEET_DEBUG`/`FLEET_DRY_RUN` exported, never
-`FLEET_CONFIG`) — install it with `fleet install --host <name>`. ssh is
-invoked with a connect timeout (`FLEET_CONNECT_TIMEOUT`, default 5 s), keepalives and ControlMaster
-multiplexing (off with `FLEET_MUX=0`); a tty (`-t`) is requested when both stdin and stdout are
+The remote runs `overmind --local <args>` (so it never hops again), found as `hosts.<name>.overmindBin`,
+then `~/.local/bin/overmind`, then `PATH` (with `OVERMIND_CMD`/`OVERMIND_DEBUG`/`OVERMIND_DRY_RUN` exported, never
+`OVERMIND_CONFIG`) — install it with `overmind install --host <name>`. ssh is
+invoked with a connect timeout (`OVERMIND_CONNECT_TIMEOUT`, default 5 s), keepalives and ControlMaster
+multiplexing (off with `OVERMIND_MUX=0`); a tty (`-t`) is requested when both stdin and stdout are
 terminals, otherwise `-T` with `BatchMode`. Directory arguments under `$HOME` are rewritten to `~/…`
 so they resolve on the remote. An ssh failure (exit 255) becomes a friendly message and exit code 4.
-`FLEET_DRY_RUN=1` prints what would run.
+`OVERMIND_DRY_RUN=1` prints what would run.
 
 There is no chained hopping: a host dispatches only to hosts in its own config.
 
@@ -84,11 +84,11 @@ There is no chained hopping: a host dispatches only to hosts in its own config.
 Every machine runs the same `server.mjs`. It:
 
 - serves the static UI, installable as a PWA: the React app built to `web/ui/dist/`
-  (`fleet web build`; until then `/` is a "not built" placeholder);
-- exposes **its own** sessions, discovered with `fleet list --json` (cached ~2 s);
+  (`overmind web build`; until then `/` is a "not built" placeholder);
+- exposes **its own** sessions, discovered with `overmind list --json` (cached ~2 s);
 - drives its own backends directly for peek/send/keys (it needs untruncated, header-free output);
 - reads chat transcripts from `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`;
-- for the whole-fleet view, fetches each peer's local list over HTTP and merges.
+- for the whole-overmind view, fetches each peer's local list over HTTP and merges.
 
 Requests for another host are proxied once to that peer with `?local=1`, and requests carrying
 `?local=1` are never proxied again, so there are no loops. Either machine's URL shows everything.
@@ -99,8 +99,8 @@ inside that host's `$HOME` or the session's cwd, and never secret stores like `~
 
 ## Config
 
-One JSON file per machine, owned by the CLI (`fleet init`, `fleet config set`) and read by the web
-server. Path: `$FLEET_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/fleet/config.json`.
+One JSON file per machine, owned by the CLI (`overmind init`, `overmind config set`) and read by the web
+server. Path: `$OVERMIND_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/overmind/config.json`.
 
 ```json
 {
@@ -108,10 +108,10 @@ server. Path: `$FLEET_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/fleet/config.
   "self": "laptop",
   "defaultHost": "workstation",
   "hosts": {
-    "laptop":      { "ssh": null,          "web": "http://100.x.y.z:7777" },
-    "workstation": { "ssh": "workstation", "web": "http://100.x.y.z:7777" }
+    "laptop":      { "ssh": null,          "web": "http://100.x.y.z:7878" },
+    "workstation": { "ssh": "workstation", "web": "http://100.x.y.z:7878" }
   },
-  "web":  { "port": 7777, "bind": "0.0.0.0", "dir": null },
+  "web":  { "port": 7878, "bind": "0.0.0.0", "dir": null },
   "tmux": null,
   "spawnDirs": [
     { "label": "Project", "paths": { "laptop": "~/Code/project", "workstation": "~/Code/project" } }
@@ -133,49 +133,49 @@ server. Path: `$FLEET_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/fleet/config.
 | `web.ui` | static UI directory to serve instead of the bundled one; unset → `web/ui/dist`. The old `"classic"` value (the removed vanilla UI) is ignored |
 | `web.quickReplies` | composer chips: strings or `{ label, text }` |
 | `web.models` | New session model picker: `[{ id, label }]` or bare ids (`""` = Claude's default, no `--model`); default Default, Fable 5.1, Opus 5.5, Sonnet 5, Haiku 4.5 |
-| `web.autoName` | `{ enabled, intervalMinutes }` (default off, 5 — opt in with `enabled: true`): the web server runs `fleet name --all --settled --apply` on its host on that schedule (a session is named once it has a second prompt or a brief) (tmux names follow the titles, see [Session titles](#session-titles)); a web spawn with a first prompt also gets a targeted `fleet name <id> --apply` once it has replied |
-| `web.grouping` | `{ enabled, intervalMinutes }` (default off, 10): this host's web server runs `fleet group` over the whole fleet on that schedule and serves `/api/groups` (see [Smart grouping](#smart-grouping)) |
-| `web.uploads` | `{ dir, maxMB, retentionDays }` (default `~/.local/share/fleet/uploads`, 100, 14): files dropped / pasted / picked in the web UI are stored there on the session's host as `YYYY-MM-DD/<rand>-<name>`, and their absolute path goes into the prompt; day dirs older than `retentionDays` are removed (`0` keeps them) |
+| `web.autoName` | `{ enabled, intervalMinutes }` (default off, 5 — opt in with `enabled: true`): the web server runs `overmind name --all --settled --apply` on its host on that schedule (a session is named once it has a second prompt or a brief) (tmux names follow the titles, see [Session titles](#session-titles)); a web spawn with a first prompt also gets a targeted `overmind name <id> --apply` once it has replied |
+| `web.grouping` | `{ enabled, intervalMinutes }` (default off, 10): this host's web server runs `overmind group` over the whole overmind on that schedule and serves `/api/groups` (see [Smart grouping](#smart-grouping)) |
+| `web.uploads` | `{ dir, maxMB, retentionDays }` (default `~/.local/share/overmind/uploads`, 100, 14): files dropped / pasted / picked in the web UI are stored there on the session's host as `YYYY-MM-DD/<rand>-<name>`, and their absolute path goes into the prompt; day dirs older than `retentionDays` are removed (`0` keeps them) |
 | `web.briefs` | `{ enabled, model, idleMs, minIntervalMs, maxDeltaChars, maxCallsPerHour, minNewTurns, minNewChars, maxBriefChars }` (default off, `haiku`, 60 s, 15 min, 12000, 12, 2, 2000, 3000): background generation of [session briefs](#session-briefs) on this host; reading and editing briefs (and a manual regenerate) work either way |
-| `web.stacks` | `{ syncMinutes }` (default 2): how often this host's web server runs `fleet stack sync` while any of its sessions is in a [stack](#session-stacks) |
-| `web.memos` | `{ dir, audioDir, model, vocabulary }` (default `~/.local/share/fleet/memos`, `~/.local/share/fleet/memo-audio`, `haiku`, `[]`): voice memos (`#/memos`). Each memo is `dir/<date>-<slug>.md` (frontmatter `title`, `created`, `duration`, `recording`, `status`; the transcript as the body), so `dir` can be a folder in a notes repo; segment audio stays in `audioDir`. `model` titles them via `claude -p`; `vocabulary` (names, projects, tools — up to ~1500 chars) steers the spelling of every segment's transcription. Needs the transcription key |
+| `web.stacks` | `{ syncMinutes }` (default 2): how often this host's web server runs `overmind stack sync` while any of its sessions is in a [stack](#session-stacks) |
+| `web.memos` | `{ dir, audioDir, model, vocabulary }` (default `~/.local/share/overmind/memos`, `~/.local/share/overmind/memo-audio`, `haiku`, `[]`): voice memos (`#/memos`). Each memo is `dir/<date>-<slug>.md` (frontmatter `title`, `created`, `duration`, `recording`, `status`; the transcript as the body), so `dir` can be a folder in a notes repo; segment audio stays in `audioDir`. `model` titles them via `claude -p`; `vocabulary` (names, projects, tools — up to ~1500 chars) steers the spelling of every segment's transcription. Needs the transcription key |
 | `web.notes` | `{ root, name?, searchCmd?, exclude? }` (default off): the web UI's notes explorer (`#/notes`) over the markdown notes under `root` on this host — browse, full-text search (built in, or an external `searchCmd` such as `rg -n -i -F {query}`), preview with `[[wiki]]` / relative links between notes; hidden entries, `node_modules`, `.gitignore`d paths and age-encrypted blocks are never served (web/ARCHITECTURE.md → notes). Peers browse each other's notes through the usual proxy |
 | `web.operator` | `{ hosts?, model?, voice?, clearIdleMinutes? }` (default `[self]`, Claude's default model, `alloy`, 60): the [voice operator](#voice-operator) — `hosts`: where it runs, the first that answers (set the same list on every machine so all talk to one operator); the model its Claude session runs; the OpenAI voice that reads its replies; `/clear` after that many idle minutes (0 = never) |
 | `web.focus` | `{ host? }` (default: none): Focus mode — the sidebar toggle runs the `focus` CLI (Do Not Disturb + quitting distracting apps) on `host`, the machine you sit at; set the same on every machine. Unset, or a host without `focus` (501): no toggle |
 | `web.files.roots` | array of dirs (`~` expanded, default `[]`): extra roots a relative file path in chat may be under. A relative path missing under the session cwd first matches files the session touched (from its transcript), then ancestors of those, then these roots; the sandbox stays `$HOME` + cwd |
-| `desktop.url` | the server [Fleet.app](desktop.md) opens instead of `hosts.<self>.web`; unset → this machine's server |
+| `desktop.url` | the server [Overmind.app](desktop.md) opens instead of `hosts.<self>.web`; unset → this machine's server |
 | `tmux` | tmux binary; `null` → `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin` |
-| `hosts.<name>.fleetBin` | path to `fleet` on that host; `null` → `~/.local/bin/fleet`, then `PATH` |
-| `fleetBin` | this machine's `fleet` binary (used by the web server) |
+| `hosts.<name>.overmindBin` | path to `overmind` on that host; `null` → `~/.local/bin/overmind`, then `PATH` |
+| `overmindBin` | this machine's `overmind` binary (used by the web server) |
 | `claude` | command that launches Claude Code in spawned sessions (default `claude`) |
 | `harnesses` | `{ codex: { command }, pi: { command } }`: how the [other harnesses](#other-harnesses) launch (default the bare name); read leniently |
-| `spawnDirs` | directories offered for new sessions, per host (`paths.<host>`); also edited from the web UI (Settings → Start directories, which writes it through `fleet config set`) |
+| `spawnDirs` | directories offered for new sessions, per host (`paths.<host>`); also edited from the web UI (Settings → Start directories, which writes it through `overmind config set`) |
 | `tui` | dashboard preferences: `rows` (`"1"`, `"2"`, `"auto"`), `mouse` |
 | `naming` | generated names: `enabled`, `model` (default `haiku`), `syncTmux` (tmux name follows the title, default on), `autoTitle` |
 | `stacks` | [session stacks](#session-stacks): `enabled` (default `true` — `false` = never call the model; a new stack gets the skeleton StackBrief), `model` (default `sonnet`) |
-| `restore` | [session recovery](#session-recovery): `onBoot` (default `false`) — when `true`, this host's web server runs `fleet --local restore --all` once at start if there are dormant sessions, at most once per boot (it remembers the boot id in `${XDG_STATE_HOME:-~/.local/state}/fleet/web-restored-boot`); the result is logged. For an always-on machine. Recently closed sessions are never part of it. `keepClosedDays` (default `7`, a number ≥ 0; `0` turns the [recently closed](#recently-closed) list off) — how long a session closed within a boot stays restorable; at most the newest 50 are kept |
-| `bots` | [`fleet bots`](cli.md#bots), per machine: `{ "<name>": { schedule, dir, prompt \| promptFile, command, harness, model, enabled, keep } }` — agent sessions this host starts from a recipe. Read leniently: a bad bot is a warning and is skipped |
+| `restore` | [session recovery](#session-recovery): `onBoot` (default `false`) — when `true`, this host's web server runs `overmind --local restore --all` once at start if there are dormant sessions, at most once per boot (it remembers the boot id in `${XDG_STATE_HOME:-~/.local/state}/overmind/web-restored-boot`); the result is logged. For an always-on machine. Recently closed sessions are never part of it. `keepClosedDays` (default `7`, a number ≥ 0; `0` turns the [recently closed](#recently-closed) list off) — how long a session closed within a boot stays restorable; at most the newest 50 are kept |
+| `bots` | [`overmind bots`](cli.md#bots), per machine: `{ "<name>": { schedule, dir, prompt \| promptFile, command, harness, model, enabled, keep } }` — agent sessions this host starts from a recipe. Read leniently: a bad bot is a warning and is skipped |
 | `jobs` | the old name of `bots`, still read; a name in both is the `bots` one |
-| `repos` | [`fleet repos`](cli.md#repos), per machine: `roots` (default `["~/Code"]`; every directory directly under a root with a `.git` is a repo), `every` (default `"24h"`; `30m` / `12h` / `7d`), `overrides` (`{ "<dir name or ~/path>": "30m" }`), `exclude` (dir names or `~/` paths). Read leniently: a bad value is a warning and falls back to its default |
-| `prs` | [`fleet prs`](cli.md#pull-requests), per machine: `orgs` (search only these orgs), `repos` (`owner/name`s; with `orgs`, any of them), `refresh` (default `"5m"`, at least `1m`: how old the cache may get), `worktrees` (default `"~/Code/worktrees"`: where `fleet pr checkout` puts new worktrees). None of `orgs`/`repos` = all of GitHub. Read leniently |
-| `tasks` | [`fleet tasks`](cli.md#productive-tasks), per machine: `organization` (an id; may be left out when the token belongs to one organization), `projects` (ids: only tasks in these), `refresh` (default `"5m"`, at least `1m`), `token` (the Productive API token; `$FLEET_PRODUCTIVE_TOKEN` wins over it), `keychain` (else: the service name of a macOS keychain item holding it, read with `security find-generic-password -s <service> -w` — keeps the token out of the file; `$PRODUCTIVE_API_TOKEN` is the last fallback). Read leniently |
-| `gh` | `gh` binary for `fleet prs`; `null` → `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin` |
+| `repos` | [`overmind repos`](cli.md#repos), per machine: `roots` (default `["~/Code"]`; every directory directly under a root with a `.git` is a repo), `every` (default `"24h"`; `30m` / `12h` / `7d`), `overrides` (`{ "<dir name or ~/path>": "30m" }`), `exclude` (dir names or `~/` paths). Read leniently: a bad value is a warning and falls back to its default |
+| `prs` | [`overmind prs`](cli.md#pull-requests), per machine: `orgs` (search only these orgs), `repos` (`owner/name`s; with `orgs`, any of them), `refresh` (default `"5m"`, at least `1m`: how old the cache may get), `worktrees` (default `"~/Code/worktrees"`: where `overmind pr checkout` puts new worktrees). None of `orgs`/`repos` = all of GitHub. Read leniently |
+| `tasks` | [`overmind tasks`](cli.md#productive-tasks), per machine: `organization` (an id; may be left out when the token belongs to one organization), `projects` (ids: only tasks in these), `refresh` (default `"5m"`, at least `1m`), `token` (the Productive API token; `$OVERMIND_PRODUCTIVE_TOKEN` wins over it), `keychain` (else: the service name of a macOS keychain item holding it, read with `security find-generic-password -s <service> -w` — keeps the token out of the file; `$PRODUCTIVE_API_TOKEN` is the last fallback). Read leniently |
+| `gh` | `gh` binary for `overmind prs`; `null` → `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin` |
 | `grouping` | smart grouping: `enabled` (default `true` — `false` = repository fallback only), `model` (default `haiku`), `host` (the one host whose web server runs it; peers proxy `/api/groups` there), `consolidateMinutes` (default 60) |
-| `inbox` | the [inbox](#inbox): `host` (the one host whose web server runs it; peers proxy `/api/inbox` there — unset = no inbox), `scanMinutes` (60), `workHours` (`[8, 18]`), `workDays` (`[0,1,2,3,4,5,6]`, 0 = Sunday; the three are also set from Settings → Inbox), `model` (`haiku`, the Slack + mail scan), `briefModel` (`haiku`), `briefMinutes` (45), `language` (`"English"`, the brief's), `comms` (`true`; `false` = no Slack + mail scan). `FLEET_WEB_INBOX=0` turns it off on a server |
+| `inbox` | the [inbox](#inbox): `host` (the one host whose web server runs it; peers proxy `/api/inbox` there — unset = no inbox), `scanMinutes` (60), `workHours` (`[8, 18]`), `workDays` (`[0,1,2,3,4,5,6]`, 0 = Sunday; the three are also set from Settings → Inbox), `model` (`haiku`, the Slack + mail scan), `briefModel` (`haiku`), `briefMinutes` (45), `language` (`"English"`, the brief's), `comms` (`true`; `false` = no Slack + mail scan). `OVERMIND_WEB_INBOX=0` turns it off on a server |
 
 Rules: `~` is expanded at use time; unknown keys are preserved when the CLI rewrites the file
 (writes go through the raw JSON, never the typed view); a missing file is fine — this machine is
-the single host `local`, and remote features say "run `fleet init`"; a present but invalid file is
+the single host `local`, and remote features say "run `overmind init`"; a present but invalid file is
 an error.
 
-Env overrides for the web server: `FLEET_WEB_PORT` (or `PORT`), `FLEET_WEB_BIND`, `FLEET_WEB_UI`,
-`FLEET_WEB_AUTONAME`, `FLEET_WEB_GROUPING`, `FLEET_WEB_BRIEFS`, `FLEET_BRIEFS_DIR`, `FLEET_STACKS_DIR`, `FLEET_BIN`, `FLEET_TMUX` — see [web/README.md](../web/README.md).
+Env overrides for the web server: `OVERMIND_WEB_PORT` (or `PORT`), `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
+`OVERMIND_WEB_AUTONAME`, `OVERMIND_WEB_GROUPING`, `OVERMIND_WEB_BRIEFS`, `OVERMIND_BRIEFS_DIR`, `OVERMIND_STACKS_DIR`, `OVERMIND_BIN`, `OVERMIND_TMUX` — see [web/README.md](../web/README.md).
 
 ## Session discovery
 
 Claude Code keeps a live registry: one `~/.claude/sessions/<pid>.json` per running interactive
 session with its session id, cwd, name, status (`busy` / `idle` / `waiting`) and what it waits for.
-That is the source of truth; `fleet` enriches each entry:
+That is the source of truth; `overmind` enriches each entry:
 
 1. **pid → tty** via `ps`.
 2. **tty → terminal**: match against `tmux list-panes -a` (pane id, window name, tmux session) and,
@@ -229,15 +229,15 @@ One title per session, one source of truth (`core::title`):
   TUI's terminal column).
 - **The tmux session name is derived**: a slug of the title (lowercase kebab, common Latin
   accents folded, ≤ 48 chars), `-2`, `-3`… on a collision; a name already derived from the title
-  (with or without its suffix) is left as is. It is synced on **every** rename — `fleet rename`,
-  `fleet name --apply` (auto-naming), the TUI rename buffer, the web UI — but only when the tmux
-  session is that Claude session's own: one window, one pane. Shared sessions, `fleet` and the
+  (with or without its suffix) is left as is. It is synced on **every** rename — `overmind rename`,
+  `overmind name --apply` (auto-naming), the TUI rename buffer, the web UI — but only when the tmux
+  session is that Claude session's own: one window, one pane. Shared sessions, `overmind` and the
   dashboard's own session are left alone, with a note saying so. `naming.syncTmux = false` or
   `--no-tmux-sync` opts out.
-- **Reverse edge**: `fleet tmux rename` of a single-Claude tmux session renames the Claude session
+- **Reverse edge**: `overmind tmux rename` of a single-Claude tmux session renames the Claude session
   (and so the title); raw `tmux rename-session` is not watched and is overwritten the next time the
   title changes. Auto-naming never clobbers a hand-picked tmux name: a derived-name session alone in
-  a non-generic tmux session (not `fw-hhmmss`, digits or `<cwd>-xx`) adopts that name as its title.
+  a non-generic tmux session (not `om-hhmmss`, digits or `<cwd>-xx`) adopts that name as its title.
 - **iTerm** tab titles are not touched: Claude already puts its session name in the terminal title,
   and a tab title set by hand is the user's.
 - **When `/rename` may be typed**: `/rename <title>` + Enter goes into the live Claude TUI. A
@@ -246,7 +246,7 @@ One title per session, one source of truth (`core::title`):
   it is submitted, mid-turn, and the turn carries on untouched (verified live; an older Claude that
   queues input would run it after the turn). Codex and pi get their own command (`/rename`,
   `/name`), and a **busy** one is held (`held: "busy"`): they would queue the text as a message.
-  Nothing is queued by fleet — a held rename is refused
+  Nothing is queued by overmind — a held rename is refused
   with a message and retried by the caller. Known gap: text half-typed into the session's prompt
   box would be prefixed to `/rename`.
 
@@ -255,7 +255,7 @@ One title per session, one source of truth (`core::title`):
 These are stable APIs — the web app, scripts and future UIs depend on them. Add fields freely;
 never rename, remove or change the type of an existing one without a version bump.
 
-### `fleet list --json`
+### `overmind list --json`
 
 An array of sessions; every row carries `host` (the name the *caller's* config knows that machine
 by — with no config, `local`):
@@ -283,7 +283,7 @@ by — with no config, `local`):
 | `harness` | string | `claude` \| `codex` \| `pi` — see [Other harnesses](#other-harnesses) |
 | `model` | string \| null | the model it runs, when known (Claude: the context entry's) |
 | `transcript` | string \| null | absolute transcript path (Codex / pi only) |
-| `origin` | object \| null | `{ job, run }` of the [job](cli.md#bots) run that started the session (its tmux pane option `@fleet_job_run`); `null` when none |
+| `origin` | object \| null | `{ job, run }` of the [job](cli.md#bots) run that started the session (its tmux pane option `@overmind_job_run`); `null` when none |
 | `host` | string | which machine the row came from |
 
 `list --all-hosts --json` is the same array across every configured host.
@@ -311,7 +311,7 @@ back to a scan of the project dirs when the session's cwd changed):
 
 ### Subscription usage
 
-`fleet usage --json` (and the web's `GET /api/hosts/:host/usage`, which adds `host`) reports the
+`overmind usage --json` (and the web's `GET /api/hosts/:host/usage`, which adds `host`) reports the
 Claude subscription limits of the account logged in to Claude Code on that machine, from
 `core::usage`:
 
@@ -342,7 +342,7 @@ Claude subscription limits of the account logged in to Claude Code on that machi
   subscription share one card.
 - **`limits[].active`**: the limit currently binding. `severity` is the endpoint's (open set:
   `normal`, `warning`, …); `percent` may exceed 100.
-- **Caching**: `~/.claude/fleet-usage.json` holds the last good read and the last failure. A read
+- **Caching**: `~/.claude/overmind-usage.json` holds the last good read and the last failure. A read
   younger than 60s is served from it; after a failure the last good read comes back with
   `stale: true` and `error`, and the endpoint isn't asked again for 2 minutes. With no good read
   at all, the command fails (exit 1) with the reason.
@@ -352,30 +352,30 @@ result is cached in-process per `(path, size, mtime)`, so the `watch` dashboard 
 transcript only after it has grown. Views colour `pct` in the same bands: under 60 dim, 60–85
 amber, over 85 red.
 
-### `fleet group --json`
+### `overmind group --json`
 
 See [cli.md](cli.md#grouping) for the shape. State file: `groups.json` (below).
 
-### `fleet tmux list --json` / `fleet tmux stale --json`
+### `overmind tmux list --json` / `overmind tmux stale --json`
 
 See [cli.md](cli.md#tmux-sessions) for the shapes. `tmux list --json` lists live sessions only;
-dormant ones are in `fleet restore --json`.
+dormant ones are in `overmind restore --json`.
 
-### `fleet prs --json`
+### `overmind prs --json`
 
 See [cli.md](cli.md#pull-requests) for the shape. Column ids and `Pr` fields follow the add-only
 rule; `local` and `rotting` are worked out on every call and never cached, and so is the **unseenMentions** column:
 the cache keeps each PR's own column and its `mention`, and every read moves the PRs whose mention
 is neither answered nor marked seen (`prs-seen.json`) there.
 
-### `fleet tasks --json`
+### `overmind tasks --json`
 
 See [cli.md](cli.md#productive-tasks) for the shape. Column ids, `Task` and `Status` fields follow
 the add-only rule; `column` is worked out on every call (the due-soon window moves with the date),
-never cached. Each PR's `tasks` (in `fleet prs --json`) holds the task ids its title or description
+never cached. Each PR's `tasks` (in `overmind prs --json`) holds the task ids its title or description
 links to — the join between the two lists.
 
-### `fleet restore --json`
+### `overmind restore --json`
 
 `{ host, bootId, dormant: [DormantView…] }`, and the restore / forget results — see
 [cli.md](cli.md#session-recovery) for the shapes and [Session recovery](#session-recovery) for the
@@ -389,7 +389,7 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | --- | --- | --- |
 | GET | `/api/health` | name, version, apiVersion, self, uptime, autoName (`lastRun`) |
 | GET | `/api/settings` | apiVersion, self, host names, quick replies, `transcribe: { enabled }` (this server has a transcription key), `speak: { enabled, voice }` (it can read replies aloud), `operator: { enabled, hosts }` (the [voice operator](#voice-operator) and where it runs), `focus: { host }` (`web.focus.host`, null when unset) |
-| GET | `/api/fleet[?local=1]` | `{ self, hosts: [{ name, ok, error?, sessions, spawnDirs, notes?, stacks? }], snapshotAt }` — `stacks`: that host's [session stacks](#session-stacks), compact (`{ id, label, host, members: [{ session, host, live }] }`), from which the merged view stamps `stack: { id, label, host }` on the rows of members running on *other* hosts; sessions are `list --json` objects + `host` (a Codex session with no transcript yet gets `session_id: "pid-<pid>"` until it has one) (`title` capped at 300 chars) + `editorUrl` (the "Open in editor" link for its cwd, built by the server that answered — see [Session briefs](#session-briefs)); the merged view is a warm background-refreshed snapshot |
+| GET | `/api/overmind[?local=1]` | `{ self, hosts: [{ name, ok, error?, sessions, spawnDirs, notes?, stacks? }], snapshotAt }` — `stacks`: that host's [session stacks](#session-stacks), compact (`{ id, label, host, members: [{ session, host, live }] }`), from which the merged view stamps `stack: { id, label, host }` on the rows of members running on *other* hosts; sessions are `list --json` objects + `host` (a Codex session with no transcript yet gets `session_id: "pid-<pid>"` until it has one) (`title` capped at 300 chars) + `editorUrl` (the "Open in editor" link for its cwd, built by the server that answered — see [Session briefs](#session-briefs)); the merged view is a warm background-refreshed snapshot |
 | GET | `/api/hosts/:host/sessions/:id/peek?lines=N` | plain-text screen |
 | GET | `/api/hosts/:host/sessions/:id/screen` | the live terminal: the pane's visible rows with colours + size, cursor and input modes (tmux only, 409 otherwise) — see web/ARCHITECTURE.md |
 | POST | `/api/hosts/:host/sessions/:id/input` | `{ data }` → raw terminal input written to the pane as is (`send-keys -H`): keys, escape sequences, mouse reports. Types into the agent like `send`; one key / mouse event per request (two escape sequences in one write reach Claude Code as Esc, which cancels a prompt) |
@@ -398,35 +398,35 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | POST | `/api/hosts/:host/sessions/:id/send` | `{ text }` → typed + Enter |
 | POST | `/api/hosts/:host/sessions/:id/keys` | `{ key }` (Enter, Escape, …) |
 | POST | `/api/hosts/:host/sessions/:id/answer` | `{ toolUseId, answers: [{ options: [index…], text? }] }` (one per question) → types the arrows/Enter/text a human would into the pending AskUserQuestion prompt. 400 bad answer (single-select: one option or text; multi-select: at least one), 404 unknown question, **409** (nothing typed) when it is already answered, the session isn't waiting, or the terminal isn't showing that prompt untouched (first question, cursor on option 1) |
-| POST | `/api/hosts/:host/sessions/:id/rename` | `{ title }` (1–64 chars, one line) → `fleet rename <session_id> <title> --json`; 200 with the report, **409** when held (waiting on a prompt, or a busy Codex / pi session; nothing typed), 400 bad title, 502 CLI failure |
-| POST | `/api/hosts/:host/sessions/:id/autoname` | regenerate one session's name → `fleet name <session_id> --apply --refresh`; 200 `{ ok, host, id, name }` (`name` null: unchanged), **409** when held (waiting on a prompt; nothing typed), 502 CLI failure |
-| POST | `/api/hosts/:host/spawn` | `{ name?, dir?, prompt?, model?, harness? }` → new tmux session running that [harness](#other-harnesses) (`claude` default, `codex`, `pi`; its launcher is config `claude` / `harnesses.<id>.command`; `-n <name>` for Claude and pi only); `dir` must resolve inside one of the host's `spawnDirs` (else 400); a prompt too long to type (the launch line over ~900 bytes) is written to `~/.claude/fleet-prompts/` and passed as `"$(cat <file>)"`; a first-run trust prompt is accepted (Claude: Down + Enter; Codex: Enter on "Trust and continue"); when the agent never starts (the pane is still just a shell after ~10s) the tmux session is killed and the answer is 502 with the pane's last lines |
-| GET | `/api/hosts/:host/harnesses[?refresh=1]` | `{ host, harnesses: [{ id, label, command, installed, models }] }` — `fleet --local harness list --json`, cached 10 min; Claude's `models` are `web.models`. An older CLI answers Claude alone |
-| GET | `/api/hosts/:host/usage[?refresh=1]` | that host's Claude subscription limits: `fleet usage --json` + `host` (see [Subscription usage](#subscription-usage)); 502 with the CLI's reason (no login, endpoint down with nothing cached) |
-| POST | `/api/hosts/:host/prs/checkout` | `{ pr: "owner/repo#123" }` → `{ host, worktree }`: `fleet pr checkout --json` on that host |
-| POST | `/api/hosts/:host/prs/seen` | `{ pr: "owner/repo#123" }` → `{ host, pr, seenAt }`: `fleet pr seen --json` on that host — its @mentions of you so far are seen |
-| POST | `/api/hosts/:host/prs/spawn` | `{ pr, prompt?, name?, model?, harness? }` → `{ host, worktree, spawn }`: the checkout, then a new session in the worktree whose first prompt is `worktree.contextLine` + `prompt` (like a stack sibling: the web spawner, not `fleet pr spawn`). Starts an agent |
-| GET | `/api/hosts/:host/prs[?refresh=1]` | the GitHub PRs that need you, as `gh` on that host sees them: `fleet prs --json` + `host` (see [cli.md](cli.md#pull-requests)), and `local.editorUrl` ("Open in VS Code / Cursor" for the worktree, like a session's `editorUrl`); 502 with the CLI's reason (no `gh`, not logged in, GitHub down with nothing cached), 501 when that host's CLI predates `fleet prs` |
-| GET | `/api/hosts/:host/tasks[?refresh=1]` | your open Productive tasks, as that host's token sees them: `fleet tasks --json` + `host` (see [cli.md](cli.md#productive-tasks)); 502 with the CLI's reason (no token, several organizations and none configured, Productive down with nothing cached), 501 when that host's CLI predates `fleet tasks` |
-| POST | `/api/hosts/:host/tasks/status` | `{ task, status }` → `{ host, task }`: `fleet task status --json` on that host — moves the task (for everyone) |
-| POST | `/api/hosts/:host/tasks/spawn` | `{ task, dir, prompt?, name?, model?, harness? }` → `{ host, task, spawn }`: a new session in `dir` (validated like `/spawn`) whose first prompt is the task's `contextLine` (`fleet task show --json`) + `prompt`. Starts an agent |
+| POST | `/api/hosts/:host/sessions/:id/rename` | `{ title }` (1–64 chars, one line) → `overmind rename <session_id> <title> --json`; 200 with the report, **409** when held (waiting on a prompt, or a busy Codex / pi session; nothing typed), 400 bad title, 502 CLI failure |
+| POST | `/api/hosts/:host/sessions/:id/autoname` | regenerate one session's name → `overmind name <session_id> --apply --refresh`; 200 `{ ok, host, id, name }` (`name` null: unchanged), **409** when held (waiting on a prompt; nothing typed), 502 CLI failure |
+| POST | `/api/hosts/:host/spawn` | `{ name?, dir?, prompt?, model?, harness? }` → new tmux session running that [harness](#other-harnesses) (`claude` default, `codex`, `pi`; its launcher is config `claude` / `harnesses.<id>.command`; `-n <name>` for Claude and pi only); `dir` must resolve inside one of the host's `spawnDirs` (else 400); a prompt too long to type (the launch line over ~900 bytes) is written to `~/.claude/overmind-prompts/` and passed as `"$(cat <file>)"`; a first-run trust prompt is accepted (Claude: Down + Enter; Codex: Enter on "Trust and continue"); when the agent never starts (the pane is still just a shell after ~10s) the tmux session is killed and the answer is 502 with the pane's last lines |
+| GET | `/api/hosts/:host/harnesses[?refresh=1]` | `{ host, harnesses: [{ id, label, command, installed, models }] }` — `overmind --local harness list --json`, cached 10 min; Claude's `models` are `web.models`. An older CLI answers Claude alone |
+| GET | `/api/hosts/:host/usage[?refresh=1]` | that host's Claude subscription limits: `overmind usage --json` + `host` (see [Subscription usage](#subscription-usage)); 502 with the CLI's reason (no login, endpoint down with nothing cached) |
+| POST | `/api/hosts/:host/prs/checkout` | `{ pr: "owner/repo#123" }` → `{ host, worktree }`: `overmind pr checkout --json` on that host |
+| POST | `/api/hosts/:host/prs/seen` | `{ pr: "owner/repo#123" }` → `{ host, pr, seenAt }`: `overmind pr seen --json` on that host — its @mentions of you so far are seen |
+| POST | `/api/hosts/:host/prs/spawn` | `{ pr, prompt?, name?, model?, harness? }` → `{ host, worktree, spawn }`: the checkout, then a new session in the worktree whose first prompt is `worktree.contextLine` + `prompt` (like a stack sibling: the web spawner, not `overmind pr spawn`). Starts an agent |
+| GET | `/api/hosts/:host/prs[?refresh=1]` | the GitHub PRs that need you, as `gh` on that host sees them: `overmind prs --json` + `host` (see [cli.md](cli.md#pull-requests)), and `local.editorUrl` ("Open in VS Code / Cursor" for the worktree, like a session's `editorUrl`); 502 with the CLI's reason (no `gh`, not logged in, GitHub down with nothing cached), 501 when that host's CLI predates `overmind prs` |
+| GET | `/api/hosts/:host/tasks[?refresh=1]` | your open Productive tasks, as that host's token sees them: `overmind tasks --json` + `host` (see [cli.md](cli.md#productive-tasks)); 502 with the CLI's reason (no token, several organizations and none configured, Productive down with nothing cached), 501 when that host's CLI predates `overmind tasks` |
+| POST | `/api/hosts/:host/tasks/status` | `{ task, status }` → `{ host, task }`: `overmind task status --json` on that host — moves the task (for everyone) |
+| POST | `/api/hosts/:host/tasks/spawn` | `{ task, dir, prompt?, name?, model?, harness? }` → `{ host, task, spawn }`: a new session in `dir` (validated like `/spawn`) whose first prompt is the task's `contextLine` (`overmind task show --json`) + `prompt`. Starts an agent |
 | GET/POST | `/api/hosts/:host/focus` | that host's `focus status`: `{ host, active, remainingMs, endsAt, apps, stale }`; POST `{ on, minutes? }` runs `focus start [minutes]` / `focus stop` (a no-op when already so) and answers the new status. 501 when that host has no `focus` CLI, 502 with its message when it fails |
 | GET | `/api/hosts/:host/spawn-dirs` | that host's stored `spawnDirs` (canonical `{ label, paths }`), whether each of its own paths is a directory there, and what it offers now |
-| PUT | `/api/hosts/:host/spawn-dirs` | `{ spawnDirs, dryRun? }` → validated on that host (its own paths must exist), written with `fleet --local config set spawnDirs`, used at once (no restart); 400 with per-entry `errors`. As powerful as spawn (it widens the spawn allow-list); no auth, like spawn |
-| GET/PUT | `/api/hosts/:host/repos` | Settings → Git repos: that host's `repos` settings, every repo (`fleet --local repos --json --all`) and its sync timer; PUT writes `repos` with `fleet --local config set` |
-| GET | `/api/hosts/:host/jobs` | `{ host, jobs }`: that host's [bots](cli.md#bots) (the API keeps their old name, jobs), `fleet --local jobs --json` (each with its latest run and live sessions, see [cli.md](cli.md#bots)); a prompt file also gets `prompt.abs` — `~` expanded on that host — `prompt.root` — its git checkout, else its directory — and editor links built like the notes': `prompt.editorUrl` opens the file (at line 1, so a remote path opens as a file), `prompt.rootEditorUrl` its root; null without an editor or ssh alias); 501 when that host's CLI predates `fleet jobs` |
-| GET | `/api/hosts/:host/jobs/:name` | one job with every kept run, newest first, each run's sessions with `parent`: `fleet --local jobs show <name> --json` + `host`; 404 no such job. Names: `[A-Za-z0-9_-]{1,40}` (else 400) |
-| POST | `/api/hosts/:host/jobs/:name/run` | `{ force? }` → `{ host, name, output }`: `fleet --local jobs run [--force] <name>`. Starts an agent (spawn's trust level); 409 `{ error, busy: true }` while a session of the job is working, unless `force` |
-| POST | `/api/hosts/:host/jobs/:name/enabled` | `{ enabled: boolean }` → `{ host, name, enabled, output, job }`: `fleet --local jobs enable\|disable <name>`, then the job as `show` reports it |
-| POST | `/api/hosts/:host/repos/sync` · `/repos/service` | `{ names? }` → `fleet --local repos sync --json` (409 while one runs); `{ install }` → `fleet --local repos install-service [--uninstall]` |
+| PUT | `/api/hosts/:host/spawn-dirs` | `{ spawnDirs, dryRun? }` → validated on that host (its own paths must exist), written with `overmind --local config set spawnDirs`, used at once (no restart); 400 with per-entry `errors`. As powerful as spawn (it widens the spawn allow-list); no auth, like spawn |
+| GET/PUT | `/api/hosts/:host/repos` | Settings → Git repos: that host's `repos` settings, every repo (`overmind --local repos --json --all`) and its sync timer; PUT writes `repos` with `overmind --local config set` |
+| GET | `/api/hosts/:host/jobs` | `{ host, jobs }`: that host's [bots](cli.md#bots) (the API keeps their old name, jobs), `overmind --local jobs --json` (each with its latest run and live sessions, see [cli.md](cli.md#bots)); a prompt file also gets `prompt.abs` — `~` expanded on that host — `prompt.root` — its git checkout, else its directory — and editor links built like the notes': `prompt.editorUrl` opens the file (at line 1, so a remote path opens as a file), `prompt.rootEditorUrl` its root; null without an editor or ssh alias); 501 when that host's CLI predates `overmind jobs` |
+| GET | `/api/hosts/:host/jobs/:name` | one job with every kept run, newest first, each run's sessions with `parent`: `overmind --local jobs show <name> --json` + `host`; 404 no such job. Names: `[A-Za-z0-9_-]{1,40}` (else 400) |
+| POST | `/api/hosts/:host/jobs/:name/run` | `{ force? }` → `{ host, name, output }`: `overmind --local jobs run [--force] <name>`. Starts an agent (spawn's trust level); 409 `{ error, busy: true }` while a session of the job is working, unless `force` |
+| POST | `/api/hosts/:host/jobs/:name/enabled` | `{ enabled: boolean }` → `{ host, name, enabled, output, job }`: `overmind --local jobs enable\|disable <name>`, then the job as `show` reports it |
+| POST | `/api/hosts/:host/repos/sync` · `/repos/service` | `{ names? }` → `overmind --local repos sync --json` (409 while one runs); `{ install }` → `overmind --local repos install-service [--uninstall]` |
 | POST | `/api/hosts/:host/sessions/:id/kill` | `{}` → SIGTERM (then SIGKILL) Claude, then kill its tmux session (or just its window when the session has others) / close its iTerm tab |
 | GET | `/api/groups` | the Board view's groups: `{ enabled, host, intervalMinutes, running, updatedAt, lastRun, groups: [{ id, label, description, source, members: [{ host, id, dormant? }] }] }` (`dormant: true` only on a member that is dormant on its host; never set from stored groups, so the UI also cross-references `GET …/dormant`); served by the grouping host, proxied by every other server (`enabled: false` when nobody runs it) |
 | GET | `/api/inbox` | the [inbox](#inbox): `{ enabled, host, error?, updatedAt, brief: { text, at, model } \| null, sources: { github?, productive?, sessions?, comms? : { at, ok, error, count, nextAt?, running? } }, items: [{ id, source, kind, section, title, ask, url, href, from, at, firstSeen, effort, meta }] }` — served by `inbox.host`, proxied by every other server (`enabled: false` when none is set) |
 | POST | `/api/inbox/refresh` | Scan now: start a Slack + mail scan (also outside work hours; its brief skips the `briefMinutes` wait) and re-read every other source; answers the GET shape |
 | POST | `/api/inbox/dismiss` | `{ id }` → the item is done: off the list until its source drops it — a Slack / mail item, a session or a PR mention comes back on newer activity; answers the GET shape (404: no such item) |
-| PUT | `/api/inbox/settings` | `{ scanMinutes?, workHours?, workDays? }` (15–1440 min; `[from, to)` hours; weekdays 0–6) → `fleet config set inbox.<key>` on the inbox host, live at once; answers the GET shape, whose `settings` carries the three |
+| PUT | `/api/inbox/settings` | `{ scanMinutes?, workHours?, workDays? }` (15–1440 min; `[from, to)` hours; weekdays 0–6) → `overmind config set inbox.<key>` on the inbox host, live at once; answers the GET shape, whose `settings` carries the three |
 | POST | `/api/groups/run` | `{}` → run the grouping pass now (on the grouping host) → the same shape; 501 when grouping is off |
-| POST | `/api/groups/edit` | `{ op: "rename", id, label }` or `{ op: "move", host, session, to }` / `{ op: "move", host, session, label }` (a new group) / `{ op: "create", label }` / `{ op: "delete", id }` (empty groups) → `fleet group --rename/--move/--create/--delete` on the grouping host (proxied there) → the same shape; 400 bad body, 409 refused (unknown id, taken label), 501 when grouping is off |
+| POST | `/api/groups/edit` | `{ op: "rename", id, label }` or `{ op: "move", host, session, to }` / `{ op: "move", host, session, label }` (a new group) / `{ op: "create", label }` / `{ op: "delete", id }` (empty groups) → `overmind group --rename/--move/--create/--delete` on the grouping host (proxied there) → the same shape; 400 bad body, 409 refused (unknown id, taken label), 501 when grouping is off |
 | POST | `/api/hosts/:host/uploads?name=<file>` | raw file body → stored under that host's `web.uploads.dir` → `{ host, path, name, size }` (absolute `path`; 413 over `web.uploads.maxMB`); streamed through to a peer |
 | POST | `/api/transcribe?hint=<words>` | raw audio body (webm / ogg / mp4 / mp3 / wav, ≤ 25 MB) → `{ text, model }` via OpenAI `gpt-4o-transcribe`; always this server, never proxied. `hint` (≤ 400 chars: session name, repo) steers spelling. Key: `$OPENAI_SPEECH_TO_TEXT_API_KEY`, else the macOS Keychain item of that name (never the config file). 501 without a key, 415 non-audio, 413 too large, 502 upstream errors (including a bad key), 429 rate limit |
 | PUT | `/api/memos/recordings/:rec/segments/:n` | voice memos, always this server: one segment's raw audio (≤ 25 MB) is stored under `web.memos.audioDir`, then transcribed → `{ stored: true, transcribed, error? }` (a failed transcription keeps the audio; `finish` retries it). `:rec` is the client's recording id (`[a-z0-9-]`, 8–64), `:n` 0-based. 501 without a transcription key |
@@ -435,7 +435,7 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | GET / PUT / DELETE | `/api/memos/:id` | one memo (`+ transcript, path`); PUT `{ title }` renames (the body is kept); DELETE removes the file and its audio |
 | POST | `/api/memos/:id/retry` | transcribe the segments that failed and rewrite the memo |
 | POST | `/api/speak` | `{ text }` (markdown is fine: code, tables, URLs and ids are dropped, at most ~4000 chars) → `audio/mpeg` via OpenAI `gpt-4o-mini-tts`; always this server. Key: `$OPENAI_TEXT_TO_SPEECH_API_KEY` (env, else Keychain), else the transcription key (which needs the audio scope). 400 nothing to say, 501 without a key, 502 upstream errors, 429 rate limit |
-| GET/POST | `/api/operator` | the [voice operator](#voice-operator): `{ host, dir, session }` (`session`: its `fleet list` row, null when not running); POST finds it or starts it → `+ { started, tmuxSession }` (409 when a tmux session `operator` exists without it). Served by the first host of `web.operator.hosts` that answers (proxied with `?local=1`; an unreachable peer, or one without an operator, passes to the next); 503 when none does |
+| GET/POST | `/api/operator` | the [voice operator](#voice-operator): `{ host, dir, session }` (`session`: its `overmind list` row, null when not running); POST finds it or starts it → `+ { started, tmuxSession }` (409 when a tmux session `operator` exists without it). Served by the first host of `web.operator.hosts` that answers (proxied with `?local=1`; an unreachable peer, or one without an operator, passes to the next); 503 when none does |
 | POST | `/api/hosts/:host/autoname` | `{}` → run the naming pass on that host now → `{ renamed: [{ from, to }], tmux, held, errors }` |
 | POST | `/api/hosts/:host/sessions/:id/files/stat` | `{ paths }` (≤ 200, as written in chat, `:line` allowed) → per path: resolved absolute path, `exists`, `isFile`, size, mtime, `kind` (markdown/text/image/pdf/other); the UI links only existing files |
 | GET | `/api/hosts/:host/sessions/:id/files/raw?path=…[&download=1]` | the file itself, streamed (also through a peer); text/markdown over 5 MB only as a download |
@@ -443,7 +443,7 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | POST | `/api/hosts/:host/sessions/:id/files/open` | `{ path }` → opens it with its default app **on that host** (`open` / `xdg-open`; runnable files are revealed in their folder instead) |
 | GET | `/api/hosts/:host/sessions/:id/diff[?base=<ref>&since=<fingerprint>]` | the diff reviewer: the session's worktree (tracked edits + untracked files) against the merge-base of HEAD with `base` (default branch by default) → `{ host, id, root, branch, base: { ref, sha }, tree, fingerprint, unchanged, files: [{ path, oldPath, status, additions, deletions, hunks: [{ …, lines: [{ t, o, n, text }] }] }], stats, truncated }`; with `since` equal to the current `fingerprint` → `unchanged: true` and no `files` (cheap polling). 409 outside git |
 | GET | `/api/hosts/:host/sessions/:id/diffs[?since=<fingerprint>]` | the diff reviewer over **every checkout the session works in**: its cwd's, then the checkouts holding the files it worked on (tool inputs from its transcript, most recent first, at most 12, never `$HOME`) — a session in a meta repo editing several worktrees sees them all → `{ host, id, cwd, fingerprint, unchanged, repos: [{ root, label (relative to the cwd when inside it, else `~/…`), branch, head, base, tree, fingerprint, files, stats, truncated } \| { root, label, error }] }`; `since` = the combined fingerprint → `unchanged: true` without `repos` |
-| GET | `/api/hosts/:host/sessions/:id/review` | the diff reviewer's comment threads → `{ host, id, threads: [{ id: "c-…", path, side: new\|old, start, end, code, status: draft\|sent, resolved, reviewId, entries: [{ body, sentAt, state: draft\|sent\|queued\|working\|done, replies: [{ text, ts, final }] }] }], reviews, drafts }`; every comment / reply was typed into the session with its marker `[review c-…]`, and the replies are read back from the transcript (the assistant messages after the marked prompt, up to the next prompt) and kept in `<state>/fleet/reviews/<session_id>.json` on the session's host |
+| GET | `/api/hosts/:host/sessions/:id/review` | the diff reviewer's comment threads → `{ host, id, threads: [{ id: "c-…", path, side: new\|old, start, end, code, status: draft\|sent, resolved, reviewId, entries: [{ body, sentAt, state: draft\|sent\|queued\|working\|done, replies: [{ text, ts, final }] }] }], reviews, drafts }`; every comment / reply was typed into the session with its marker `[review c-…]`, and the replies are read back from the transcript (the assistant messages after the marked prompt, up to the next prompt) and kept in `<state>/overmind/reviews/<session_id>.json` on the session's host |
 | POST | `/api/hosts/:host/sessions/:id/review/threads` | `{ path, side, start, end, code: [lines], body, draft }` (+ `root`: the checkout, absolute — the prompt names the file relative to the session cwd, `display`) → a thread; `draft: false` types the comment (the lines quoted, fenced) into the session now, `draft: true` keeps it for submit → `{ …, thread }`. Types into the agent like `send` |
 | POST | `/api/hosts/:host/sessions/:id/review/threads/:thread/reply` | `{ body }` → a follow-up typed into the session with the thread's marker; 409 on a draft |
 | PUT / DELETE | `/api/hosts/:host/sessions/:id/review/threads/:thread` | `{ body?, resolved? }` (body: drafts only, else 409) / remove the thread from the review (what was sent stays in the conversation) |
@@ -451,45 +451,45 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | GET | `/api/hosts/:host/sessions/:id/brief` | the session's [brief](#session-briefs): `{ host, id, exists, markdown, parsed: { summary, resources, todos, plan }, updated, editedAt, generatedAt, generatedThrough, generating, enabled, continuePrompt, absCwd, gitRoot, worktrees, editor, editorUrl }` — an empty skeleton (`exists: false`) before there is one; a gone session's brief is still served by its full id. `parsed.plan` is a **deprecated** alias of `parsed.todos` (the section was called Plan), kept for one release |
 | GET | `/api/hosts/:host/notes/{tree,search,file,raw}` | the notes explorer (`web.notes`): the file list, `?q=` search with snippets + match ranges, `?path=` one note (frontmatter split, encrypted blocks withheld), `?path=` an image; 501 when the host has no `web.notes.root` |
 | PUT | `/api/hosts/:host/sessions/:id/brief` | `{ markdown }` → a human edit (sets `editedAt`) → the same shape |
-| GET | `/api/hosts/:host/stacks` | `fleet --local stack list --json` → `{ host, stacks: [StackView + editorUrl] }` ([session stacks](#session-stacks); `editorUrl` for `absCwd`, built like briefs' via `lib/editor.mjs`) |
-| GET | `/api/hosts/:host/stacks/:id` | `fleet --local stack show <id> --json` → StackView (+ `editorUrl`); 404 when unknown |
-| PUT | `/api/hosts/:host/stacks/:id` | `{ markdown, expectUpdated? }` → `fleet --local stack set <id> [--expect-updated] --json` (markdown on stdin) → StackView; **409** `{ error, updated }` on conflict; 400 bad body (markdown a string ≤ 64 kB) |
-| POST | `/api/hosts/:host/stacks/:id/rename` | `{ label }` (one line, 1–80 chars) → `fleet --local stack rename <id> <label> --json` → StackView; 400 bad label; 404 unknown |
-| DELETE | `/api/hosts/:host/stacks/:id` | `fleet --local stack rm <id> -f --json` → `{ removed }` |
+| GET | `/api/hosts/:host/stacks` | `overmind --local stack list --json` → `{ host, stacks: [StackView + editorUrl] }` ([session stacks](#session-stacks); `editorUrl` for `absCwd`, built like briefs' via `lib/editor.mjs`) |
+| GET | `/api/hosts/:host/stacks/:id` | `overmind --local stack show <id> --json` → StackView (+ `editorUrl`); 404 when unknown |
+| PUT | `/api/hosts/:host/stacks/:id` | `{ markdown, expectUpdated? }` → `overmind --local stack set <id> [--expect-updated] --json` (markdown on stdin) → StackView; **409** `{ error, updated }` on conflict; 400 bad body (markdown a string ≤ 64 kB) |
+| POST | `/api/hosts/:host/stacks/:id/rename` | `{ label }` (one line, 1–80 chars) → `overmind --local stack rename <id> <label> --json` → StackView; 400 bad label; 404 unknown |
+| DELETE | `/api/hosts/:host/stacks/:id` | `overmind --local stack rm <id> -f --json` → `{ removed }` |
 | POST | `/api/hosts/:host/stacks/:id/spawn` | `{ prompt?, name?, model?, harness?, dir?, host? }` → a sibling in that stack: `dir` defaults to the stack's `absCwd`; otherwise as the session route below, without `ensure` |
-| POST | `/api/hosts/:host/sessions/:id/stack/spawn` | `{ prompt?, name?, model?, harness?, dir?, host? }` → (1) `fleet --local stack ensure <session_id> --json` (timeout 150 s: it may call the model); (2) the server's own spawner (tmux, trust prompt handled) in the session's cwd (or `dir`, inside the session's cwd or a spawn dir) with `prompt` = `contextLine + ' ' + prompt`; (3) in the background, find the new session (by tmux session name, ≤ ~75 s) and `fleet --local stack add <stack id> <session_id> --json` → 200 `{ host, stack: StackView, created, generated, spawn: { name, dir, tmuxSession, command, trusted, model } }`. With `host` (a peer of `:host`, the stack's home): `dir` is required (a path there), the peer's `/spawn` starts it with `remoteContextLine + ' ' + prompt`, the join watches the peer's list and runs `stack add … --on <host> --input -` here; `spawn.host` names the peer |
-| POST | `/api/hosts/:host/stacks/:id/add` | `{ session, host? }` (a full session id; `host`: the peer it runs on, default `:host`) → put an existing live session in that stack after the fact: its row from that host's list, then `fleet --local stack add <id> <session> [--on <host> --input -] --json` → `{ host, stack: StackView, created: false, generated: false }`. Already a member → the stack unchanged; 404 not live there; **409** already in another stack; 400 bad body or a host that is not a peer with a web url |
-| POST | `/api/hosts/:host/sessions/:id/stack/link` | `{ session, host?, label? }` → link two existing sessions: `fleet --local stack ensure <session_id>` (the session's stack — created when it has none, timeout 150 s: it may call the model), then adds `session` as `…/stacks/:id/add` does → `{ host, stack, created, generated }`; 400 linking a session to itself |
-| POST | `/api/hosts/:host/stacks/sync` | `fleet --local stack sync --input - --json` with the merged `/api/fleet` body on stdin (plain `sync` when it cannot be built) → `{ host, changed, stacks }` |
-| GET | `/api/hosts/:host/dormant` | [session recovery](#session-recovery): `fleet --local restore --json` → `{ host, bootId, dormant: [DormantView], closed: [ClosedView] }` (`closed`: [recently closed](#recently-closed), from CLIs that know it); 501 when this host's CLI has no `restore` |
-| POST | `/api/hosts/:host/dormant/restore` | `{ target, dryRun? }` (a dormant tmux name or session id, one line ≤ 200 chars) or `{ all: true, dryRun? }` → `fleet --local restore [--dry-run] (-- <target> \| --all) --json` → `{ host, restored, failed }`. Starts agents, like spawn: **409** `{ error, candidates }` when the target is ambiguous (exit 2), 404 no match (exit 3), 502 `{ error, restored: [], failed }` when nothing came back; a partial `--all` is 200 with `failed` filled. The fleet list (and a stack sync) refresh as the sessions register. Proxy timeout 6 min |
-| POST | `/api/hosts/:host/dormant/forget` | `{ target }` or `{ all: true }` → `fleet --local restore (--forget=<target> \| --forget-all) --json` → `{ host, forgotten }`; 409 / 404 as restore |
+| POST | `/api/hosts/:host/sessions/:id/stack/spawn` | `{ prompt?, name?, model?, harness?, dir?, host? }` → (1) `overmind --local stack ensure <session_id> --json` (timeout 150 s: it may call the model); (2) the server's own spawner (tmux, trust prompt handled) in the session's cwd (or `dir`, inside the session's cwd or a spawn dir) with `prompt` = `contextLine + ' ' + prompt`; (3) in the background, find the new session (by tmux session name, ≤ ~75 s) and `overmind --local stack add <stack id> <session_id> --json` → 200 `{ host, stack: StackView, created, generated, spawn: { name, dir, tmuxSession, command, trusted, model } }`. With `host` (a peer of `:host`, the stack's home): `dir` is required (a path there), the peer's `/spawn` starts it with `remoteContextLine + ' ' + prompt`, the join watches the peer's list and runs `stack add … --on <host> --input -` here; `spawn.host` names the peer |
+| POST | `/api/hosts/:host/stacks/:id/add` | `{ session, host? }` (a full session id; `host`: the peer it runs on, default `:host`) → put an existing live session in that stack after the fact: its row from that host's list, then `overmind --local stack add <id> <session> [--on <host> --input -] --json` → `{ host, stack: StackView, created: false, generated: false }`. Already a member → the stack unchanged; 404 not live there; **409** already in another stack; 400 bad body or a host that is not a peer with a web url |
+| POST | `/api/hosts/:host/sessions/:id/stack/link` | `{ session, host?, label? }` → link two existing sessions: `overmind --local stack ensure <session_id>` (the session's stack — created when it has none, timeout 150 s: it may call the model), then adds `session` as `…/stacks/:id/add` does → `{ host, stack, created, generated }`; 400 linking a session to itself |
+| POST | `/api/hosts/:host/stacks/sync` | `overmind --local stack sync --input - --json` with the merged `/api/overmind` body on stdin (plain `sync` when it cannot be built) → `{ host, changed, stacks }` |
+| GET | `/api/hosts/:host/dormant` | [session recovery](#session-recovery): `overmind --local restore --json` → `{ host, bootId, dormant: [DormantView], closed: [ClosedView] }` (`closed`: [recently closed](#recently-closed), from CLIs that know it); 501 when this host's CLI has no `restore` |
+| POST | `/api/hosts/:host/dormant/restore` | `{ target, dryRun? }` (a dormant tmux name or session id, one line ≤ 200 chars) or `{ all: true, dryRun? }` → `overmind --local restore [--dry-run] (-- <target> \| --all) --json` → `{ host, restored, failed }`. Starts agents, like spawn: **409** `{ error, candidates }` when the target is ambiguous (exit 2), 404 no match (exit 3), 502 `{ error, restored: [], failed }` when nothing came back; a partial `--all` is 200 with `failed` filled. The overmind list (and a stack sync) refresh as the sessions register. Proxy timeout 6 min |
+| POST | `/api/hosts/:host/dormant/forget` | `{ target }` or `{ all: true }` → `overmind --local restore (--forget=<target> \| --forget-all) --json` → `{ host, forgotten }`; 409 / 404 as restore |
 | | | Both POSTs take `closed: true` for a [recently closed](#recently-closed) entry (→ `--closed`); `{ all: true, closed: true }` is a 400 on restore (closed ones are resumed one at a time), allowed on forget. A CLI without `--closed` → 501 |
 | POST | `/api/hosts/:host/sessions/:id/brief/regenerate` | `{}` → **202** `{ host, id, started, queued, generating: true }`, the model call runs in the background (poll GET); **429** `{ error, retryAfterMs }` at the hourly cap |
 
 `:host` is `self` or a configured peer; `:id` is a session id or a unique prefix (≥ 8 chars) — on
-the `/stacks/:id` routes a stack id (or anything `fleet stack` resolves). The
+the `/stacks/:id` routes a stack id (or anything `overmind stack` resolves). The
 full contract (status codes, limits, timeouts) lives with the server: [web/README.md](../web/README.md),
 [web/ARCHITECTURE.md](../web/ARCHITECTURE.md).
 
 ## Voice operator
 
-`#/operator` (web UI): talk to the fleet. The operator is a Claude session the web server starts
+`#/operator` (web UI): talk to the overmind. The operator is a Claude session the web server starts
 on request (POST `/api/operator`) in tmux session `operator`, in its own workspace
-`${XDG_STATE_HOME:-~/.local/state}/fleet/operator/` — regenerated at every server start:
+`${XDG_STATE_HOME:-~/.local/state}/overmind/operator/` — regenerated at every server start:
 
 - `CLAUDE.md` — its brief: a dispatcher that answers by voice (short spoken sentences, the
   user's language), always looks before it answers, and acts only on an unambiguous target;
   closing or interrupting needs an explicit yes. Your own additions go in `CLAUDE.local.md`.
-- `.claude/settings.json` — allows `fleet`, `./api`, `jq` and `date` without permission prompts
+- `.claude/settings.json` — allows `overmind`, `./api`, `jq` and `date` without permission prompts
   (a prompt would stall a voice conversation); extend it in `.claude/settings.local.json`.
 - `api` — `./api METHOD /path [JSON]`: this server's HTTP API (which reaches every host).
 
 The screen records with `POST /api/transcribe`, sends the text with the ordinary `send` route,
 polls `messages`, and reads each new final reply aloud with `POST /api/speak` — or, without a
 speech key (or after it fails), the device's own voice (Web Speech API). Sessions that start
-waiting on you are announced while the screen is open (from the fleet poll, no model call).
-The operator is found by its cwd. Its row in `/api/fleet` carries `operator: true` and the UI
+waiting on you are announced while the screen is open (from the overmind poll, no model call).
+The operator is found by its cwd. Its row in `/api/overmind` carries `operator: true` and the UI
 keeps it out of session lists (the CLI still shows it). `web.operator.hosts` picks one operator
 for every device: each server sends `/api/operator` to the first host of the list that answers.
 
@@ -517,15 +517,15 @@ mic, and what was recorded is saved.
 ## Smart grouping
 
 The web Board view shows sessions as columns of work streams, and nobody maintains those groups:
-`core::grouping` (the `fleet group` verb) does, with one source of truth for the whole fleet.
+`core::grouping` (the `overmind group` verb) does, with one source of truth for the whole overmind.
 
 - **Where it runs.** One host: `grouping.host`, or — without it — the host whose server has
-  `web.grouping.enabled`. That server runs `fleet group --input - --apply --json` every
+  `web.grouping.enabled`. That server runs `overmind group --input - --apply --json` every
   `web.grouping.intervalMinutes` (default 10, first run 20s after start) with its merged
-  `/api/fleet` body on stdin — so it needs no ssh to its peers, only their web servers — and early
+  `/api/overmind` body on stdin — so it needs no ssh to its peers, only their web servers — and early
   (≥ 2 min after the last run) when the warm snapshot shows live sessions no group knows. Every
   other server proxies `/api/groups` to it (and finds it by asking peers when `grouping.host` is
-  unset). The state lives on that host (`~/.local/state/fleet/groups.json`).
+  unset). The state lives on that host (`~/.local/state/overmind/groups.json`).
 - **Input per session**: display name (generated title, else name), name, the last two cwd
   segments (worktree paths carry the branch-ish name; the git branch itself is not read — a
   remote session's branch isn't cheaply known), host, the first prompt's first 160 characters.
@@ -539,15 +539,15 @@ The web Board view shows sessions as columns of work streams, and nobody maintai
   sessions of a host that didn't answer keep their group.
 - **Dormant sessions** (left by a reboot, see [Session recovery](#session-recovery)) count as
   present: they keep their assignment (and so their group), are never sent to the model, and come
-  back with `"dormant": true` on their member object in a pass's report (`fleet group --json`, and
+  back with `"dormant": true` on their member object in a pass's report (`overmind group --json`, and
   so `/api/groups`; absent otherwise, never set by `--cached`). The pass reads this machine's
-  snapshot and, for each other answering host, `fleet -H <host> restore --json` — in parallel with
+  snapshot and, for each other answering host, `overmind -H <host> restore --json` — in parallel with
   the session fetch. A host whose dormant list can't be read is treated like a host that didn't
-  answer: none of its assignments are pruned that run (a fleet too old to have `restore` has none).
+  answer: none of its assignments are pruned that run (an overmind too old to have `restore` has none).
 - **Hand edits win.** Renaming a group on the Board locks its label (never renamed, never merged
   away); a session dragged to another group is a `manual` assignment the passes never touch.
   A group made on the Board (`manual`) stays even when empty, until the user deletes it.
-  Column order is the UI's (`fleet.boardOrder`, per browser), not part of the state.
+  Column order is the UI's (`overmind.boardOrder`, per browser), not part of the state.
 - **Fallback.** Model disabled, missing, logged out, or answering garbage (one retry on an
   unparseable answer, none on a failed call): group by repository, marked `fallback`, reclassified
   once the model is back. The UI does the same grouping client-side when no server runs grouping.
@@ -564,9 +564,9 @@ always-on one); the others proxy `/api/inbox` there.
 
 | Source | How | Model |
 |---|---|---|
-| `github` | `fleet --local prs --json` every 2 min: review requests, unseen @mentions, your PRs approved / with changes requested / with failing CI | none |
-| `productive` | `fleet --local tasks --json`: overdue and due-soon tasks, tasks in progress touched in the last 3 days | none |
-| `sessions` | the merged fleet: sessions on any host with status `waiting` (link `#/s/<host>/<id>`) | none |
+| `github` | `overmind --local prs --json` every 2 min: review requests, unseen @mentions, your PRs approved / with changes requested / with failing CI | none |
+| `productive` | `overmind --local tasks --json`: overdue and due-soon tasks, tasks in progress touched in the last 3 days | none |
+| `sessions` | the merged overmind: sessions on any host with status `waiting` (link `#/s/<host>/<id>`) | none |
 | `comms` | Slack + Gmail through the claude.ai connectors: one `claude -p --output-format json` with only read-only connector tools allowed (writes and built-ins denied), every `scanMinutes` within work hours. It looks back to the previous scan minus 2 h (3 days the first time) and is handed the items it returned last time, so their ids stay and answered threads drop off | `model` |
 
 Sections: `quick` (quick wins — a review of ≤ 150 changed lines in ≤ 6 files, an approved PR to
@@ -579,7 +579,7 @@ what it names as `[name](#<n>)`, which the server turns into the item's url (els
 href) — no URL comes from the model. It runs only when the
 set of items changed, at least `briefMinutes` apart, and outside work hours only the first of the
 day. A failing source keeps its last list and reports the error; a failed scan waits for the next
-slot. State (`<fleet state>/inbox.json`): the scan's items and time, the brief, when each item was
+slot. State (`<overmind state>/inbox.json`): the scan's items and time, the brief, when each item was
 first seen (the UI's "new" dot).
 
 ## Session briefs
@@ -590,9 +590,9 @@ produced, and its todos with progress — enough to start a **new** session from
 continue (`continuePrompt` in the API is that first prompt). The user can edit it; their edits are authoritative.
 
 **Storage.** One file per session on the host the session lives on:
-`$FLEET_BRIEFS_DIR/<session_id>.md`, else `${XDG_STATE_HOME:-~/.local/state}/fleet/briefs/<session_id>.md`
+`$OVERMIND_BRIEFS_DIR/<session_id>.md`, else `${XDG_STATE_HOME:-~/.local/state}/overmind/briefs/<session_id>.md`
 (dir `0700`, files `0600`), always written atomically (temp file + rename). The web server owns
-generation (`web/lib/briefs.mjs`); any other reader/writer — `fleet brief` (`core::brief`, a port
+generation (`web/lib/briefs.mjs`); any other reader/writer — `overmind brief` (`core::brief`, a port
 of `web/lib/brief-format.mjs` and the PUT rules) — uses the same files and must follow the same
 format and merge rules. Both implementations pin the shared fixtures in `testdata/briefs/`
 (regenerate the expected outputs from the server code with `node testdata/briefs/gen.mjs`).
@@ -700,7 +700,7 @@ an edited body.
   `maxCallsPerHour` calls in the last hour.
 
 The background pass checks this host's live sessions every 30 s (the 2 s discovery cache — no
-extra `fleet list` while a UI is polling) and forgets sessions that are gone. Resource and todo
+extra `overmind list` while a UI is polling) and forgets sessions that are gone. Resource and todo
 extraction (no model) runs whenever the transcript grew — in the background pass and on GET. A
 manual regenerate skips the idle, interval and new-content gates (with nothing new it re-reads the
 recent conversation) but waits for the one-at-a-time slot and counts against the hourly cap. Each
@@ -711,7 +711,7 @@ callsLastHour, maxCallsPerHour, generating, lastRun }`.
 **Open in editor.** GET/PUT brief bodies carry `absCwd` (the session's directory on its host,
 absolute, no `~`), `gitRoot` (the checkout root — repo or linked worktree — containing it, absolute;
 null outside git), `editor` (`web.editor` of the answering server) and `editorUrl`; session rows in
-`/api/fleet` carry `editorUrl` for their cwd. `worktrees` lists the git checkouts the session works
+`/api/overmind` carry `editorUrl` for their cwd. `worktrees` lists the git checkouts the session works
 in — `[{ path, display, branch, linked, editorUrl }]`, the cwd's first, then the checkouts of the
 directories the transcript records the session in (its entries' `cwd`, kept in the brief's `dirs`
 frontmatter key) and of the File / Spec resources; a directory's checkout is the nearest ancestor
@@ -726,13 +726,13 @@ used>`. `cursor://…` alike for `web.editor: "cursor"`; `null` when `web.editor
 there is no absolute path, or the host has no usable `ssh` alias. A proxied request is answered by
 the peer (which knows only its own absolute paths) and the server that received it fills in
 `editor` / `editorUrl` from its own config and the request's address.
-`fleet brief <target> --open` does the same from the CLI: `code <path>` here, `code --remote
+`overmind brief <target> --open` does the same from the CLI: `code <path>` here, `code --remote
 ssh-remote+<ssh dest> <path>` for a session on another host (`cursor` with `web.editor: "cursor"`).
 
 ## Session stacks
 
 A **stack** is N Claude Code sessions — on one host or across hosts — sharing one context
-layer: a markdown file, the **StackBrief**. Any session can spawn a *sibling* (`fleet stack
+layer: a markdown file, the **StackBrief**. Any session can spawn a *sibling* (`overmind stack
 spawn`, the web UI's "Spawn sibling"), on its own host or on another one (`--on <host>`, the
 form's Host choice); the sibling joins the source's stack, which is created around the source
 first when it has none. Every session spawned into a stack starts with the **context line**:
@@ -748,25 +748,25 @@ text). A sibling on **another host** than the stack's home cannot read that path
 StackView):
 
 ```
-You're running in the session stack with shared context: stack <id> on host <home>. Read it with `fleet -H <home> stack show <id>` and update it with `fleet -H <home> stack set <id>` (the whole markdown on stdin; `fleet -H <home> stack show <id> --json` has it under `markdown`). <prompt>
+You're running in the session stack with shared context: stack <id> on host <home>. Read it with `overmind -H <home> stack show <id>` and update it with `overmind -H <home> stack set <id>` (the whole markdown on stdin; `overmind -H <home> stack show <id> --json` has it under `markdown`). <prompt>
 ```
 
-`fleet -H <home> stack show` / `set` reach the home over ssh when there is a destination for it,
+`overmind -H <home> stack show` / `set` reach the home over ssh when there is a destination for it,
 else over its web server (`hosts.<home>.web`, the stack routes below — the sheds have web urls
 for each other and no ssh). The StackBrief is generated once, at creation; after that it is
-maintained by scripts (membership) and by hand. Logic: `core::stack`; CLI: `fleet stack`
-([cli.md](cli.md#stacks)); the web server only shells out to `fleet --local stack … --json` and
+maintained by scripts (membership) and by hand. Logic: `core::stack`; CLI: `overmind stack`
+([cli.md](cli.md#stacks)); the web server only shells out to `overmind --local stack … --json` and
 never parses the markdown.
 
-**Storage.** `$FLEET_STACKS_DIR`, else `${XDG_STATE_HOME:-~/.local/state}/fleet/stacks/`, one
+**Storage.** `$OVERMIND_STACKS_DIR`, else `${XDG_STATE_HOME:-~/.local/state}/overmind/stacks/`, one
 `<stack_id>.md` per stack (dir `0700`, files `0600`, atomic temp + rename writes). The file is
 the state — no index; "which stack is session X in" scans the dir. Stack id: `st-` + 8 random
 lowercase hex, never changes. A stack lives on the host where its file is — its **home**
-(frontmatter `host`) — and every `fleet stack` command about it runs there (`-H <home>` from
+(frontmatter `host`) — and every `overmind stack` command about it runs there (`-H <home>` from
 elsewhere). Its members may run on any host: `members[].host` (a member without one is on the
-home). Only the home host knows the stack: `fleet list` on another host does not stamp its
-members' rows (the web server does, from the home's `/api/fleet` entry — see below), and
-`fleet stack list` there does not show it.
+home). Only the home host knows the stack: `overmind list` on another host does not stamp its
+members' rows (the web server does, from the home's `/api/overmind` entry — see below), and
+`overmind stack list` there does not show it.
 
 **Format** (a contract: add keys freely, never rename or retype one):
 
@@ -784,7 +784,7 @@ members: [{"session":"<uuid>","host":"laptop","name":"login-redirect","added":"2
 ---
 > Shared context for the session stack **Login redirect fix** (`st-1a2b3c4d`). Every session in
 > this stack reads this file when it starts. Keep **Summary** and **Resources** current for your
-> siblings (PRs, worktrees, folders, decisions). **Sessions** is maintained by `fleet stack` — do
+> siblings (PRs, worktrees, folders, decisions). **Sessions** is maintained by `overmind stack` — do
 > not edit it; read a sibling's brief or transcript from there when you need to know what it did.
 
 ## Summary
@@ -796,7 +796,7 @@ members: [{"session":"<uuid>","host":"laptop","name":"login-redirect","added":"2
 - Folder: `~/Code/project`
 
 ## Sessions
-- **login-redirect** (`1a2b3c4d`, live) — added 2026-09-29 10:00 · brief `~/.local/state/fleet/briefs/<uuid>.md` · transcript `~/.claude/projects/<encoded cwd>/<uuid>.jsonl`
+- **login-redirect** (`1a2b3c4d`, live) — added 2026-09-29 10:00 · brief `~/.local/state/overmind/briefs/<uuid>.md` · transcript `~/.claude/projects/<encoded cwd>/<uuid>.jsonl`
   first prompt: "Fix the login redirect loop"
 
 ## Notes
@@ -810,7 +810,7 @@ free text; any other `## ` section is kept as is
 - `members[]`: `{ session, host, name, added, closed, cwd?, firstPrompt? }` — `host` is where
   the session runs (the stack's home when absent), `name` is the
   display title at the last sync, `closed` `null` while live and an ISO time once the session was
-  seen gone (members are never removed automatically; `fleet stack remove` does), `cwd` (`~/…`,
+  seen gone (members are never removed automatically; `overmind stack remove` does), `cwd` (`~/…`,
   or absolute on another host) and `firstPrompt` (≤ 160 chars) are kept so the Sessions line
   survives the session. Unknown member keys are preserved.
 - Body: the header blockquote and `## Sessions` are **regenerated** on every machine write
@@ -821,7 +821,7 @@ free text; any other `## ` section is kept as is
   and kept verbatim. Parsing is tolerant like briefs (case-insensitive headings, any order,
   missing sections); Resources bullets parse like a brief's (`parse_resource_line`; `Folder:`
   lines get the kind `Folder`).
-- Human edit (`fleet stack set` / `edit`, web PUT): the submitted body is authoritative except
+- Human edit (`overmind stack set` / `edit`, web PUT): the submitted body is authoritative except
   for the header and Sessions; machine keys are the stored file's; `editedAt` + `updated`
   stamped; `--expect-updated` / `expectUpdated` refuses a stale edit (CLI exit 3, HTTP 409). At
   most 64 kB.
@@ -830,19 +830,19 @@ free text; any other `## ` section is kept as is
 whose session id is not among the live sessions *of its host* gets `closed = now` (once); a live
 one gets its `name` refreshed from `display_title` (and `closed` cleared — a resumed session).
 A member is judged only against the rows of its own host (`core::stack::Observed`): plain
-`fleet stack sync` knows this machine's sessions, so members on other hosts are left as they
-were; `--input <src>` (`-` = stdin; a `list --json` array or a `/api/fleet` body) adds the other
+`overmind stack sync` knows this machine's sessions, so members on other hosts are left as they
+were; `--input <src>` (`-` = stdin; a `list --json` array or a `/api/overmind` body) adds the other
 hosts' live rows, and a host with `ok: false` there is still not judged. The web server passes
-its merged fleet that way, so a sibling that ended on another host is closed within a sync
+its merged overmind that way, so a sibling that ended on another host is closed within a sync
 interval (and re-opened if it comes back). Only files whose members changed are rewritten. It
-runs in `fleet stack list` / `show` / `sync` and after `spawn` / `add` / `remove`; the web server
+runs in `overmind stack list` / `show` / `sync` and after `spawn` / `add` / `remove`; the web server
 runs `stack sync` after a kill, once 30 s after start, and every `web.stacks.syncMinutes` while
 any session is in a stack or it knows a stack. Nothing is marked closed when the session
 registry can't be read, and a member dormant on this machine (left by a reboot,
 `snapshot::dormant_session_ids`) is not marked closed either — it is left as it was. StackView
 members carry `host`, `dormant: true|false` next to `live` (dormant = not live and in this
 machine's dormant set); for a member on a host not observed, `live` is `closed == null`,
-`status` is `null` and `briefPath` is `null` (the brief is on that host). `fleet list` only
+`status` is `null` and `briefPath` is `null` (the brief is on that host). `overmind list` only
 stamps `stack: { id, label, host } | null` on each row (read-only; `host` = the stack's home).
 
 **Generation** (creation only; `stacks.model`, default `sonnet`): one `core::naming::ask_claude`
@@ -853,22 +853,22 @@ conversation (user prompts and turn-ending assistant text, main thread, tool blo
 The answer must be `Label: <2–5 words>`, `## Summary` (≤ 1000 chars, generalised to the stack)
 and `## Resources` (`- Kind: value` bullets of things really in the input); the Git line and a
 Folder line are added when missing. Anything unparseable, a failed call, `--no-llm`,
-`FLEET_FIXTURE` or `stacks.enabled: false` → the skeleton (Summary "Started from <title> in
+`OVERMIND_FIXTURE` or `stacks.enabled: false` → the skeleton (Summary "Started from <title> in
 <cwd>.", Resources = Git line + Folder): a model failure never blocks creating the stack
 (`generated: false` and a `warning`). There is no regeneration after creation (v1).
 
 ## Session recovery
 
-After a reboot fleet shows what was running as **dormant** and brings it back on demand: the same
+After a reboot overmind shows what was running as **dormant** and brings it back on demand: the same
 tmux session name, windows, panes and cwds, every Claude pane re-launched with
 `<launcher> <flags> --resume <sessionId>`. The session id is unchanged by `--resume` (only
 `--fork-session` mints a new one), so groups, stacks and briefs — all keyed by session id — carry
-over. Code: `core::snapshot` (no printing); CLI: `fleet restore` and `fleet enter`
+over. Code: `core::snapshot` (no printing); CLI: `overmind restore` and `overmind enter`
 ([cli.md](cli.md#session-recovery)).
 
 ### `snapshot.json`
 
-One per machine: `$FLEET_SNAPSHOT`, else `${XDG_STATE_HOME:-~/.local/state}/fleet/snapshot.json`
+One per machine: `$OVERMIND_SNAPSHOT`, else `${XDG_STATE_HOME:-~/.local/state}/overmind/snapshot.json`
 (dir `0700`, file `0600`, written atomically under a `snapshot.json.lock` file lock). Unknown keys
 are preserved at every level on rewrite — it is a contract like `groups.json`.
 
@@ -887,7 +887,7 @@ ClaudeSnap = { sessionId, name, cwd, title, flags: [argv…], since?, goneAt?, c
 ```
 
 - `tmux` — the live tmux sessions of the current boot; `iterm` — live Claude sessions that are
-  not in a tmux pane fleet can see (iTerm, unknown). `dormant` — what earlier boots ran.
+  not in a tmux pane overmind can see (iTerm, unknown). `dormant` — what earlier boots ran.
   `closed` — what ended within a boot ([Recently closed](#recently-closed)); added later, so a
   file without it is an empty list. A session id is never both dormant and closed.
 - `layout` is `#{window_layout}`; `autoName` = tmux named the window itself (a restore then
@@ -903,31 +903,31 @@ ClaudeSnap = { sessionId, name, cwd, title, flags: [argv…], since?, goneAt?, c
   lingers in that pane, one whose pane is gone lingers in `iterm` (with `tmuxSession`).
 - `closedAt` (closed entries) — when it ended (its `goneAt`). `tmuxSession` — the tmux session a
   Claude session ran in, kept when it left its pane (`/exit`, the shell stayed).
-- `bootId` — `$FLEET_BOOT_ID` (tests), else Linux `/proc/sys/kernel/random/boot_id`, else macOS
+- `bootId` — `$OVERMIND_BOOT_ID` (tests), else Linux `/proc/sys/kernel/random/boot_id`, else macOS
   `kern.boottime` seconds. Unknown → nothing is ever marked dormant.
 
-**Recording** happens on every local `fleet list` with a successful discovery (one `tmux
+**Recording** happens on every local `overmind list` with a successful discovery (one `tmux
 list-panes -a`, one `ps` for the Claude pids), never in fixture mode, never when tmux fails for a
 reason other than "no server", and only writes when something changed. Rules: a stored boot id
 different from the current one moves the stored `tmux`/`iterm` into `dormant` (merged by tmux name
 / session id); then `tmux`/`iterm` become the live state; a dormant Claude session that is live
 again (resumed by hand) leaves `dormant` (inside a dormant tmux session its pane becomes a plain
 shell), and a dormant tmux session left with no dormant Claude pane whose name is live again is
-dropped. Readers that do not record (the `watch` header, `fleet tmux list`, the `list` footer)
-apply a pending reboot in memory; `fleet restore` and the dormant lookup of `fleet enter` record
+dropped. Readers that do not record (the `watch` header, `overmind tmux list`, the `list` footer)
+apply a pending reboot in memory; `overmind restore` and the dormant lookup of `overmind enter` record
 first, so the first command after a reboot already sees the old boot as dormant.
 
 **For other views** (groups, stacks, the web Board): `core::snapshot::dormant_session_ids()` is the
-set of this machine's dormant session ids; for another host, `fleet -H <host> restore --json` and
+set of this machine's dormant session ids; for another host, `overmind -H <host> restore --json` and
 the `sessionId`s under `dormant[].sessions`. A dormant session counts as *present*, not gone:
 grouping keeps its assignment and flags the member `dormant: true` ([Smart
 grouping](#smart-grouping)); stack sync doesn't close it and StackView members carry `dormant`.
 
 ### Recently closed
 
-A session that ends *within* a boot — Close in the app, `fleet kill`, `/exit`, a killed tmux
+A session that ends *within* a boot — Close in the app, `overmind kill`, `/exit`, a killed tmux
 session — is **closed**, deliberately separate from dormant: it is never part of `restore --all`,
-`restore.onBoot`, `fleet enter`'s auto-restore, `dormant_session_ids()` or the groups'/stacks'
+`restore.onBoot`, `overmind enter`'s auto-restore, `dormant_session_ids()` or the groups'/stacks'
 dormant sets, so a closed session's group and stack membership lapses as before. It can still be
 brought back by hand for `restore.keepClosedDays` (default 7; `0` = off), the newest 50 at most.
 
@@ -941,7 +941,7 @@ brought back by hand for `restore.keepClosedDays` (default 7; `0` = off), the ne
 - A closed (or dormant) Claude session whose id is live again leaves the list; a closed tmux
   session left with no Claude pane goes. A newer closed tmux session of the same name replaces
   the older one, whose Claude sessions stay as lone entries.
-- Restore (`fleet restore --closed <target>`) is the dormant restore: a tmux session with its
+- Restore (`overmind restore --closed <target>`) is the dormant restore: a tmux session with its
   layout (non-Claude panes a plain shell), a lone Claude session in a new tmux session named
   after its title — except one with a `tmuxSession` that still exists, which gets a new window
   (`new-window -d`) there running the resume line. Same launcher, flags, name-clash handling,
@@ -949,15 +949,15 @@ brought back by hand for `restore.keepClosedDays` (default 7; `0` = off), the ne
 
 ## Extension points
 
-- **Another web UI.** The HTTP API is the contract; point `web.ui` (or `FLEET_WEB_UI`) at a
+- **Another web UI.** The HTTP API is the contract; point `web.ui` (or `OVERMIND_WEB_UI`) at a
   directory with its own `index.html` and it is served same-origin with `/api/*`, or build a
   separate app against the same API.
-- **A different TUI or native app.** Link the core library (`fleet::core`) directly, or shell out
-  to `fleet list --json` and the other commands.
-- **Integrations** (notifications, chat bots, status bars): poll `fleet list --all-hosts --json`
-  or `GET /api/fleet`; act through `fleet send` / `POST …/send`. Treat anything that can send as
+- **A different TUI or native app.** Link the core library (`overmind::core`) directly, or shell out
+  to `overmind list --json` and the other commands.
+- **Integrations** (notifications, chat bots, status bars): poll `overmind list --all-hosts --json`
+  or `GET /api/overmind`; act through `overmind send` / `POST …/send`. Treat anything that can send as
   having the agent's full permissions.
 - **New backends** (another terminal emulator): implement discovery matching (tty → handle) and
   the control operations in `core::backend`; everything above picks it up.
-- **The Claude Code skill** (`fleet skill install`) teaches an agent to use `fleet` itself —
+- **The Claude Code skill** (`overmind skill install`) teaches an agent to use `overmind` itself —
   e.g. to hand work off to another session.

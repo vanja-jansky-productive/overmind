@@ -3,7 +3,7 @@ import { createContext, useContext } from 'react'
 import type { DormantMember, HostDormant } from '@/lib/dormant'
 
 export interface DormantState {
-  /** Hosts with dormant or recently closed sessions (others left out), in fleet order. */
+  /** Hosts with dormant or recently closed sessions (others left out), in overmind order. */
   hosts: HostDormant[]
   /** Dormant Claude sessions by `host/sessionId` (the Board's dimmed cards). */
   index: Map<string, DormantMember>

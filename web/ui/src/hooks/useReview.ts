@@ -11,7 +11,7 @@ export const REVIEW_PENDING_POLL_MS = 2_000
 export const REVIEW_IDLE_POLL_MS = 10_000
 
 function reviewError(err: unknown): string {
-  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s fleet web server predates review comments — update and restart it'
+  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s overmind web server predates review comments — update and restart it'
   return sessionErrorMessage(err)
 }
 

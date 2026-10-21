@@ -1,8 +1,8 @@
 // Settings → Git repos: GET/PUT /api/hosts/:host/repos, POST …/repos/sync, POST …/repos/service.
 // The CLI owns everything here (docs/cli.md → Repos): the list and each repo's state come from
-// `fleet --local repos --json --all`, a save writes the `repos` config key through
-// `fleet --local config set`, a sync is `fleet --local repos sync --json`, the timer is
-// `fleet --local repos install-service [--uninstall]`. Each host has its own settings (its
+// `overmind --local repos --json --all`, a save writes the `repos` config key through
+// `overmind --local config set`, a sync is `overmind --local repos sync --json`, the timer is
+// `overmind --local repos install-service [--uninstall]`. Each host has its own settings (its
 // own roots and repos); the UI can write the same settings to every host.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,9 +10,9 @@ import path from 'node:path';
 
 export const REPOS_LIMITS = Object.freeze({ maxRoots: 20, maxEntries: 300, maxPath: 1024, maxNames: 300 });
 export const REPOS_DEFAULTS = Object.freeze({ roots: ['~/Code'], every: '24h' });
-/** How often the launchd agent runs `sync --due` (crates/fleet/src/core/repos.rs TICK_SECS). */
+/** How often the launchd agent runs `sync --due` (crates/overmind/src/core/repos.rs TICK_SECS). */
 export const REPOS_TICK_MINUTES = 10;
-export const REPOS_LAUNCHD_LABEL = 'fleet.repos';
+export const REPOS_LAUNCHD_LABEL = 'overmind.repos';
 
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 const SPAN_RE = /^(\d{1,5})([mhd])$/;
@@ -115,8 +115,8 @@ export function validateReposSettings(body) {
 }
 
 /**
- * @param cli         lib/fleet-cli.mjs instance (`repos`, `reposSync`, `reposService`, `configSet`)
- * @param configFile  the config path the CLI writes (FLEET_CONFIG)
+ * @param cli         lib/overmind-cli.mjs instance (`repos`, `reposSync`, `reposService`, `configSet`)
+ * @param configFile  the config path the CLI writes (OVERMIND_CONFIG)
  * @param self        this host's name
  */
 export function createRepos({ cli, configFile, self, home = os.homedir(), fsImpl = fs }) {
@@ -129,13 +129,13 @@ export function createRepos({ cli, configFile, self, home = os.homedir(), fsImpl
       text = fsImpl.readFileSync(configFile, 'utf8');
     } catch (err) {
       if (err?.code === 'ENOENT') return {};
-      throw Object.assign(new Error(`cannot read fleet config: ${err.message}`), { status: 500 });
+      throw Object.assign(new Error(`cannot read overmind config: ${err.message}`), { status: 500 });
     }
     try {
       const raw = JSON.parse(text);
       return isObject(raw) ? raw : {};
     } catch (err) {
-      throw Object.assign(new Error(`fleet config is not valid JSON: ${err.message}`), { status: 500 });
+      throw Object.assign(new Error(`overmind config is not valid JSON: ${err.message}`), { status: 500 });
     }
   }
 
@@ -151,7 +151,7 @@ export function createRepos({ cli, configFile, self, home = os.homedir(), fsImpl
     try {
       repos = await cli.repos({ all: true });
     } catch (err) {
-      if (err?.missing) throw Object.assign(new Error('this host’s fleet CLI has no `repos` command — update it'), { status: 501 });
+      if (err?.missing) throw Object.assign(new Error('this host’s overmind CLI has no `repos` command — update it'), { status: 501 });
       error = String(err?.message ?? err);
     }
     return { host: self, settings, repos, error, service: service(), limits: REPOS_LIMITS };
@@ -183,7 +183,7 @@ export function createRepos({ cli, configFile, self, home = os.homedir(), fsImpl
       return { status: 200, body: { host: self, results } };
     } catch (err) {
       if (/another .*sync.* is running/i.test(err?.message ?? '')) return { status: 409, body: { error: 'a sync is already running on this host' } };
-      if (err?.missing) return { status: 501, body: { error: 'this host’s fleet CLI has no `repos` command — update it' } };
+      if (err?.missing) return { status: 501, body: { error: 'this host’s overmind CLI has no `repos` command — update it' } };
       return { status: err?.timedOut ? 504 : 502, body: { error: String(err?.message ?? err) } };
     }
   }

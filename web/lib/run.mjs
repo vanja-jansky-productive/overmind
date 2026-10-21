@@ -29,7 +29,7 @@ export function run(file, args = [], opts = {}) {
     child.on('error', () => {
       /* handled by the callback above */
     });
-    // `input`: written to the child's stdin, then EOF (e.g. `fleet group --input -`).
+    // `input`: written to the child's stdin, then EOF (e.g. `overmind group --input -`).
     if (input != null && child.stdin) {
       child.stdin.on('error', () => {
         /* the child exited early; its exit is reported above */

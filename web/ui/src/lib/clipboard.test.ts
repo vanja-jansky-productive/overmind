@@ -17,17 +17,17 @@ describe('shellQuote', () => {
 
 describe('attachCommand', () => {
   test('host and session name', () => {
-    expect(attachCommand('workstation', 'fleet-web')).toBe('fleet -H workstation enter fleet-web')
-    expect(attachCommand('laptop', 'a b')).toBe("fleet -H laptop enter 'a b'")
+    expect(attachCommand('workstation', 'overmind-web')).toBe('overmind -H workstation enter overmind-web')
+    expect(attachCommand('laptop', 'a b')).toBe("overmind -H laptop enter 'a b'")
   })
   test('a name that looks like a flag goes after --', () => {
-    expect(attachCommand('laptop', '-x')).toBe('fleet -H laptop enter -- -x')
+    expect(attachCommand('laptop', '-x')).toBe('overmind -H laptop enter -- -x')
   })
 })
 
 describe('sessionAttachCommand', () => {
   test('tmux-backed sessions only', () => {
-    expect(sessionAttachCommand({ host: 'workstation', backend: 'tmux', tmux_session: 'api' })).toBe('fleet -H workstation enter api')
+    expect(sessionAttachCommand({ host: 'workstation', backend: 'tmux', tmux_session: 'api' })).toBe('overmind -H workstation enter api')
     expect(sessionAttachCommand({ host: 'laptop', backend: 'iterm', tmux_session: null })).toBeNull()
     expect(sessionAttachCommand({ host: 'laptop', backend: 'tmux', tmux_session: '' })).toBeNull()
     expect(sessionAttachCommand(null)).toBeNull()
@@ -36,7 +36,7 @@ describe('sessionAttachCommand', () => {
 
 describe('sessionAttachLink', () => {
   test('encodes host and tmux session for tmux sessions only', () => {
-    expect(sessionAttachLink({ host: 'workstation', backend: 'tmux', tmux_session: 'a b&c' })).toBe('fleet://attach?host=workstation&session=a+b%26c')
+    expect(sessionAttachLink({ host: 'workstation', backend: 'tmux', tmux_session: 'a b&c' })).toBe('overmind://attach?host=workstation&session=a+b%26c')
     expect(sessionAttachLink({ host: 'laptop', backend: 'iterm', tmux_session: null })).toBeNull()
     expect(sessionAttachLink(null)).toBeNull()
   })

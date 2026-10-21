@@ -28,7 +28,7 @@ import { briefMarkdown, dueChip, inboxSections, isNewItem, itemTarget, sourceLin
 import { storage } from '@/lib/storage'
 import { cn } from '@/lib/utils'
 
-const LAST_VISIT_KEY = 'fleet.inboxLastVisit'
+const LAST_VISIT_KEY = 'overmind.inboxLastVisit'
 
 const SOURCE_ICON: Record<InboxItem['source'], typeof InboxIcon> = {
   github: GitPullRequestIcon,
@@ -131,7 +131,7 @@ export function InboxScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' 
         <p className="font-medium">The inbox is not set up</p>
         <p className="text-muted-foreground">{data.error ?? 'No server runs the inbox.'}</p>
         <p className="text-xs text-dimmer">
-          Pick the always-on host that builds it: <code className="font-mono">fleet config set inbox.host &lt;host&gt;</code>
+          Pick the always-on host that builds it: <code className="font-mono">overmind config set inbox.host &lt;host&gt;</code>
         </p>
       </div>
     ) : loading && !data && !error ? (

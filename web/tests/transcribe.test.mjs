@@ -11,7 +11,7 @@ function audioReq(body, type = 'audio/webm;codecs=opus') {
   return req;
 }
 
-function okFetch(calls, text = 'Pozdrav, fleet.') {
+function okFetch(calls, text = 'Pozdrav, overmind.') {
   return async (url, init) => {
     calls.push({ url, init });
     return new Response(JSON.stringify({ text }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -61,15 +61,15 @@ test('transcribe sends model, prompt and the file to OpenAI and returns the text
   const calls = [];
   const tr = createTranscriber({ getKey: async () => 'sk-test', fetch: okFetch(calls) });
   assert.equal(await tr.enabled(), true);
-  const out = await tr.transcribe(audioReq('RIFFfake'), 'my-session, fleet');
-  assert.deepEqual(out, { text: 'Pozdrav, fleet.', model: 'gpt-4o-transcribe' });
+  const out = await tr.transcribe(audioReq('RIFFfake'), 'my-session, overmind');
+  assert.deepEqual(out, { text: 'Pozdrav, overmind.', model: 'gpt-4o-transcribe' });
   assert.equal(calls.length, 1);
   const { url, init } = calls[0];
   assert.equal(url, 'https://api.openai.com/v1/audio/transcriptions');
   assert.equal(init.headers.authorization, 'Bearer sk-test');
   const form = init.body;
   assert.equal(form.get('model'), 'gpt-4o-transcribe');
-  assert.match(form.get('prompt'), /my-session, fleet$/);
+  assert.match(form.get('prompt'), /my-session, overmind$/);
   const file = form.get('file');
   assert.equal(file.name, 'voice.webm');
   assert.equal(file.type, 'audio/webm');

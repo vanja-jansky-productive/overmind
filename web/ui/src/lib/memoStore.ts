@@ -25,7 +25,7 @@ interface Chunk {
   blob: Blob
 }
 
-const DB = 'fleet-memos'
+const DB = 'overmind-memos'
 const RECS = 'recordings'
 const CHUNKS = 'chunks'
 

@@ -5,7 +5,7 @@ import { DEFAULT_PALETTE, type PaletteId } from '@/lib/palettes'
 export type ThemeChoice = 'system' | 'dark' | 'light'
 export type ResolvedTheme = 'dark' | 'light'
 
-export const THEME_KEY = 'fleet.theme'
+export const THEME_KEY = 'overmind.theme'
 
 export interface ThemeState {
   theme: ThemeChoice
