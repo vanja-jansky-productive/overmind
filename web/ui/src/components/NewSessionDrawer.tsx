@@ -225,6 +225,8 @@ function NewSessionForm({
   const [modelChoices, setModelChoices] = useState<Record<string, string | null>>({})
   const model = pickModel(models, modelChoices[harness] ?? storage.get(modelKey(harness)))
   const [prompt, setPrompt] = useState(() => prefill?.prompt ?? (sibling ? '' : loadDraft()))
+  // Blank = the agent / auto-namer names it.
+  const [title, setTitle] = useState('')
   // Keep the draft on every change (attachments typed in included); a prefill / sibling is never a draft.
   const draftable = !prefill && !sibling
   useEffect(() => {
@@ -305,6 +307,7 @@ function NewSessionForm({
       const sent = withContinueTask(prompt)
       const body = {
         prompt: sent.trim() ? sent : undefined,
+        title: title.trim() || undefined,
         model: model || undefined,
         harness: harness === 'claude' ? undefined : harness,
         // Another host than the source's: say where, and in which of its directories.
@@ -351,6 +354,7 @@ function NewSessionForm({
       const res = await api.spawn(host, {
         dir: dir.path,
         prompt: sent.trim() ? sent : undefined,
+        title: title.trim() || undefined,
         model: model || undefined,
         harness: harness === 'claude' ? undefined : harness,
         embed: prefill?.embed || undefined,
@@ -662,6 +666,18 @@ function NewSessionForm({
       )}
     </Field>
   )
+  const titleField = (
+    <Field label="Title" hint="optional">
+      <Input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        maxLength={64}
+        placeholder={harness === 'codex' ? 'Names the tmux session (Codex titles its own thread)' : 'Leave empty to name it automatically'}
+        aria-label="Session title"
+        className="h-10 rounded-xl bg-card px-3 text-base md:text-base"
+      />
+    </Field>
+  )
   const errorBox =
     error ? (
       <Alert variant="destructive">
@@ -760,6 +776,7 @@ function NewSessionForm({
           {siblingSameHost ? null : dirField}
           {harnessField}
           {modelField}
+          {titleField}
           {promptField}
           {errorBox}
           {submitButton}
@@ -777,6 +794,8 @@ function NewSessionForm({
           {harnessField}
 
           {modelField}
+
+          {titleField}
 
           {slackField}
 
