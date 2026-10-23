@@ -20,6 +20,7 @@ import path from 'node:path';
 
 import { MODEL_ID_RE } from './config.mjs';
 import { sanitizeName } from './spawn.mjs';
+import { validateTitle } from './util.mjs';
 import { claudeHome, codexRef, encodeCwd, locateTranscript, parseCodexTranscript, parseTranscript } from './transcript.mjs';
 
 /** The agents a branch can come from or go to. */
@@ -55,10 +56,16 @@ export function validateBranchRequest(body, source) {
     else if (body.prompt.length > MAX_BRANCH_PROMPT) errors.push(`prompt too long (max ${MAX_BRANCH_PROMPT} chars)`);
     else prompt = body.prompt;
   }
-  const name = body?.name ? sanitizeName(body.name) : '';
+  let title = '';
+  if (body?.title != null && body.title !== '') {
+    const t = validateTitle(body.title);
+    if (!t.ok) errors.push(t.error);
+    else title = t.title;
+  }
+  const name = sanitizeName(body?.name) || sanitizeName(title);
   if (body?.name && !name) errors.push('name must have letters or digits');
   if (errors.length) return { ok: false, error: errors.join('; ') };
-  return { ok: true, ref, harness, model, prompt, name };
+  return { ok: true, ref, harness, model, prompt, name, title };
 }
 
 function parseLines(text) {
@@ -288,7 +295,7 @@ export function createBrancher({ spawner, home = claudeHome(), codex = codexHome
       prompt = handoffPrompt({ file: handoff, source, prompt: next });
     }
 
-    const spawn = await spawner.spawn({ name, dir: session.cwd, prompt, nameGiven: true, model: req.model, harness: req.harness, resume });
+    const spawn = await spawner.spawn({ name, title: req.title, dir: session.cwd, prompt, nameGiven: true, model: req.model, harness: req.harness, resume });
     return { source: { id: session.session_id, harness: source, transcript: file }, ref: req.ref, harness: req.harness, sessionId: resume, transcript, handoff, spawn };
   }
 

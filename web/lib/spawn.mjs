@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { MODEL_ID_RE } from './config.mjs';
+import { validateTitle } from './util.mjs';
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
@@ -56,13 +57,14 @@ export const HARNESS_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi' };
  * Build the shell line typed into the new pane (`promptFile`: read the prompt from there;
  * `resume`: a session id to continue — a branch, lib/branch.mjs).
  */
-export function launchCommand({ launcher = 'claude', harness = 'claude', name, prompt, model, promptFile, resume }) {
+export function launchCommand({ launcher = 'claude', harness = 'claude', name, title, prompt, model, promptFile, resume }) {
   // No name → plain `claude`: it derives `<cwd>-9d` and the auto-namer (lib/autoname.mjs)
   // replaces that with a task-shaped name, tmux session included, once the session is idle.
   // Codex has no name flag: its tmux session carries the name, and Codex titles the thread.
   const parts = [launcher];
   if (model) parts.push('--model', shq(model));
-  if (name && harness !== 'codex') parts.push('-n', shq(name));
+  // `title`: what the user typed as the session's name; `name` is its tmux-safe slug.
+  if ((title || name) && harness !== 'codex') parts.push('-n', shq(title || name));
   if (resume) parts.push(harness === 'codex' ? 'resume' : '--resume', shq(resume));
   if (promptFile) parts.push(`"$(cat ${shq(promptFile)})"`);
   else if (prompt && prompt.trim()) parts.push(shqTyped(prompt));
@@ -71,8 +73,17 @@ export function launchCommand({ launcher = 'claude', harness = 'claude', name, p
 
 export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
   const errors = [];
-  const nameGiven = Boolean(body?.name && sanitizeName(body.name));
-  const name = nameGiven ? sanitizeName(body.name) : defaultName();
+  // `title`: free text typed in the New session form (the agent's display name); the tmux
+  // session is named after it unless `name` is given too.
+  let title = '';
+  if (body?.title != null && body.title !== '') {
+    const t = validateTitle(body.title);
+    if (!t.ok) errors.push(t.error);
+    else title = t.title;
+  }
+  const slug = sanitizeName(body?.name) || sanitizeName(title);
+  const nameGiven = Boolean(slug) || Boolean(title);
+  const name = slug || defaultName();
   if (!NAME_RE.test(name)) errors.push('name must be 1-40 chars of letters, digits, - or _');
 
   let dir = typeof body?.dir === 'string' && body.dir.trim() ? body.dir.trim() : spawnDirs[0];
@@ -99,7 +110,7 @@ export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
     else harness = body.harness;
   }
   if (errors.length) return { ok: false, error: errors.join('; ') };
-  return { ok: true, name, dir, prompt, nameGiven, model, harness };
+  return { ok: true, name, title, dir, prompt, nameGiven, model, harness };
 }
 
 /** True when `child` is `root` or lies beneath it (both already resolved). */
@@ -200,7 +211,7 @@ export function createSpawner({
   }
 
   /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness }} */
-  async function spawn({ name, dir, prompt, nameGiven = true, model = '', harness = 'claude', resume = null }) {
+  async function spawn({ name, title = '', dir, prompt, nameGiven = true, model = '', harness = 'claude', resume = null }) {
     let st;
     try {
       st = await fs.stat(dir);
@@ -213,7 +224,7 @@ export function createSpawner({
     }
     // oh-my-zsh's "Would you like to update? [Y/n]" reads one key: the first typed character.
     await run(tmux, ['new-session', '-d', '-s', name, '-c', dir, '-e', 'DISABLE_AUTO_UPDATE=true'], { timeout: 8000 });
-    const launch = { launcher: launchers[harness] || (harness === 'claude' ? launcher : harness), harness, name: nameGiven ? name : null, prompt, model, resume };
+    const launch = { launcher: launchers[harness] || (harness === 'claude' ? launcher : harness), harness, name: nameGiven ? name : null, title: title || null, prompt, model, resume };
     let command = launchCommand(launch);
     if (Buffer.byteLength(command) > TYPED_LINE_MAX) {
       const d = new Date();

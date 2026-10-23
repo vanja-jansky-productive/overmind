@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useOvermind } from '@/hooks/useOvermind'
@@ -55,6 +56,7 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
   const [harness, setHarness] = useState(source)
   const [model, setModel] = useState('')
   const [prompt, setPrompt] = useState(isPrompt ? from.text : '')
+  const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -72,6 +74,7 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
         harness,
         model: model || undefined,
         prompt: isPrompt || prompt.trim() ? prompt : undefined,
+        title: title.trim() || undefined,
       })
       onClose()
       const id = toast.loading(`Branching into ${res.spawn.name}…`, {
@@ -165,6 +168,20 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
             </ToggleGroup>
           </div>
         ) : null}
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="branch-title">
+            Title <span className="font-normal text-dimmer">optional</span>
+          </Label>
+          <Input
+            id="branch-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={64}
+            placeholder="Leave empty for “<this session>-branch”"
+            className="h-9"
+          />
+        </div>
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="branch-prompt">

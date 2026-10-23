@@ -425,6 +425,8 @@ export type SessionKey = 'Enter' | 'Escape' | 'Up' | 'Down'
 export interface SpawnRequest {
   /** Still accepted by the server; the UI leaves naming to the auto-namer. */
   name?: string
+  /** The session's name as typed (the agent's display name; tmux gets a slug of it). Absent = auto-named. */
+  title?: string
   dir?: string
   prompt?: string
   /** A `models` id; '' / absent = the harness's default. */
@@ -452,6 +454,8 @@ export interface BranchRequest {
   /** A prompt branched from is re-sent (this replaces it when given); after a reply, the first message. */
   prompt?: string
   name?: string
+  /** The branch's name as typed; default `<source>-branch`. */
+  title?: string
 }
 
 export interface BranchResponse {
@@ -622,6 +626,8 @@ export interface StacksResponse {
 export interface StackSpawnRequest {
   prompt?: string
   name?: string
+  /** As in SpawnRequest. */
+  title?: string
   model?: string
   harness?: HarnessId | string
   /** Label for a stack this spawn creates (the model's otherwise). */

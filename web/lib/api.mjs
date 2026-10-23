@@ -1296,7 +1296,7 @@ export function createApi({
     const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
     let result;
     try {
-      result = await spawner.spawn({ name: check.name, dir: worktree.path, prompt, nameGiven, model: check.model, harness: check.harness });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir: worktree.path, prompt, nameGiven, model: check.model, harness: check.harness });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -1375,7 +1375,7 @@ export function createApi({
     let result;
     try {
       const dir = await resolveAllowedDir(check.dir, roots);
-      result = await spawner.spawn({ name: check.name, dir, prompt, nameGiven, model: check.model, harness: check.harness });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -1584,6 +1584,7 @@ export function createApi({
           dir: requested,
           prompt,
           ...(check.nameGiven ? { name: check.name } : {}),
+          ...(check.title ? { title: check.title } : {}),
           ...(check.model ? { model: check.model } : {}),
           harness: check.harness,
         }),
@@ -1603,7 +1604,7 @@ export function createApi({
     const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
     let result;
     try {
-      result = await spawner.spawn({ name: check.name, dir, prompt, nameGiven, model: check.model, harness: check.harness });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;

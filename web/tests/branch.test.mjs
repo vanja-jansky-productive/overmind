@@ -102,7 +102,7 @@ test('launchCommand resumes a branch', () => {
 test('validateBranchRequest', () => {
   assert.equal(validateBranchRequest({}, 'claude').ok, false);
   assert.equal(validateBranchRequest({ ref: 'u1', harness: 'pi' }, 'claude').ok, false);
-  assert.deepEqual(validateBranchRequest({ ref: 'u1', harness: 'codex', model: 'gpt-6' }, 'claude'), { ok: true, ref: 'u1', harness: 'codex', model: 'gpt-6', prompt: null, name: '' });
+  assert.deepEqual(validateBranchRequest({ ref: 'u1', harness: 'codex', model: 'gpt-6' }, 'claude'), { ok: true, ref: 'u1', harness: 'codex', model: 'gpt-6', prompt: null, name: '', title: '' });
 });
 
 async function setup() {
@@ -127,7 +127,7 @@ test('a same-agent branch writes the cut transcript and resumes it', async () =>
   assert.equal(r.sessionId, 'NEW');
   assert.equal(r.transcript, path.join(t.home, 'projects', encodeCwd(t.cwd), 'NEW.jsonl'));
   assert.equal((await fs.readFile(r.transcript, 'utf8')).trim().split('\n').length, 3);
-  assert.deepEqual(t.spawned[0], { name: 'src-branch-2', dir: t.cwd, prompt: 'second question', nameGiven: true, model: 'haiku', harness: 'claude', resume: 'NEW' });
+  assert.deepEqual(t.spawned[0], { name: 'src-branch-2', title: '', dir: t.cwd, prompt: 'second question', nameGiven: true, model: 'haiku', harness: 'claude', resume: 'NEW' });
   await fs.rm(t.root, { recursive: true });
 });
 
