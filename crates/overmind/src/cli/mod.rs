@@ -1,6 +1,7 @@
 //! Command-line rendering of the core: one module per command family.
 
 pub mod brief;
+pub mod codex;
 pub mod commands;
 pub mod config_cmd;
 pub mod group;

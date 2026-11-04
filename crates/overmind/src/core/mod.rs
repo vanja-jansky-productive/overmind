@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod background;
 pub mod brief;
+pub mod codex_hooks;
 pub mod config;
 pub mod context;
 pub mod discovery;

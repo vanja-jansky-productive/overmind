@@ -548,6 +548,8 @@ const HTTP_EXCLUDED: &[&str] = &[
     "web_build",
     "skill_install",
     "slack_link",
+    "codex_hooks_install",
+    "codex_hooks_uninstall",
 ];
 
 fn http_excluded(name: &str) -> bool {

@@ -4,9 +4,9 @@ use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 
 use overmind::cli::{
-    brief as brief_cmd, commands, config_cmd, group, hosts as host_cmds, init, jobs as jobs_cmd,
-    mcp, prs as prs_cmd, repos as repos_cmd, restore, schedule as schedule_cmd, skill,
-    slack as slack_cmd, stack as stack_cmds, tasks as tasks_cmd, tmux as tmux_cmds,
+    brief as brief_cmd, codex as codex_cmd, commands, config_cmd, group, hosts as host_cmds, init,
+    jobs as jobs_cmd, mcp, prs as prs_cmd, repos as repos_cmd, restore, schedule as schedule_cmd,
+    skill, slack as slack_cmd, stack as stack_cmds, tasks as tasks_cmd, tmux as tmux_cmds,
     usage as usage_cmd, web,
 };
 use overmind::core::config;
@@ -632,9 +632,19 @@ enum Commands {
         exclude: Vec<String>,
     },
 
+    /// Codex integration: the opt-in approval hook
+    Codex {
+        #[command(subcommand)]
+        cmd: codex_cmd::CodexCmd,
+    },
+
     /// Machine facts as JSON, for `doctor` (internal)
     #[command(name = "_probe", hide = true)]
     Probe,
+
+    /// Codex's hook entry point: event JSON on stdin → a sidecar file; prints nothing (internal)
+    #[command(name = "_codex-hook", hide = true)]
+    CodexHook,
 }
 
 #[derive(clap::Args, Clone)]
@@ -1349,7 +1359,8 @@ fn placement(c: &Commands) -> Placement {
         | Commands::Ssh { .. }
         | Commands::Mcp { .. }
         | Commands::Done { .. }
-        | Commands::Probe => Placement::Here,
+        | Commands::Probe
+        | Commands::CodexHook => Placement::Here,
         _ => Placement::Dispatch(Scope::SelfHost),
     }
 }
@@ -2080,12 +2091,23 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 },
             )?
         }
+        Commands::Codex { cmd } => codex_cmd::run(&cmd)?,
         Commands::Probe => host_cmds::probe()?,
+        Commands::CodexHook => overmind::core::codex_hooks::handle_hook(std::io::stdin().lock()),
     }
     Ok(0)
 }
 
 fn main() {
+    // Codex runs this for every hooked event of every Codex process on the host: no
+    // argument parsing, config or output — stdin to a file, exit 0 whatever happens.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == overmind::core::codex_hooks::HOOK_ARG)
+    {
+        overmind::core::codex_hooks::handle_hook(std::io::stdin().lock());
+        std::process::exit(0);
+    }
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => std::process::exit(code),
