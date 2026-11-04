@@ -193,6 +193,9 @@ impl Session {
     }
 }
 
+/// A Codex hook sidecar of a thread no live row has is deleted after this long.
+const SIDECAR_MAX_AGE_MS: i64 = 3_600_000;
+
 /// Entrypoints that are not a session anyone supervises: a `claude -p` child, an
 /// SDK run, a CI job. None of them has a TUI to focus, send to or rename.
 ///
@@ -432,6 +435,9 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
         }
         let mine: Vec<&harness::Proc> = procs.iter().filter(|p| p.harness == h).collect();
         if mine.is_empty() {
+            if h == Harness::Codex {
+                prune_codex_sidecars(&[]);
+            }
             continue;
         }
         let ts = harness::transcripts(h, &root, &mine);
@@ -452,19 +458,20 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
         }
         if h == Harness::Codex {
             let live: Vec<&str> = out.iter().filter_map(|s| s.session_id.as_deref()).collect();
-            crate::core::codex_hooks::prune_sidecars(
-                &crate::core::codex_hooks::sidecar_dir(),
-                &live,
-                SIDECAR_MAX_AGE_MS,
-                chrono::Utc::now().timestamp_millis(),
-            );
+            prune_codex_sidecars(&live);
         }
     }
     out
 }
 
-/// A sidecar of a thread no live row has is deleted after this long.
-const SIDECAR_MAX_AGE_MS: i64 = 3_600_000;
+fn prune_codex_sidecars(live: &[&str]) {
+    crate::core::codex_hooks::prune_sidecars(
+        &crate::core::codex_hooks::sidecar_dir(),
+        live,
+        SIDECAR_MAX_AGE_MS,
+        chrono::Utc::now().timestamp_millis(),
+    );
+}
 
 fn harness_session(
     p: &harness::Proc,
@@ -938,42 +945,6 @@ fn claude_prompts(cwd: &str, session_id: &str, n: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn a_codex_approval_is_waiting_only_while_the_screen_shows_the_menu() {
-        use crate::core::codex_hooks::Trigger;
-        let trig = Trigger {
-            rollout: true,
-            label: "exec approval".into(),
-            command: Some("printf hi > hello.txt".into()),
-            ..Default::default()
-        };
-        let row = |backend| Session {
-            status: "busy".into(),
-            backend,
-            handle: Some("%1".into()),
-            harness: Harness::Codex,
-            ..Default::default()
-        };
-        let menu = "  Would you like to run the following command?\n  $ printf hi > hello.txt\n› 1. Yes, proceed (y)\n  Press enter to confirm or esc to cancel\n";
-        let mut s = row(Backend::Tmux);
-        apply_approval(&mut s, &trig, |_| Ok(menu.into()));
-        assert_eq!(s.status, "waiting");
-        assert_eq!(
-            s.waiting_for.as_deref(),
-            Some("exec approval: `printf hi > hello.txt`")
-        );
-        let mut s = row(Backend::Tmux);
-        apply_approval(&mut s, &trig, |_| {
-            Ok("✔ You approved codex to run printf hi".into())
-        });
-        assert_eq!((s.status.as_str(), s.waiting_for), ("busy", None));
-        // iTerm without the hook: no osascript, busy.
-        let mut s = row(Backend::Iterm);
-        apply_approval(&mut s, &trig, |_| panic!("no peek"));
-        assert_eq!(s.status, "busy");
-    }
-
     use super::*;
 
     // `ask_claude` shells out to `claude -p`, and that child registers itself as a
@@ -1206,5 +1177,40 @@ mod tests {
         assert!(s.is_derived_name());
         s.name_source = Some("user".into());
         assert!(!s.is_derived_name());
+    }
+
+    #[test]
+    fn a_codex_approval_is_waiting_only_while_the_screen_shows_the_menu() {
+        use crate::core::codex_hooks::Trigger;
+        let trig = Trigger {
+            rollout: true,
+            label: "exec approval".into(),
+            command: Some("printf hi > hello.txt".into()),
+            ..Default::default()
+        };
+        let row = |backend| Session {
+            status: "busy".into(),
+            backend,
+            handle: Some("%1".into()),
+            harness: Harness::Codex,
+            ..Default::default()
+        };
+        let menu = "  Would you like to run the following command?\n  $ printf hi > hello.txt\n› 1. Yes, proceed (y)\n  Press enter to confirm or esc to cancel\n";
+        let mut s = row(Backend::Tmux);
+        apply_approval(&mut s, &trig, |_| Ok(menu.into()));
+        assert_eq!(s.status, "waiting");
+        assert_eq!(
+            s.waiting_for.as_deref(),
+            Some("exec approval: `printf hi > hello.txt`")
+        );
+        let mut s = row(Backend::Tmux);
+        apply_approval(&mut s, &trig, |_| {
+            Ok("✔ You approved codex to run printf hi".into())
+        });
+        assert_eq!((s.status.as_str(), s.waiting_for), ("busy", None));
+        // iTerm without the hook: no osascript, busy.
+        let mut s = row(Backend::Iterm);
+        apply_approval(&mut s, &trig, |_| panic!("no peek"));
+        assert_eq!(s.status, "busy");
     }
 }

@@ -36,7 +36,7 @@ pub fn run(cmd: &CodexCmd) -> Result<()> {
         HooksAction::Install => install(&home),
         HooksAction::Uninstall => uninstall(&home),
         HooksAction::Status { json } => {
-            let st = codex_hooks::status(&home, &exe()?)?;
+            let st = codex_hooks::status(&home, &exe()?, &codex_hooks::sidecar_dir())?;
             if *json {
                 println!("{}", serde_json::to_string_pretty(&st)?);
             } else {
@@ -63,7 +63,7 @@ fn exe() -> Result<PathBuf> {
 }
 
 /// Verified on Codex 0.166: the app-server daemon applies a new hooks.json to sessions
-/// started after it, without a restart (docs/notes/codex-0166-findings.md).
+/// started after it, without a restart (docs/codex-findings.md).
 const RUNNING_NOTE: &str = "Codex sessions already running keep the hooks they started with; new ones (daemon or embedded) get it.";
 
 fn install(home: &std::path::Path) -> Result<()> {
@@ -125,12 +125,16 @@ fn print_status(st: &Status) {
         );
     }
     for (event, v) in &st.events {
-        let line = if v["trusted"] != true {
-            "not trusted yet — start `codex` and accept the review"
-        } else if v["enabled"] == false {
-            "disabled in `/hooks`"
-        } else {
-            "trusted, enabled"
+        let line = match v["trust"].as_str() {
+            Some("stale") => {
+                "changed since you trusted it — Codex asks for a review at its next start; accept it"
+            }
+            Some("trusted" | "unverified") if v["enabled"] == false => "disabled in `/hooks`",
+            Some("trusted") => "trusted, enabled",
+            Some("unverified") => {
+                "trusted, enabled (unverified: no install record to date the trust by — if Codex asks for a review, accept it)"
+            }
+            _ => "not trusted yet — start `codex` and accept the review",
         };
         println!("  {event}: {line}");
     }

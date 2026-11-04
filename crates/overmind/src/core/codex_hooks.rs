@@ -5,17 +5,19 @@
 //! `"async": true`: Codex 0.166 shows the approval menu without waiting for it and ignores
 //! its output and exit code. A sync `PermissionRequest` hook that exits 2 (clap's exit for
 //! an unknown subcommand, i.e. an overmind without `_codex-hook` at that path) or prints a
-//! `decision` denies for the user — `docs/notes/codex-0166-findings.md` §4.
+//! `decision` denies for the user — `docs/codex-findings.md` §4.
 //!
 //! Sidecar (`$OVERMIND_CODEX_HOOKS_DIR`, else
 //! `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks/<session_id>.json`, v1):
 //! `{ v, thread_id, turn_id, transcript_path, state: "waiting"|"clear", event, tool,
-//! command, reason, cwd, at }`. Written as `<id>.json.tmp`, then renamed.
+//! command, reason, cwd, at }`. Written 0600 to a per-process `<id>.json.<pid>.<nonce>.tmp`,
+//! then renamed (two sub-agents asking at once both write their parent's sidecar).
+//! `install` also leaves `.install.json` there: what it wrote and the trust it found, so
+//! `status` can tell a stale trust entry from a fresh one.
 //!
 //! A sidecar (or a pending escalated call in the rollout) only *triggers* a look at the
 //! terminal: discovery reads `waiting` off the screen ([`screen_shows_approval`]). Codex
-//! persists nothing for a pending approval, in either mode — see
-//! `docs/notes/codex-0166-findings.md`.
+//! persists nothing for a pending approval, in either mode — see `docs/codex-findings.md`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -24,7 +26,6 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{Error, Result};
 
-/// The hidden subcommand Codex runs.
 pub const HOOK_ARG: &str = "_codex-hook";
 /// The events we hook, as hooks.json names them and as `[hooks.state]` keys spell them.
 pub const EVENTS: [(&str, &str); 3] = [
@@ -41,18 +42,19 @@ pub const SIDECAR_VERSION: u64 = 1;
 
 // ------------------------------------------------------------------ paths
 
-/// Where sidecars live: `$OVERMIND_CODEX_HOOKS_DIR`, else the overmind state dir.
+/// Where sidecars live: `$OVERMIND_CODEX_HOOKS_DIR` (as given, like the web watcher reads
+/// it), else `<state dir>/codex-hooks`. The hook resolves it in *Codex's* environment — in
+/// daemon mode the app-server daemon's — so a daemon started without the shell's
+/// `XDG_STATE_HOME` / `OVERMIND_CODEX_HOOKS_DIR` writes where `list` does not read.
 pub fn sidecar_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("OVERMIND_CODEX_HOOKS_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
-    std::env::var_os("XDG_STATE_HOME")
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/state"))
-        .join("overmind")
-        .join("codex-hooks")
+    crate::core::tools::state_dir().join("codex-hooks")
 }
+
+/// `install`'s record, beside the sidecars (a dotfile: the watcher and prune skip it).
+const INSTALL_RECORD: &str = ".install.json";
 
 pub fn hooks_path(codex_home: &Path) -> PathBuf {
     codex_home.join("hooks.json")
@@ -142,12 +144,15 @@ fn ensure_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn write_sidecar(dir: &Path, id: &str, sidecar: &Value) -> std::io::Result<()> {
-    ensure_dir(dir)?;
-    let path = dir.join(format!("{id}.json"));
-    let tmp = dir.join(format!("{id}.json.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec(sidecar)?)?;
-    std::fs::rename(&tmp, &path)
+pub fn write_sidecar(dir: &Path, id: &str, sidecar: &Value) -> Result<()> {
+    crate::core::brief::write_private(&dir.join(format!("{id}.json")), &sidecar.to_string())
+}
+
+/// A file `uninstall` and prune may delete: a sidecar, the install record, a temp file.
+fn is_ours(name: &str) -> bool {
+    name == INSTALL_RECORD
+        || name.ends_with(".tmp")
+        || name.strip_suffix(".json").is_some_and(safe_id)
 }
 
 // ------------------------------------------------------------------ sidecar read side
@@ -194,17 +199,21 @@ pub fn read_sidecar(dir: &Path, thread_id: &str) -> Option<Sidecar> {
     parse_sidecar(&text).filter(|s| s.thread_id == thread_id)
 }
 
-/// Housekeeping in `list`: sidecars of threads no live row has, older than `max_age_ms`.
+/// Housekeeping in `list`: sidecars of threads no live row has and temp files a killed
+/// hook left, older than `max_age_ms`.
 pub fn prune_sidecars(dir: &Path, live: &[&str], max_age_ms: i64, now: i64) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(id) = name.strip_suffix(".json") else {
+        if name == INSTALL_RECORD || !is_ours(&name) {
             continue;
-        };
-        if live.contains(&id) {
+        }
+        if name
+            .strip_suffix(".json")
+            .is_some_and(|id| live.contains(&id))
+        {
             continue;
         }
         let age = e
@@ -387,11 +396,11 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
             }
             ("response_item", "custom_tool_call_output") => {
                 let id = p.get("call_id").and_then(Value::as_str);
-                if pending
-                    .as_ref()
-                    .is_some_and(|(c, _, _)| Some(c.as_str()) == id)
-                {
-                    pending = None;
+                if let Some((_, cmd, _)) = pending.take_if(|(c, _, _)| Some(c.as_str()) == id) {
+                    // Denied, or the whole exec script done: the sidecar's command is over.
+                    if after_sidecar && cmd.is_some() && sidecar.is_some_and(|s| s.command == cmd) {
+                        sidecar_ran = true;
+                    }
                 }
             }
             ("event_msg", "item_completed") => {
@@ -434,17 +443,38 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
     })
 }
 
-/// Is the terminal showing Codex's approval menu? Both its first line and its footer
-/// within the last 40 lines: `✔ You approved …` shares neither, and a stale menu in the
-/// scrollback has lost its footer to the next screen.
+/// Is the terminal showing Codex's approval menu? Its first line, an option `1.` and its
+/// footer, in that order, within the last 40 non-blank-padded lines: `✔ You approved …`
+/// has none of them, a stale menu in the scrollback has lost its footer to the next screen,
+/// and output that merely quotes the two strings (a `cat` of this file) has no option line
+/// between them.
 pub fn screen_shows_approval(screen: &str) -> bool {
-    let lines: Vec<&str> = screen.lines().collect();
+    let mut lines: Vec<&str> = screen.lines().collect();
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
     let tail = &lines[lines.len().saturating_sub(40)..];
-    let last = |pat: &str| tail.iter().rposition(|l| l.contains(pat));
-    matches!(
-        (last("Would you like to run"), last("Press enter to confirm")),
-        (Some(a), Some(b)) if a < b
-    )
+    let Some(foot) = tail
+        .iter()
+        .rposition(|l| l.contains("Press enter to confirm"))
+    else {
+        return false;
+    };
+    let Some(head) = tail[..foot]
+        .iter()
+        .rposition(|l| l.contains("Would you like to run"))
+    else {
+        return false;
+    };
+    tail[head + 1..foot].iter().any(|l| is_first_option(l))
+}
+
+/// `› 1. …` or `  1. …`: the first option of a menu.
+fn is_first_option(l: &str) -> bool {
+    let l = l.trim_start();
+    let l = l.strip_prefix('›').map_or(l, str::trim_start);
+    l.strip_prefix("1.")
+        .is_some_and(|r| r.starts_with(char::is_whitespace))
 }
 
 /// The `$ <cmd>` line of the menu on screen (its first line).
@@ -464,7 +494,7 @@ pub fn screen_command(screen: &str) -> Option<String> {
 pub enum Look {
     /// tmux: one `capture-pane`, cheap — any trigger.
     Cheap,
-    /// iTerm: one osascript (0.1–0.3 s) — only when the hook said so.
+    /// iTerm: one osascript (0.1–0.3 s) — only while the hook's command has not run.
     Costly,
     /// No backend: nothing to peek.
     None,
@@ -482,7 +512,9 @@ pub fn truth(
         _ => trig.label.clone(),
     };
     match look {
-        Look::Cheap | Look::Costly if look == Look::Cheap || trig.sidecar => {
+        // Costly only while the sidecar's command has not run: answered, the menu is gone for
+        // the rest of the turn, and Codex fires no hook to say so.
+        Look::Cheap | Look::Costly if look == Look::Cheap || trig.sidecar_unresolved => {
             let screen = peek().ok()?;
             screen_shows_approval(&screen)
                 .then(|| label(screen_command(&screen).or_else(|| trig.command.clone())))
@@ -681,6 +713,10 @@ fn write_guarded(path: &Path, before: Option<&[u8]>, doc: &Value) -> Result<()> 
     let mut text = serde_json::to_string_pretty(doc)?;
     text.push('\n');
     std::fs::write(&tmp, text)?;
+    // The user's mode (0600, read-only on purpose) survives the replace.
+    if let Ok(m) = std::fs::metadata(&target) {
+        let _ = std::fs::set_permissions(&tmp, m.permissions());
+    }
     let now = std::fs::read(&target).ok();
     if now.as_deref() != before {
         let _ = std::fs::remove_file(&tmp);
@@ -704,7 +740,8 @@ pub enum Installed {
     },
 }
 
-/// Install into `codex_home`; `sidecars` (see [`sidecar_dir`]) is created so a watcher can arm.
+/// Install into `codex_home`; `sidecars` (see [`sidecar_dir`]) is created so a watcher can
+/// arm, and gets the install record [`status`] reads.
 pub fn install(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Installed> {
     let path = hooks_path(codex_home);
     let (bytes, doc) = read_doc(&path)?;
@@ -715,7 +752,31 @@ pub fn install(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Install
         return Ok(Installed::AlreadyInstalled);
     }
     let old = installed_binary(&doc);
+    // The trust entries at our keys *before* Codex has seen this hook: one still there at
+    // `status` time predates it.
+    let config = std::fs::read_to_string(codex_home.join("config.toml")).unwrap_or_default();
+    let trust: Map<String, Value> = our_keys(&path, &new)
+        .into_iter()
+        .flat_map(|(_, keys)| keys)
+        .map(|k| {
+            let hash = hook_state(&config, &k).and_then(|st| st.hash);
+            (k, hash.map_or(Value::Null, Value::String))
+        })
+        .collect();
+    // Keys where our hook was already: its content changed (another binary, sync → async).
+    let rewrote: Vec<String> = our_keys(&path, &doc)
+        .into_iter()
+        .flat_map(|(_, keys)| keys)
+        .collect();
     write_guarded(&path, bytes.as_deref(), &new)?;
+    let record = json!({
+        "v": 1,
+        "at": now_ms(),
+        "command": cmd,
+        "rewrote": rewrote,
+        "trust": trust,
+    });
+    let _ = crate::core::brief::write_private(&sidecars.join(INSTALL_RECORD), &record.to_string());
     Ok(match old {
         Some(old) if old != exe.to_string_lossy() => Installed::Rewritten { old },
         _ => Installed::Fresh,
@@ -723,6 +784,8 @@ pub fn install(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Install
 }
 
 /// What `uninstall` did: whether anything was removed, and whether a user group shifted.
+/// Deletes only our files in `sidecars` (it may be a dir the user chose), and the dir when
+/// that leaves it empty.
 pub fn uninstall(codex_home: &Path, sidecars: &Path) -> Result<(bool, bool)> {
     let path = hooks_path(codex_home);
     let (bytes, doc) = read_doc(&path)?;
@@ -730,8 +793,15 @@ pub fn uninstall(codex_home: &Path, sidecars: &Path) -> Result<(bool, bool)> {
     if new != doc {
         write_guarded(&path, bytes.as_deref(), &new)?;
     }
-    if sidecars.is_dir() {
-        let _ = std::fs::remove_dir_all(sidecars);
+    if let Ok(rd) = std::fs::read_dir(sidecars) {
+        for e in rd.flatten() {
+            let ours = e.file_type().is_ok_and(|t| t.is_file())
+                && is_ours(&e.file_name().to_string_lossy());
+            if ours {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        let _ = std::fs::remove_dir(sidecars);
     }
     Ok((new != doc, shifted))
 }
@@ -753,11 +823,21 @@ pub fn installed_binary(doc: &Value) -> Option<String> {
 // ------------------------------------------------------------------ status
 
 /// Trust of one hook, from `config.toml`'s `[hooks.state."<path>:<event>:<group>:<hook>"]`.
+///
+/// `trusted_hash` is Codex's hash of the hook, which overmind does not reproduce, so `trust`
+/// says how much the entry is worth:
+/// - `"untrusted"`: no entry — Codex asks for a review at its next start;
+/// - `"stale"`: the entry `install` found when it rewrote our hook in place is still there —
+///   it is for the old hook, Codex asks for a review again (`trusted` false);
+/// - `"trusted"`: an entry written after the install;
+/// - `"unverified"`: an entry, but nothing to date it by (installed by an overmind that kept no
+///   record, or one reinstalled at a key an earlier identical hook had) — likely trusted.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct EventState {
     pub installed: bool,
     pub trusted: bool,
     pub enabled: bool,
+    pub trust: &'static str,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -780,13 +860,23 @@ pub struct Status {
     pub events: Map<String, Value>,
 }
 
+/// One `[hooks.state."<key>"]` table of `config.toml`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookState {
+    pub hash: Option<String>,
+    pub enabled: bool,
+}
+
 /// The `trusted_hash` / `enabled` of one `[hooks.state."<key>"]` table: a line scanner for
 /// that one shape, not a TOML parser. None when the table is absent.
-pub fn hook_state(config: &str, key: &str) -> Option<(bool, bool)> {
+pub fn hook_state(config: &str, key: &str) -> Option<HookState> {
     let header = format!("[hooks.state.\"{key}\"]");
     let mut lines = config.lines().skip_while(|l| l.trim() != header);
     lines.next()?;
-    let (mut trusted, mut enabled) = (false, true);
+    let mut st = HookState {
+        hash: None,
+        enabled: true,
+    };
     for l in lines {
         let l = l.trim();
         if l.starts_with('[') {
@@ -797,12 +887,40 @@ pub fn hook_state(config: &str, key: &str) -> Option<(bool, bool)> {
         };
         let v = v.trim().trim_matches('"');
         match k.trim() {
-            "trusted_hash" => trusted = !v.is_empty(),
-            "enabled" => enabled = v != "false",
+            "trusted_hash" => st.hash = Some(v.to_string()).filter(|v| !v.is_empty()),
+            "enabled" => st.enabled = v != "false",
             _ => {}
         }
     }
-    Some((trusted, enabled))
+    Some(st)
+}
+
+/// Per event: the `[hooks.state]` keys our hook in `doc` (loaded from `path`) would have —
+/// Codex keys trust by the path it loaded the file from, so the canonical one and `path`.
+/// An event without our hook is left out.
+fn our_keys(path: &Path, doc: &Value) -> Vec<(&'static str, Vec<String>)> {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut paths = vec![abs.display().to_string()];
+    if path != abs {
+        paths.push(path.display().to_string());
+    }
+    EVENTS
+        .iter()
+        .filter_map(|(event, snake)| {
+            let groups = doc.get("hooks")?.get(event)?.as_array()?;
+            let gi = our_group(groups)?;
+            let hi = groups[gi]
+                .get("hooks")
+                .and_then(Value::as_array)
+                .and_then(|hs| hs.iter().position(hook_is_ours))
+                .unwrap_or(0);
+            let keys = paths
+                .iter()
+                .map(|p| format!("{p}:{snake}:{gi}:{hi}"))
+                .collect();
+            Some((*snake, keys))
+        })
+        .collect()
 }
 
 /// The daemon's pid and start (ms) from `$CODEX_HOME/app-server-daemon/daemon.pid`.
@@ -826,41 +944,66 @@ fn pid_alive(pid: i64) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-pub fn status(codex_home: &Path, exe: &Path) -> Result<Status> {
+/// The trust of one installed hook, given its `[hooks.state]` entry and `install`'s record.
+fn trust_of(key: &str, state: Option<&HookState>, record: Option<&Value>) -> &'static str {
+    let Some(hash) = state.and_then(|s| s.hash.as_deref()) else {
+        return "untrusted";
+    };
+    let Some(r) = record else {
+        return "unverified";
+    };
+    match r.get("trust").and_then(|t| t.get(key)) {
+        // Unchanged since install: for the hook before it, or one it rewrote.
+        Some(Value::String(old)) if old == hash => {
+            let rewrote = r
+                .get("rewrote")
+                .and_then(Value::as_array)
+                .is_some_and(|ks| ks.iter().any(|k| k.as_str() == Some(key)));
+            if rewrote { "stale" } else { "unverified" }
+        }
+        Some(_) => "trusted",
+        None => "unverified",
+    }
+}
+
+pub fn status(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Status> {
     let path = hooks_path(codex_home);
     let (_, doc) = read_doc(&path)?;
-    let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
     let config = std::fs::read_to_string(codex_home.join("config.toml")).unwrap_or_default();
+    let record = std::fs::read_to_string(sidecars.join(INSTALL_RECORD))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .filter(|r| {
+            r.get("command").and_then(Value::as_str).is_some_and(|c| {
+                installed_binary(&doc).is_some_and(|b| our_binary(c).as_deref() == Some(&*b))
+            })
+        });
+    let keys: std::collections::HashMap<_, _> = our_keys(&path, &doc).into_iter().collect();
     let mut events = Map::new();
     let mut all = true;
-    for (event, snake) in EVENTS {
-        let groups = doc
-            .get("hooks")
-            .and_then(|h| h.get(event))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let st = match our_group(&groups) {
-            Some(gi) => {
-                let hi = groups[gi]
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .and_then(|hs| hs.iter().position(hook_is_ours))
-                    .unwrap_or(0);
-                // Codex keys the trust by the path it loaded the file from.
-                let (trusted, enabled) = [abs.display().to_string(), path.display().to_string()]
+    for (_, snake) in EVENTS {
+        let st = match keys.get(snake) {
+            Some(keys) => {
+                let found = keys
                     .iter()
-                    .find_map(|p| hook_state(&config, &format!("{p}:{snake}:{gi}:{hi}")))
-                    .unwrap_or((false, true));
+                    .find_map(|k| hook_state(&config, k).map(|st| (k, st)));
+                let trust = match &found {
+                    Some((k, st)) => trust_of(k, Some(st), record.as_ref()),
+                    None => "untrusted",
+                };
                 EventState {
                     installed: true,
-                    trusted,
-                    enabled,
+                    trusted: matches!(trust, "trusted" | "unverified"),
+                    enabled: found.as_ref().is_none_or(|(_, st)| st.enabled),
+                    trust,
                 }
             }
             None => {
                 all = false;
-                EventState::default()
+                EventState {
+                    trust: "untrusted",
+                    ..Default::default()
+                }
             }
         };
         events.insert(snake.to_string(), serde_json::to_value(st)?);
@@ -949,7 +1092,23 @@ mod tests {
         assert_eq!(names, vec![format!("{id}.json")]);
         assert!(read_sidecar(dir.path(), &id).unwrap().waiting);
         assert!(read_sidecar(dir.path(), "missing").is_none());
-        // Garbage, oversize, an unwritable dir: no panic, no output (handle_hook returns ()).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join(format!("{id}.json")))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "a command can hold a secret");
+            // An unwritable dir: an error, no panic, no file.
+            let ro = dir.path().join("ro");
+            std::fs::create_dir(&ro).unwrap();
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o500)).unwrap();
+            assert!(write_sidecar(&ro, &id, &sc).is_err());
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(std::fs::read_dir(&ro).unwrap().count(), 0);
+        }
+        // Garbage, oversize: no panic, no output (handle_hook returns ()).
         handle_hook(&b"{not json"[..]);
         handle_hook(std::io::repeat(b' ').take(MAX_PAYLOAD + 10));
     }
@@ -957,15 +1116,27 @@ mod tests {
     #[test]
     fn prune_drops_only_old_sidecars_of_threads_no_row_has() {
         let dir = tempfile::tempdir().unwrap();
-        for id in ["live", "dead"] {
-            std::fs::write(dir.path().join(format!("{id}.json")), "{}").unwrap();
+        for name in [
+            "live.json",
+            "dead.json",
+            "dead.json.123.0000abcd.tmp",
+            INSTALL_RECORD,
+            "notes.txt",
+        ] {
+            std::fs::write(dir.path().join(name), "{}").unwrap();
         }
         let now = now_ms();
         prune_sidecars(dir.path(), &["live"], 3_600_000, now);
         assert!(dir.path().join("dead.json").exists(), "young: kept");
         prune_sidecars(dir.path(), &["live"], -1, now + 10);
         assert!(!dir.path().join("dead.json").exists());
-        assert!(dir.path().join("live.json").exists());
+        assert!(
+            !dir.path().join("dead.json.123.0000abcd.tmp").exists(),
+            "a killed hook's temp file"
+        );
+        for kept in ["live.json", INSTALL_RECORD, "notes.txt"] {
+            assert!(dir.path().join(kept).exists(), "{kept}");
+        }
     }
 
     #[test]
@@ -1086,11 +1257,53 @@ mod tests {
             let err = write_guarded(&path, bytes.as_deref(), &doc).unwrap_err();
             assert!(err.to_string().contains("changed underneath"), "{err}");
             std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+            assert!(state.join(INSTALL_RECORD).exists());
             assert_eq!(uninstall(home.path(), &state).unwrap(), (true, false));
             assert_eq!(read_doc(&path).unwrap().1, user_doc());
-            assert!(!state.exists());
+            assert!(!state.exists(), "only ours in it: removed");
             assert_eq!(uninstall(home.path(), &state).unwrap(), (false, false));
         }
+    }
+
+    #[test]
+    fn uninstall_leaves_a_user_chosen_dir_and_its_other_files_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let shared = home.path().join("shared");
+        std::fs::create_dir_all(shared.join("sub")).unwrap();
+        std::fs::write(shared.join("keep.txt"), "x").unwrap();
+        std::fs::write(shared.join("sub/also.json"), "{}").unwrap();
+        std::fs::write(shared.join("not an id.json"), "{}").unwrap();
+        let exe = Path::new("/bin/overmind");
+        install(home.path(), exe, &shared).unwrap();
+        let (id, sc) = sidecar_from_payload(&payload("PermissionRequest"), 1).unwrap();
+        write_sidecar(&shared, &id, &sc).unwrap();
+        std::fs::write(shared.join("x.json.9.tmp"), "").unwrap();
+        uninstall(home.path(), &shared).unwrap();
+        let mut left: Vec<_> = std::fs::read_dir(&shared)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["keep.txt", "not an id.json", "sub"]);
+        assert!(shared.join("sub/also.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_keeps_the_mode_of_the_users_hooks_json() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let path = hooks_path(home.path());
+        std::fs::write(&path, "{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        install(
+            home.path(),
+            Path::new("/bin/overmind"),
+            &home.path().join("s"),
+        )
+        .unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
@@ -1111,11 +1324,17 @@ x = 1
 "#;
         assert_eq!(
             hook_state(cfg, "/h/hooks.json:permission_request:0:0"),
-            Some((true, true))
+            Some(HookState {
+                hash: Some("sha256:abc".into()),
+                enabled: true
+            })
         );
         assert_eq!(
             hook_state(cfg, "/h/hooks.json:stop:1:0"),
-            Some((true, false))
+            Some(HookState {
+                hash: Some("sha256:def".into()),
+                enabled: false
+            })
         );
         assert_eq!(hook_state(cfg, "/h/hooks.json:stop:0:0"), None);
 
@@ -1143,21 +1362,75 @@ x = 1
             ),
         )
         .unwrap();
-        let st = status(home.path(), exe).unwrap();
+        let no_record = home.path().join("no-record");
+        let st = status(home.path(), exe, &no_record).unwrap();
         assert!(st.installed);
         assert!(st.binary_matches);
         assert_eq!(st.events["permission_request"]["trusted"], true);
+        assert_eq!(
+            st.events["permission_request"]["trust"], "unverified",
+            "a hash, but no install record to date it by"
+        );
         assert_eq!(st.events["stop"]["trusted"], true);
         assert_eq!(st.events["stop"]["enabled"], false);
         assert_eq!(st.events["user_prompt_submit"]["trusted"], false);
+        assert_eq!(st.events["user_prompt_submit"]["trust"], "untrusted");
         let d = st.daemon.unwrap();
         assert!(d.older_than_hooks);
         assert_eq!(d.started_at, Some(1_000_000));
         assert!(
-            !status(home.path(), Path::new("/other"))
+            !status(home.path(), Path::new("/other"), &no_record)
                 .unwrap()
                 .binary_matches
         );
+    }
+
+    #[test]
+    fn a_hook_install_rewrote_is_stale_until_codex_rehashes_it() {
+        let home = tempfile::tempdir().unwrap();
+        let sidecars = home.path().join("sidecars");
+        let path = hooks_path(home.path());
+        // A sync hook from an earlier install, trusted as such.
+        let cmd = hook_command(Path::new("/bin/overmind"));
+        let sync = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": cmd, "timeout": 5}]}]}});
+        std::fs::write(&path, sync.to_string()).unwrap();
+        let a = std::fs::canonicalize(&path).unwrap().display().to_string();
+        let cfg = |stop: &str| {
+            format!(
+                "[hooks.state.\"{a}:stop:0:0\"]\ntrusted_hash = \"{stop}\"\n\n\
+                 [hooks.state.\"{a}:permission_request:0:0\"]\ntrusted_hash = \"sha256:pr\"\n"
+            )
+        };
+        std::fs::write(home.path().join("config.toml"), cfg("sha256:old")).unwrap();
+        install(home.path(), Path::new("/bin/overmind"), &sidecars).unwrap();
+        let st = status(home.path(), Path::new("/bin/overmind"), &sidecars).unwrap();
+        assert_eq!(
+            st.events["stop"]["trust"], "stale",
+            "sync → async: new hash"
+        );
+        assert_eq!(st.events["stop"]["trusted"], false);
+        // An entry that predates a *fresh* hook at its key (an earlier, maybe identical one).
+        assert_eq!(st.events["permission_request"]["trust"], "unverified");
+        assert_eq!(st.events["user_prompt_submit"]["trust"], "untrusted");
+        // The user accepts the review: Codex writes new hashes.
+        std::fs::write(home.path().join("config.toml"), cfg("sha256:new")).unwrap();
+        let st = status(home.path(), Path::new("/bin/overmind"), &sidecars).unwrap();
+        assert_eq!(st.events["stop"]["trust"], "trusted");
+        assert_eq!(st.events["stop"]["trusted"], true);
+        // A record from another binary's install dates nothing.
+        install(home.path(), Path::new("/new/overmind"), &sidecars).unwrap();
+        std::fs::write(
+            hooks_path(home.path()),
+            merged(
+                &read_doc(&path).unwrap().1,
+                &hook_command(Path::new("/bin/overmind")),
+            )
+            .unwrap()
+            .to_string(),
+        )
+        .unwrap();
+        let st = status(home.path(), Path::new("/bin/overmind"), &sidecars).unwrap();
+        assert_eq!(st.events["stop"]["trust"], "unverified");
     }
 
     // ---- read side. Lines modelled on Codex 0.166's real rollout (instructions, ids and
@@ -1306,6 +1579,14 @@ x = 1
             !screen_shows_approval(&scrolled),
             "a menu scrolled away is gone"
         );
+        let padded = format!("{}{}", "• earlier\n".repeat(30), MENU) + &"\n".repeat(40);
+        assert!(
+            screen_shows_approval(&padded),
+            "capture-pane pads to the pane's height"
+        );
+        // Output that quotes both strings (a `cat` of this file) has no option line between.
+        let quoted = "• Ran cat questions.mjs\n  // Would you like to run the following command?\n  //   $ printf hi\n  // Press enter to confirm or esc to cancel\n› Ask Codex to do anything\n";
+        assert!(!screen_shows_approval(quoted));
         assert_eq!(
             screen_command(MENU).as_deref(),
             Some("printf hi > hello.txt")
@@ -1355,5 +1636,22 @@ x = 1
             ..hooked
         };
         assert_eq!(truth(&ran, Look::None, || panic!()), None);
+        assert_eq!(
+            truth(&ran, Look::Costly, || panic!(
+                "no osascript for the rest of the turn once the command ran"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn a_denied_or_finished_exec_call_resolves_the_sidecar() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-11-04T17:52:45.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let s = sc(true, at, Some("printf hi > hello.txt"));
+        // OUT_A: call_a's output, after the sidecar, no item_completed (denied).
+        let t = trigger(&text(&[STARTED, L17, OUT_A]), Some(&s), 0).unwrap();
+        assert!(t.sidecar && !t.sidecar_unresolved && !t.rollout);
     }
 }

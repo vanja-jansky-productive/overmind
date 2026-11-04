@@ -642,7 +642,9 @@ enum Commands {
     #[command(name = "_probe", hide = true)]
     Probe,
 
-    /// Codex's hook entry point: event JSON on stdin → a sidecar file; prints nothing (internal)
+    /// Codex's hook entry point: event JSON on stdin → a sidecar file; prints nothing (internal).
+    /// `main()` runs it before clap; this variant only keeps the name out of clap's
+    /// "unrecognized subcommand" (exit 2) for `overmind <global flag> _codex-hook`.
     #[command(name = "_codex-hook", hide = true)]
     CodexHook,
 }
@@ -2093,7 +2095,9 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
         }
         Commands::Codex { cmd } => codex_cmd::run(&cmd)?,
         Commands::Probe => host_cmds::probe()?,
-        Commands::CodexHook => overmind::core::codex_hooks::handle_hook(std::io::stdin().lock()),
+        // `main()` handles `overmind _codex-hook` (the only form `install` writes); with a global
+        // flag before it, do nothing and exit 0 like the hook does on any error.
+        Commands::CodexHook => {}
     }
     Ok(0)
 }
