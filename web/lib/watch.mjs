@@ -171,6 +171,7 @@ export function createDiscoveryWatcher({
     try {
       if (root.compare) contents.set(root.id, read(path.join(root.dir, root.file)));
       const w = watch(root.dir, { recursive: Boolean(root.recursive), persistent: false }, (_type, filename) => {
+        if (filename != null && String(filename) === path.basename(root.dir)) return rootChanged(root, w);
         const cls = classify(root, filename);
         if (cls) emit(cls);
       });
@@ -189,6 +190,23 @@ export function createDiscoveryWatcher({
       if (err?.code !== 'ENOENT') failed.set(root.id, String(err?.message ?? err));
       return false;
     }
+  }
+
+  /**
+   * An event named after the watched dir itself: the root was removed, renamed or replaced
+   * (`rm -rf ~/.claude/sessions` reports only this — no per-file events). Its watcher is closed
+   * either way and the root re-armed if it is back (a fresh watch on the new dir); while it is
+   * missing, a required root reports `degraded` and the next run's `rearm()` picks it up again.
+   * Fast: the rows it held may have gone.
+   */
+  function rootChanged(root, w) {
+    if (armed.get(root.id) !== w) return;
+    try {
+      w.close();
+    } catch {}
+    armed.delete(root.id);
+    if (!arm(root)) log(`[discovery] watch root ${root.id} is gone — falling back to the list TTL until it is back`);
+    emit('fast');
   }
 
   /** Arm every root that exists. Idempotent. */

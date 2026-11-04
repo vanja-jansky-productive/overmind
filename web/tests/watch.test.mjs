@@ -268,6 +268,41 @@ test('a watcher error → that watcher closed, degraded; rearm() restores watch'
   assert.ok(fs.open().some((x) => x.dir === dir('projects')));
 });
 
+test('the watched root itself removed (rm -rf ~/.claude/sessions) → fast, degraded, re-armed when it is back (test NIT-1)', () => {
+  const { fs, clock, changes, w } = setup();
+  w.start();
+  assert.equal(w.status().mode, 'watch');
+  const before = fs.open().find((x) => x.dir === dir('sessions'));
+  fs.dirs.delete(dir('sessions'));
+  fs.fire(dir('sessions'), 'sessions'); // FSEvents: one event named after the root, no per-file ones
+  assert.equal(before.closed, true);
+  clock.flush();
+  assert.deepEqual(changes, ['fast']);
+  const st = w.status();
+  assert.equal(st.mode, 'degraded', 'a required root that is gone is not trusted');
+  assert.equal(st.roots.find((r) => r.id === 'sessions').armed, false);
+  w.rearm(); // still gone: stays degraded, no watcher on a missing dir
+  assert.equal(w.status().mode, 'degraded');
+  fs.dirs.add(dir('sessions'));
+  w.rearm(); // the next run after it reappears
+  assert.equal(w.status().mode, 'watch');
+  assert.equal(fs.open().filter((x) => x.dir === dir('sessions')).length, 1);
+});
+
+test('the root replaced under the watcher (removed and recreated) → fast, a fresh watch on the new dir', () => {
+  const { fs, clock, changes, w } = setup();
+  w.start();
+  const before = fs.open().find((x) => x.dir === dir('sessions'));
+  fs.fire(dir('sessions'), 'sessions'); // the dir exists again by the time the event lands
+  assert.equal(before.closed, true);
+  const now = fs.open().filter((x) => x.dir === dir('sessions'));
+  assert.equal(now.length, 1);
+  assert.notEqual(now[0], before);
+  clock.flush();
+  assert.deepEqual(changes, ['fast']);
+  assert.equal(w.status().mode, 'watch');
+});
+
 test('stop() closes everything; warm → idle → warm cycles keep the watcher count constant', () => {
   const { fs, w } = setup();
   for (let i = 0; i < 3; i++) {
