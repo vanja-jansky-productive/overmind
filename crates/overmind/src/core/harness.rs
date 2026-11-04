@@ -8,6 +8,9 @@
 //! - **Codex** — `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<stamp>-<id>.jsonl` (default
 //!   `~/.codex`); the first line is `session_meta` with `id` and `cwd`. A turn runs from
 //!   `task_started` to `task_complete` / `turn_aborted`; an `*_approval_request` waits.
+//!   A turn left open by a crashed TUI (started before the current process, nothing
+//!   written since) is idle. Sub-agent threads (`session_meta.payload.thread_source:
+//!   "subagent"`) write their own rollout in the parent's cwd; they are never a session.
 //! - **pi** — `~/.pi/agent/sessions/--<cwd with / as ->--/<stamp>_<id>.jsonl`; the first
 //!   line is `{ type: "session", id, cwd }`. Busy while the last message is the user's, a
 //!   tool result or an assistant turn that stopped for a tool call.
@@ -870,7 +873,16 @@ fn transcript_ref(h: Harness, path: &Path) -> Option<TranscriptRef> {
     let head: Value = serde_json::from_str(&first_line(path)?).ok()?;
     let meta = match h {
         Harness::Codex => {
-            (head.get("type")?.as_str()? == "session_meta").then_some(head.get("payload")?)?
+            let meta =
+                (head.get("type")?.as_str()? == "session_meta").then_some(head.get("payload")?)?;
+            // A `spawn_agent` child: same cwd as its parent, created mid-turn, so it
+            // would win the parent's process. Codex before 0.166 has no thread_source.
+            let sub = meta.get("thread_source").and_then(Value::as_str) == Some("subagent")
+                || meta.get("source").and_then(|s| s.get("subagent")).is_some();
+            if sub {
+                return None;
+            }
+            meta
         }
         Harness::Pi => (head.get("type")?.as_str()? == "session").then_some(&head)?,
         Harness::Claude => return None,
@@ -1047,18 +1059,55 @@ fn tail(path: &Path, max: u64) -> Option<String> {
     })
 }
 
-pub fn state(h: Harness, path: &Path) -> State {
-    let Some(text) = tail(path, 512 * 1024) else {
+/// The state of the session `t` belongs to, for a process started at `proc_start_ms`.
+pub fn state(h: Harness, t: &TranscriptRef, proc_start_ms: i64) -> State {
+    let Some(text) = tail(&t.path, 512 * 1024) else {
         return State {
             status: "idle".into(),
             ..Default::default()
         };
     };
     match h {
-        Harness::Codex => codex_state(&text),
+        Harness::Codex => {
+            let mut st = codex_state(&text);
+            if st.status == "busy" && codex_turn_is_stale(&text, t.mtime_ms, proc_start_ms) {
+                st.status = "idle".into();
+            }
+            st
+        }
         Harness::Pi => pi_state(&text),
         Harness::Claude => State::default(),
     }
+}
+
+/// ps `etime` has whole seconds, so a process's start is known to about a second.
+const START_SLACK_MS: i64 = 2000;
+
+/// An open turn a previous TUI left behind: an embedded-mode Codex killed mid-turn
+/// never writes `task_complete` / `turn_aborted`, and `codex resume` does not close it.
+/// Stale when the turn started before this process and the rollout has not been written
+/// since — a daemon-mode turn the new TUI reattached to keeps writing, so stays busy.
+fn codex_turn_is_stale(text: &str, mtime_ms: i64, proc_start_ms: i64) -> bool {
+    let before = proc_start_ms - START_SLACK_MS;
+    if mtime_ms >= before {
+        return false;
+    }
+    let started = text.lines().rev().find_map(|line| {
+        if !line.contains("\"task_started\"") {
+            return None;
+        }
+        let v: Value = serde_json::from_str(line).ok()?;
+        let p = v.get("payload")?;
+        (v.get("type")?.as_str()? == "event_msg" && p.get("type")?.as_str()? == "task_started")
+            .then(|| {
+                iso_ms(v.get("timestamp")).or_else(|| {
+                    p.get("started_at")
+                        .and_then(Value::as_i64)
+                        .map(|s| s * 1000)
+                })
+            })
+    });
+    matches!(started, Some(Some(ms)) if ms < before)
 }
 
 fn codex_state(text: &str) -> State {
@@ -1533,6 +1582,119 @@ mod tests {
         let c = st.context.unwrap();
         assert_eq!((c.used, c.window, c.pct), (25840, 258400, 10));
         assert_eq!(st.model.as_deref(), Some("gpt-6"));
+    }
+
+    /// A Codex 0.166 `session_meta` line (from a real rollout, instructions dropped).
+    fn codex_meta(id: &str, cwd: &str, ts: &str, child_of: Option<&str>) -> String {
+        let (src, extra) = match child_of {
+            None => (r#""cli","thread_source":"user""#.to_string(), String::new()),
+            Some(parent) => (
+                format!(
+                    r#"{{"subagent":{{"thread_spawn":{{"parent_thread_id":"{parent}","depth":1,"agent_path":"/root/list_files","agent_nickname":"Laplace","agent_role":null}}}}}},"thread_source":"subagent""#
+                ),
+                format!(
+                    r#","agent_nickname":"Laplace","agent_path":"/root/list_files","parent_thread_id":"{parent}","forked_from_id":"{parent}""#
+                ),
+            ),
+        };
+        format!(
+            r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"{id}","session_id":"{id}","timestamp":"{ts}","cwd":"{cwd}","originator":"codex-tui","cli_version":"0.166.0","source":{src},"history_mode":"paginated","model_provider":"openai"{extra}}}}}"#
+        )
+    }
+
+    fn codex_turn(ts: &str, kind: &str, turn: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"{kind}","turn_id":"{turn}","root_turn_id":"{turn}","started_at":1793814963,"model_context_window":475000}}}}"#
+        )
+    }
+
+    fn write_at(path: &Path, lines: &[String], mtime_ms: i64) {
+        std::fs::write(path, lines.join("\n") + "\n").unwrap();
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_modified(UNIX_EPOCH + Duration::from_millis(mtime_ms as u64))
+            .unwrap();
+    }
+
+    fn iso(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .unwrap()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    #[test]
+    fn a_codex_subagent_child_in_the_parents_cwd_is_never_a_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("sessions/2026/11/04");
+        std::fs::create_dir_all(&day).unwrap();
+        let now = now_ms();
+        let start = now - 120_000;
+        let (pid_, cid) = (
+            "01a1a7b0-6cde-7072-b218-4394de17e1c6",
+            "01a1a7b1-f44c-7c33-a609-1e2df3a9007d",
+        );
+        let parent = day.join(format!("rollout-2026-11-04T18-51-59-{pid_}.jsonl"));
+        let child = day.join(format!("rollout-2026-11-04T18-53-39-{cid}.jsonl"));
+        write_at(
+            &parent,
+            &[
+                codex_meta(pid_, "/w/repo", &iso(start + 1_000), None),
+                codex_turn(&iso(start + 40_000), "task_started", "t2"),
+            ],
+            now - 30_000,
+        );
+        // The child is newer on both counts: created mid-turn, written last.
+        write_at(
+            &child,
+            &[
+                codex_meta(cid, "/w/repo", &iso(start + 100_000), Some(pid_)),
+                codex_turn(&iso(start + 100_000), "task_started", "t2"),
+            ],
+            now - 1_000,
+        );
+        let mut p = proc_(7, "/w/repo", start);
+        p.harness = Harness::Codex;
+        let ts = transcripts(Harness::Codex, dir.path(), &[&p]);
+        assert_eq!(
+            ts.iter().map(|t| t.session_id.as_str()).collect::<Vec<_>>(),
+            [pid_]
+        );
+        assert_eq!(assign(&[&p], &ts)[&7].session_id, pid_);
+    }
+
+    #[test]
+    fn a_codex_turn_left_open_by_a_crashed_tui_is_idle() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rollout.jsonl");
+        let now = now_ms();
+        let crash = now - 600_000;
+        let lines = [
+            codex_meta("s1", "/w", &iso(crash - 60_000), None),
+            codex_turn(&iso(crash - 50_000), "task_started", "t1"),
+            codex_turn(&iso(crash - 40_000), "task_complete", "t1"),
+            // Killed mid-turn: the rollout ends at a tool call, never closed.
+            codex_turn(&iso(crash - 5_000), "task_started", "t2"),
+            r#"{"timestamp":"x","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"sleep 45"}}"#.into(),
+        ];
+        write_at(&f, &lines, crash);
+        let t = transcript_ref(Harness::Codex, &f).unwrap();
+        // `codex resume s1` a minute after the crash.
+        assert_eq!(state(Harness::Codex, &t, crash + 60_000).status, "idle");
+        // The process that wrote the turn is still the one running: busy.
+        assert_eq!(state(Harness::Codex, &t, crash - 70_000).status, "busy");
+        // A daemon-mode turn the new TUI reattached to keeps writing: busy.
+        write_at(&f, &lines, now);
+        let t = transcript_ref(Harness::Codex, &f).unwrap();
+        assert_eq!(state(Harness::Codex, &t, crash + 60_000).status, "busy");
+        // A new turn in the resumed process is busy, then idle when it ends.
+        let mut more = lines.to_vec();
+        more.push(codex_turn(&iso(now - 2_000), "task_started", "t3"));
+        write_at(&f, &more, now);
+        let t = transcript_ref(Harness::Codex, &f).unwrap();
+        assert_eq!(state(Harness::Codex, &t, crash + 60_000).status, "busy");
+        more.push(codex_turn(&iso(now - 1_000), "task_complete", "t3"));
+        write_at(&f, &more, now);
+        let t = transcript_ref(Harness::Codex, &f).unwrap();
+        assert_eq!(state(Harness::Codex, &t, crash + 60_000).status, "idle");
     }
 
     #[test]

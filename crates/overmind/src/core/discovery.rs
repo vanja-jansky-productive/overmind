@@ -464,7 +464,7 @@ fn harness_session(
         .then(|| panes.get(&format!("/dev/{}", p.tty)))
         .flatten();
     let state = t
-        .map(|t| harness::state(p.harness, &t.path))
+        .map(|t| harness::state(p.harness, t, p.start_ms))
         .unwrap_or_else(|| harness::State {
             status: "idle".into(),
             ..Default::default()

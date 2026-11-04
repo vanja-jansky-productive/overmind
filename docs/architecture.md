@@ -221,7 +221,10 @@ not exist is skipped. Each process is matched to a transcript:
 - **Codex**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, first line `session_meta` (`id`,
   `cwd`, `timestamp`); only files written to since the oldest process started are read. Names come
   from `~/.codex/session_index.jsonl` (`/rename`, or the title Codex generates) with
-  `name_source: "codex"`.
+  `name_source: "codex"`. A sub-agent thread (`spawn_agent`) writes its own rollout in the
+  parent's cwd, created mid-turn, so it would win the parent's process: a first line with
+  `payload.thread_source: "subagent"` (or `payload.source.subagent`) is skipped and never becomes a
+  session.
 - **pi**: `~/.pi/agent/sessions/--<cwd, / as ->--/*.jsonl`, first line `{ type: "session", id,
   cwd, timestamp }`; `/name` is a `session_info` entry (`name_source: "user"`).
 
@@ -234,7 +237,10 @@ Codex runs a session's shell commands through a shared app-server daemon, so in 
 
 Status from the transcript tail (512 KiB): Codex is `busy` from `task_started` until
 `task_complete` / `turn_aborted`, `waiting` on an `*_approval_request` (until anything else
-happens); pi is `busy` while the last message is the user's, a tool result, or an assistant turn
+happens). An embedded-mode Codex killed mid-turn never closes its turn, and `codex resume` does
+not either, so an open turn that started before the current process (2 s slack for `etime`) in a
+rollout not written since is `idle`; a daemon-mode turn the new TUI reattached to keeps writing and
+stays `busy`. pi is `busy` while the last message is the user's, a tool result, or an assistant turn
 that stopped for a tool call. `context` comes from Codex's last `token_count`
 (`last_token_usage.input_tokens` of `model_context_window`); pi records no window, so it is `null`.
 
