@@ -1,0 +1,20 @@
+› write the notes file
+
+• Running cat > notes.md <<EOF
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Allow writing notes.md?
+
+  $ cat > notes.md <<EOF
+  1. first
+  2. second
+  EOF
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `cat` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

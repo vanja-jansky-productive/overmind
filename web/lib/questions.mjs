@@ -246,7 +246,13 @@ export function parseCodexScreenPrompt(screen) {
   const foot = lines.findIndex((l, i) => i > head && CODEX_FOOT.test(l));
   if (foot < 0) return null;
   const block = lines.slice(head + 1, foot);
-  const firstOption = block.findIndex((l) => CODEX_OPTION.test(l));
+  // The menu's options are the last `1.` before the footer that carries the cursor or reads
+  // `Yes, …`: a heredoc in the command can hold numbered lines of its own.
+  let firstOption = -1;
+  for (let i = block.length - 1; i >= 0 && firstOption < 0; i -= 1) {
+    const m = block[i].match(CODEX_OPTION);
+    if (m && m[2] === '1' && (m[1] || /^Yes,/.test(m[3]))) firstOption = i;
+  }
   if (firstOption < 0) return null;
 
   const meta = { thread: '', reason: '' };
@@ -278,7 +284,7 @@ export function parseCodexScreenPrompt(screen) {
   let cursorAt = -1;
   for (const raw of block.slice(firstOption)) {
     const m = raw.match(CODEX_OPTION);
-    if (m) {
+    if (m && Number(m[2]) === options.length + 1) {
       if (m[1]) cursorAt = options.length;
       options.push({ label: m[3].trim(), description: '' });
     } else if (raw.trim() && options.length) {
@@ -288,6 +294,8 @@ export function parseCodexScreenPrompt(screen) {
   }
   if (options.length < 2) return null;
   for (const o of options) o.label = o.label.replace(CODEX_HOTKEY, '');
+  // Exec approvals only (phase 1a): their "don't ask again" writes a host-wide prefix rule. A
+  // session-scoped variant (non-exec approvals) would need its own description.
   const always = options.findIndex((o) => /^Yes, and don't ask again/i.test(o.label));
   if (always >= 0) {
     const prefix = options[always].label.match(/`([^`]+)`/)?.[1];

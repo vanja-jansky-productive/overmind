@@ -234,6 +234,22 @@ test("a sub-agent's request: wrapped reason, two-line command, wrapped option 2"
   assert.equal(q.options.length, 3);
 });
 
+test('a heredoc with numbered lines stays in the command; the options are the menu\'s', () => {
+  const screen = fs.readFileSync(new URL('./fixtures/codex-approval-heredoc.txt', import.meta.url), 'utf8');
+  const p = parseCodexScreenPrompt(screen);
+  const [q] = p.questions;
+  assert.equal(q.question, 'Would you like to run the following command?\n$ cat > notes.md <<EOF\n1. first\n2. second\nEOF\nReason: Allow writing notes.md?');
+  assert.deepEqual(
+    q.options.map((o) => o.label),
+    ['Yes, proceed', "Yes, and don't ask again for commands that start with `cat`", 'No, and tell Codex what to do differently'],
+  );
+  assert.equal(p.untouched, true);
+  // The cursor moved to option 2: option 1 has no ›, its `Yes,` still anchors the menu.
+  const moved = screen.replace('› 1. Yes', '  1. Yes').replace('  2. Yes, and', '› 2. Yes, and');
+  assert.equal(parseCodexScreenPrompt(moved).questions[0].options.length, 3);
+  assert.equal(parseCodexScreenPrompt(moved).untouched, false);
+});
+
 test('the cursor off option 1 is touched; the composer › is not the cursor; no menu → null', () => {
   const moved = codexScreen.replace('› 1. Yes', '  1. Yes').replace('  2. Yes, and', '› 2. Yes, and');
   assert.equal(parseCodexScreenPrompt(moved).untouched, false);
