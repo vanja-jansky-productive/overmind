@@ -26,8 +26,8 @@ phone ──http──▶ workstation:7878 (self=workstation) ──http──�
 ```
 server.mjs            wiring: config → deps → API → HTTP server → listen
 lib/config.mjs        shared overmind config loader + binary resolution
-lib/overmind-cli.mjs  the ONLY place that invokes the `overmind` CLI (`list --json`, `name --all --apply`, `usage --json`, `config set`, `--local stack … --json`, `--local restore … --json`, …)
-lib/overmind.mjs      local discovery: cache (2s TTL), in-flight de-dup, never throws
+lib/overmind-cli.mjs     the ONLY place that invokes the `overmind` CLI (`list --json`, `name --all --apply`, `usage --json`, `config set`, `--local stack … --json`, `--local restore … --json`, …)
+lib/overmind.mjs         local discovery: cache (2s TTL), in-flight de-dup, never throws
 lib/backends.mjs      peek/send/keys/screen/input straight to tmux / iTerm2 (osascript)
 lib/transcript.mjs    transcript JSONL → chat messages (Claude Code; Codex rollouts and pi sessions via the row's `transcript` path)
 lib/spawn-dirs.mjs    Settings → Start directories: validate a `spawnDirs` list, write it via `overmind config set`, hot-reload
@@ -42,6 +42,8 @@ lib/uploads.mjs       dropped/pasted files → <uploads dir>/YYYY-MM-DD/<rand>-<
 lib/files.mjs         files mentioned in chat: resolve against the session cwd (+ touched/roots fallback), $HOME/cwd sandbox, stat/kind, raw stream, open
 lib/diff.mjs          the diff reviewer: a session's worktree (incl. untracked) as a git tree via a throwaway index, diffed against the merge-base with the default branch → files/hunks/lines
 lib/reviews.mjs       the diff reviewer's comment threads: prompts with `[review c-…]` markers typed into the session (single, or drafts submitted as one review), answers read back from its transcript, one JSON file per session under <state>/overmind/reviews
+lib/asks.mjs          the diff reviewer's side questions: a read-only `claude -p` fork of the session (--resume --fork-session --no-session-persistence), streamed (stream-json) into an in-memory ask the UI polls; never typed into the session
+lib/pr-notes.mjs      the diff reviewer over a PR without a session: notes kept per PR under <state>/overmind/pr-notes (thread-shaped), one posted to GitHub as a review comment via gh, or all handed to a session as its first prompt
 lib/complete.mjs      composer autocomplete: skills/commands (built-in, user, project, enabled plugins), the cwd's .md/.plain files, brain notes (~/.brainrc)
 lib/touched.mjs       absolute paths a session's tool calls touched, parsed incrementally from its transcript (for lib/files.mjs)
 lib/brief-format.mjs  session brief file format: parse/serialise, resource + Git-line merge, model-output check, continue prompt (pure)
@@ -91,7 +93,7 @@ The server reads the **shared overmind config** written by `overmind init`:
 | `tmux` | tmux binary; `null` → PATH, `/opt/homebrew/bin`, `/usr/local/bin` |
 | `overmindBin` | `overmind` binary; `null` → PATH, fallbacks, `~/.local/bin`, `~/.cargo/bin` |
 | `claude` | launcher typed by spawn (default `claude`) |
-| `spawnDirs[]` | `{ label, paths: { <host>: dir } }` → this host offers `{ label, path: paths[self] }`; `{ label, path }` means the same dir on every host; `~` expanded; none → `[{ label: "Home", path: $HOME }]` |
+| `spawnDirs[]` | `{ label, paths: { <host>: dir }, hidden? }` → this host offers `{ label, path: paths[self] }`; `{ label, path }` means the same dir on every host; `~` expanded; none offered → `[{ label: "Home", path: $HOME }]`. `hidden: true` → not offered but allowed (`config.hiddenSpawnDirs`; the allow-list is `spawnRoots(config)` = offered + hidden) |
 
 Env overrides: `OVERMIND_CONFIG`, `OVERMIND_WEB_PORT` (or `PORT`), `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
 `OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` (`0`/`false`/`off` disables, anything else enables;
@@ -178,9 +180,10 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 | POST | `/api/hosts/:host/sessions/:id/send` | `{ text }` (1..8000 chars, not blank) | `{ ok: true }` |
 | POST | `/api/hosts/:host/sessions/:id/keys` | `{ key }`, one of `Enter`, `Escape`, `Up`, `Down` | `{ ok: true }` |
 | POST | `/api/hosts/:host/sessions/:id/rename` | `{ title }` (trimmed, 1..64 chars, one line) | `{ ok: true, host, id, result, title, from, tmux, message, … }` — the `overmind rename --json` report. **409** `{ error, result: "held", held: "waiting", … }` when the session is waiting on a prompt (nothing typed); 400 bad title; 404 unknown session; 502/504 CLI failure / timeout. Proxied once to a peer like the other session actions |
-| POST | `/api/hosts/:host/spawn` | `{ name?, dir?, prompt?, model?, harness? }` | `{ ok, host, name, dir, tmuxSession, command, trusted, model, harness }` — `harness`: `claude` (default) \| `codex` \| `pi` |
+| POST | `/api/hosts/:host/spawn` | `{ name?, dir?, prompt?, model?, harness?, ghIdentity?, embed? }` | `{ ok, host, name, dir, tmuxSession, command, trusted, model, harness }` — `harness`: `claude` (default) \| `codex` \| `pi` |
 | GET | `/api/hosts/:host/harnesses` | `?refresh=1` skips the 10 min cache | `{ host, harnesses: [{ id, label, command, installed, models: [{ id, label }] }] }` — `overmind --local harness list --json`; Claude's models are `web.models`; a CLI without `harness` → Claude alone. Proxied once to a peer |
 | POST | `/api/hosts/:host/sessions/:id/kill` | `{}` | `{ ok: true, host, id, name, process, terminal }` |
+| POST | `/api/hosts/:host/sessions/:id/sleep` | `{}` | `{ ok: true, host, id, name, sessionId, title, process, terminal, dormant: DormantView }` (`overmind sleep`) |
 | GET | `/api/hosts/:host/usage` | `?refresh=1` skips the CLI's 60s cache | `{ host, account, limits: [{ kind, group, label, model, percent, severity, resets_at, active }], extra_usage, fetched_at, stale, error }` — `overmind usage --json` (docs/architecture.md → Subscription usage); 502 with the CLI's reason, 504 on timeout. Proxied once to a peer |
 | POST | `/api/hosts/:host/prs/checkout` | `{ pr: "owner/repo#123" }` | `{ host, worktree: { owner, repo, number, branch, path, repoPath, created, contextLine, editorUrl, … } }` — `overmind --local pr checkout --json` + the worktree's editor link; 400 on a bad ref, 502 with the CLI's reason (no clone, fetch failed). Proxied once to a peer (5 min) |
 | POST | `/api/hosts/:host/prs/seen` | `{ pr: "owner/repo#123" }` | `{ host, pr, seenAt }` — `overmind --local pr seen --json`: out of the Unseen mentions column; 400 on a bad ref, 501 when the CLI has no `pr seen`. Proxied once to a peer |
@@ -190,8 +193,8 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 | POST | `/api/hosts/:host/tasks/status` | `{ task: "1001" \| task link, status: id or name }` | `{ host, task }` — `overmind --local task status --json`: the task in its new status; 400 on a bad id. Proxied once to a peer |
 | POST | `/api/hosts/:host/tasks/spawn` | `{ task, dir, prompt?, name?, model?, harness? }` (validated like `spawn`; `dir` within the spawn dirs) | `{ host, task, spawn: SpawnResponse }` — `overmind --local task show --json` for the task's `contextLine`, then the spawner in `dir` with `contextLine` + `prompt`. Proxied once to a peer |
 | GET/POST | `/api/hosts/:host/focus` | POST `{ on: boolean, minutes?: 1–600 }` | `{ host, active, remainingMs, endsAt, apps, stale }` — lib/focus.mjs parses `focus status`; POST runs `focus start [minutes]` / `focus stop` first. 400 on a bad body, 501 without `focus`, 502 with its message. Proxied once to a peer (45 s) |
-| GET | `/api/hosts/:host/spawn-dirs` | | `{ host, hosts: [names], spawnDirs: [{ label, paths: { host: dir } }], checks: [{ path, resolved, exists, isDir } \| null], offered: [{ label, path }], limits: { maxEntries, maxLabel, maxPath } }` — see **spawn-dirs** |
-| PUT | `/api/hosts/:host/spawn-dirs` | `{ spawnDirs: [{ label, paths }], dryRun? }` | the GET shape for the new list + `saved` (`false` on a dry run). 400 `{ error, errors: [{ index, field, host?, error }], checks }`; 502 when `overmind config set` failed |
+| GET | `/api/hosts/:host/spawn-dirs` | | `{ host, hosts: [names], spawnDirs: [{ label, paths: { host: dir }, hidden? }], checks: [{ path, resolved, exists, isDir } \| null], offered: [{ label, path }], hiddenSpawnDirs: [{ label, path }], limits: { maxEntries, maxLabel, maxPath } }` — see **spawn-dirs** |
+| PUT | `/api/hosts/:host/spawn-dirs` | `{ spawnDirs: [{ label, paths, hidden? }], dryRun? }` | the GET shape for the new list + `saved` (`false` on a dry run). 400 `{ error, errors: [{ index, field, host?, error }], checks }`; 502 when `overmind config set` failed |
 | GET | `/api/hosts/:host/repos` | | `{ host, settings: { roots, every, overrides, exclude }, repos: [overmind repos --json --all rows], error, service: { installed, supported, tickMinutes }, limits }` — see **repos**; 501 when that host's CLI has no `repos` |
 | PUT | `/api/hosts/:host/repos` | `{ roots, every, overrides, exclude }` | the GET shape + `saved`. 400 `{ error, errors: [{ field, error }] }`; 502 when `overmind config set` failed |
 | POST | `/api/hosts/:host/repos/sync` | `{ names? }` | `{ host, results }` — `overmind --local repos sync --json [-- names]`; 409 while a sync runs there; peers get 16 min |
@@ -240,21 +243,23 @@ resources: [Resource], notes } }` — the CLI's shape, passed through (docs/arch
 Session stacks).
 
 **Brief** = `{ host, id, exists, markdown, parsed: { summary, resources: [{ kind, label, url, path, text, branch, linked }], todos: [{ done, text }], plan }, updated, editedAt, generatedAt, generatedThrough, generating, enabled, continuePrompt, absCwd, gitRoot, editor, editorUrl }` —
-`markdown` is the whole file (frontmatter included, canonical form); `kind` is `PR` | `Issue` |
+`markdown` is the whole file (frontmatter included, canonical form); `kind` is `Origin` | `PR` | `Issue` |
 `Artifact` | `Spec` | `File` | `Git` | `Link` | `null` (a hand-written line), or the legacy
 `Branch` | `Worktree`; `url` or `path` is set, `text` is the bullet as written; for `Git`, `path`
 is the checkout root, `branch` the branch (null = detached) and `linked` whether it is a linked
 worktree (both null on other kinds); `parsed.plan` is a **deprecated** alias of `parsed.todos`
 (same array, one release); `continuePrompt` is the first prompt for a new session that continues
-this one; `enabled` = background generation is on for that host; `absCwd` / `gitRoot` are
+this one (summary, origin, PRs, worktree, ending with a `---` line the task goes below); `enabled` = background generation is on for that host; `absCwd` / `gitRoot` are
 absolute paths on the session's host (null when unknown / outside git); `editor` / `editorUrl`
 are filled in by the server that received the request (lib/editor.mjs), also for a proxied
 answer — see docs/architecture.md → Session briefs → Open in editor.
 Proxied to a peer like the other session routes (PUT bodies included).
 
-**Host** = `{ name, ok, error?, fetchedAt, spawnDirs?: [{ label, path }], notes?: { name }, stacks?: [{ id, label, host, members: [{ session, host, live }] }], sessions: [Session] }`.
+**Host** = `{ name, ok, error?, fetchedAt, spawnDirs?: [{ label, path }], hiddenSpawnDirs?: [{ label, path }], home?, notes?: { name }, stacks?: [{ id, label, host, members: [{ session, host, live }] }], sessions: [Session] }`.
 `stacks` is that host's session stacks, compact (what its `overmind stack` calls last showed); the server building a merged view stamps `stack: { id, label, host }` on the rows of members that run on other hosts (`lib/stacks.mjs#stampForeign`), since only a stack's home host lists it.
-Each host advertises its own `spawnDirs` (absolute paths on that host) and, when it has `web.notes.root`, `notes`.
+Each host advertises its own `spawnDirs` (absolute paths on that host; the New session menu), its
+`hiddenSpawnDirs` when it has any (allowed, not offered: the embed view accepts them), its `home` (to expand a
+`~/…` path from a client, e.g. the embed view's `dir`; older servers omit it) and, when it has `web.notes.root`, `notes`.
 
 **Session** = the `overmind list --json` object + `host` + `editorUrl` (for its cwd; set by the server that answered). Sorted `waiting` → `busy` → `idle` →
 `unknown`, then `updated_at` descending.
@@ -265,8 +270,8 @@ Assistant text that ends a turn is `final: true`; narration between tool calls i
 Last `limit` messages, oldest first; `truncated` when older ones exist.
 
 **spawn**: `name` is sanitized (lowercase, `[a-z0-9_-]`, ≤ 40, default `om-hhmmss`); `dir`
-defaults to the host's first `spawnDirs` entry and must be an existing absolute directory that,
-after `realpath` (symlinks and `..` resolved), is one of this host's `spawnDirs` or beneath one
+defaults to the host's first offered `spawnDirs` entry and must be an existing absolute directory that,
+after `realpath` (symlinks and `..` resolved), is one of this host's `spawnDirs` (hidden ones included) or beneath one
 (`$HOME` when none are configured) — anything else is a 400. A taken name is a 409.
 Runs `tmux new-session -d -s <name> -c <dir>`, types `claude -n '<name>' '<prompt>'`, and
 answers a first-run "trust this folder" dialog with "Yes" (`trusted: true` when it did). With no
@@ -276,7 +281,10 @@ first prompt, a targeted pass for just that session runs as soon as it has answe
 Auto-naming). `model` (optional; `""` = Claude's default) must be 1–100 chars of letters, digits
 and `._[]-` (else 400) and is typed as `--model '<id>'`; it is not checked against `web.models`,
 so a client can pick from its own server's list for a peer. The UI sends no `name` any more;
-the field stays for other clients.
+the field stays for other clients. `embed` (optional, `[A-Za-z0-9_-]{1,40}`, else 400): the app
+whose embedded Overmind panel spawns it (the [embed view](../docs/architecture.md#embed-view)'s
+`app`) — set as the pane option `@overmind_embed`, which `overmind list --json` reports as `embed`;
+the UI sets those sessions aside in its Apps filter.
 The session shows up in `/api/overmind` once Claude registers it; clients poll for a session whose
 `tmux_session` equals `tmuxSession`.
 
@@ -297,11 +305,12 @@ run }` (from `overmind list --json`), which the UI uses to badge job sessions an
 file (a `{ label, path }` / bare-string entry is spelled out as a path for every configured host)
 and stats each of this host's paths (`~` expanded). PUT validates: ≤ 30 entries; labels 1–40
 chars, one line, unique ignoring case; paths absolute or `~/…`, ≤ 1024 chars, no control
-characters, `""` = not offered on that host, at least one per entry; **this host's** path must be
+characters, `""` = not offered on that host, at least one per entry; `hidden` a boolean (kept only
+when true); other keys on an entry are carried through unchanged; **this host's** path must be
 an existing directory — other hosts' paths are stored as given (they are checked on their own
 host). A valid list is written with `overmind --local config set spawnDirs '<json>'` (the CLI owns the
 file: atomic tmp + rename, every other key and their order kept; writes are serialised), then
-`config.spawnDirs` is replaced in place, so `/api/overmind` and the spawn allow-list use it at once,
+`config.spawnDirs` / `config.hiddenSpawnDirs` are replaced in place, so `/api/overmind` and the spawn allow-list use it at once,
 and the merged snapshot is rebuilt before the response (a proxied save rebuilds the proxying
 server's too). `dryRun: true` validates and answers without writing. The UI writes one shared
 list to every host: a dry run on all reachable hosts first, the writes only when all pass.

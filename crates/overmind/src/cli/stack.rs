@@ -1024,7 +1024,12 @@ pub fn spawn(a: SpawnArgs) -> Result<()> {
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
     let pf = prompt_file.display().to_string();
-    let launcher = commands::with_model(&opts.harness.command(), model.as_deref());
+    let launcher = crate::core::gh_identity::wrap_current(
+        &opts
+            .harness
+            .with_defaults(&opts.harness.command(), model.as_deref()),
+        opts.harness,
+    )?;
     if hosts::dry_run() {
         let line = backend::launch_command(
             &dir,

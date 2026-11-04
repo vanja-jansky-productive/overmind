@@ -2,8 +2,11 @@
 //! (`overmind web serve`), which the app starts when nothing is listening.
 //! The server's page gets no app commands (only the bundled start page, `start/`,
 //! does) — just the window-dragging permission its top bar needs (see `shell`).
+//! A bundled profile (see `profile`) makes the same binary a plain window on
+//! another, remote web app instead.
 
 mod links;
+mod profile;
 mod server;
 mod shell;
 
@@ -16,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::ipc::CapabilityBuilder;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
 use tauri::{
     AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
@@ -24,13 +27,17 @@ use tauri::{
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 use links::Action;
+use profile::Profile;
 
 const START_PAGE: &str = "tauri://localhost/index.html";
 /// How long a server the app started gets to answer before the start page gives up.
 const START_GRACE: Duration = Duration::from_secs(30);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+/// A TLS handshake over the tailnet included.
+const REMOTE_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 struct State {
+    profile: Profile,
     target: Result<server::Target, String>,
     /// Computed on first use: asking the login shell can take a moment.
     path: OnceLock<String>,
@@ -45,6 +52,16 @@ impl State {
     fn path(&self) -> &str {
         self.path.get_or_init(server::server_path)
     }
+
+    /// Does the server answer? Another profile's https server is checked end to end
+    /// (Overmind's is not, as before: a reachable port counts).
+    fn probe(&self, url: &Url) -> Result<(), String> {
+        if self.profile.is_overmind() {
+            server::probe(url, PROBE_TIMEOUT)
+        } else {
+            server::probe_strict(url, REMOTE_PROBE_TIMEOUT)
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -57,11 +74,17 @@ struct Status {
     error: Option<String>,
     log: Option<String>,
     log_path: Option<String>,
+    /// The app's name (the profile's), for the start page's titles.
+    app: String,
+    /// Overmind.app: the start page shows Overmind's help and keeps its drag region.
+    overmind: bool,
 }
 
 impl Status {
     fn new(state: &'static str, t: Option<&server::Target>) -> Self {
         Status {
+            app: String::new(),
+            overmind: false,
             state,
             url: t.map(|t| t.url.to_string()),
             source: t.map(|t| t.source.clone()),
@@ -86,9 +109,13 @@ impl Status {
 /// otherwise starts `overmind web serve` once (for this machine's server).
 #[tauri::command]
 async fn connect(window: WebviewWindow) -> Status {
-    tauri::async_runtime::spawn_blocking(move || connect_blocking(&window))
+    let profile = window.state::<State>().profile.clone();
+    let mut s = tauri::async_runtime::spawn_blocking(move || connect_blocking(&window))
         .await
-        .unwrap_or_else(|e| Status::new("error", None).error(e.to_string()))
+        .unwrap_or_else(|e| Status::new("error", None).error(e.to_string()));
+    s.app = profile.name().to_string();
+    s.overmind = profile.is_overmind();
+    s
 }
 
 fn connect_blocking(window: &WebviewWindow) -> Status {
@@ -97,7 +124,7 @@ fn connect_blocking(window: &WebviewWindow) -> Status {
         Ok(t) => t,
         Err(e) => return Status::new("error", None).error(e.clone()),
     };
-    let err = match server::probe(&t.url, PROBE_TIMEOUT) {
+    let err = match st.probe(&t.url) {
         Ok(()) => {
             return match window.navigate(t.url.clone()) {
                 Ok(()) => Status::new("ok", Some(t)),
@@ -154,87 +181,122 @@ fn open_external(target: &str) {
     }
 }
 
-/// Open an iTerm tab running `overmind -H <host> enter <session>` (off the UI thread:
-/// the AppleScript waits for the new tab's shell).
-fn attach(host: &str, session: &str) {
-    let line = overmind::core::backend::attach_command(host, session);
+/// Open an iTerm tab running `overmind -H <host> enter <session>`.
+fn attach(app: &AppHandle, host: &str, session: &str) {
+    run_in_iterm(app, overmind::core::backend::attach_command(host, session));
+}
+
+/// Open an iTerm tab in the host's tmux: `overmind -H <host> new` (attach to, or create, `main`).
+/// This machine gets a plain iTerm tab.
+fn shell(app: &AppHandle, host: &str) {
+    use overmind::core::hosts::{Scope, Target, resolve};
+    let cfg = overmind::core::config::get();
+    if let Ok(Target::Local { .. }) = resolve(cfg, Some(host), false, Scope::DefaultHost) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = overmind::core::backend::iterm_open() {
+                report_error(&app, "Could not open iTerm", &e.to_string(), None);
+            }
+        });
+        return;
+    }
+    run_in_iterm(app, overmind::core::backend::host_shell_command(host));
+}
+
+/// Run `line` in a new iTerm tab, off the UI thread (the AppleScript waits for the tab's shell).
+/// A failure reaches the page as a toast that offers the command to copy.
+fn run_in_iterm(app: &AppHandle, line: String) {
+    let app = app.clone();
     std::thread::spawn(move || {
         if let Err(e) = overmind::core::backend::iterm_run(&line, false) {
-            eprintln!("overmind-desktop: attach ({line}): {e}");
+            report_error(&app, "Could not open iTerm", &e.to_string(), Some(&line));
         }
     });
 }
 
-fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+/// Log a failed native action and show it in the window (`shell::error`).
+fn report_error(app: &AppHandle, title: &str, message: &str, command: Option<&str>) {
+    eprintln!("overmind-desktop: {title}: {message}");
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(shell::error(title, message, command));
+    }
+}
+
+/// The menu bar. File → New Session (a `overmind:command`) is Overmind's only.
+fn menu(app: &AppHandle, profile: &Profile) -> tauri::Result<Menu<tauri::Wry>> {
     let item =
         |id: &str, label: &str, accel: &str| MenuItem::with_id(app, id, label, true, Some(accel));
     let sep = || PredefinedMenuItem::separator(app);
-    Menu::with_items(
+    let name = profile.name();
+    let app_menu = Submenu::with_items(
         app,
+        name,
+        true,
         &[
-            &Submenu::with_items(
-                app,
-                "Overmind",
-                true,
-                &[
-                    &PredefinedMenuItem::about(app, Some("About Overmind"), None)?,
-                    &sep()?,
-                    &PredefinedMenuItem::services(app, None)?,
-                    &sep()?,
-                    &PredefinedMenuItem::hide(app, None)?,
-                    &PredefinedMenuItem::hide_others(app, None)?,
-                    &PredefinedMenuItem::show_all(app, None)?,
-                    &sep()?,
-                    &PredefinedMenuItem::quit(app, None)?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app,
-                "File",
-                true,
-                &[&item("new-session", "New Session", "CmdOrCtrl+N")?],
-            )?,
-            &Submenu::with_items(
-                app,
-                "Edit",
-                true,
-                &[
-                    &PredefinedMenuItem::undo(app, None)?,
-                    &PredefinedMenuItem::redo(app, None)?,
-                    &sep()?,
-                    &PredefinedMenuItem::cut(app, None)?,
-                    &PredefinedMenuItem::copy(app, None)?,
-                    &PredefinedMenuItem::paste(app, None)?,
-                    &PredefinedMenuItem::select_all(app, None)?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app,
-                "View",
-                true,
-                &[
-                    &item("reload", "Reload", "CmdOrCtrl+R")?,
-                    &item("reconnect", "Reconnect to Server", "CmdOrCtrl+Shift+R")?,
-                    &sep()?,
-                    &item("back", "Back", "CmdOrCtrl+[")?,
-                    &item("forward", "Forward", "CmdOrCtrl+]")?,
-                    &sep()?,
-                    &PredefinedMenuItem::fullscreen(app, None)?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app,
-                "Window",
-                true,
-                &[
-                    &PredefinedMenuItem::minimize(app, None)?,
-                    &PredefinedMenuItem::maximize(app, None)?,
-                    &sep()?,
-                    &PredefinedMenuItem::close_window(app, None)?,
-                ],
-            )?,
+            &PredefinedMenuItem::about(app, Some(&format!("About {name}")), None)?,
+            &sep()?,
+            &PredefinedMenuItem::services(app, None)?,
+            &sep()?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &sep()?,
+            &PredefinedMenuItem::quit(app, None)?,
         ],
-    )
+    )?;
+    let file = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[&item("new-session", "New Session", "CmdOrCtrl+N")?],
+    )?;
+    let mut menus: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&app_menu];
+    if profile.is_overmind() {
+        menus.push(&file);
+    }
+    let rest = [
+        Submenu::with_items(
+            app,
+            "Edit",
+            true,
+            &[
+                &PredefinedMenuItem::undo(app, None)?,
+                &PredefinedMenuItem::redo(app, None)?,
+                &sep()?,
+                &PredefinedMenuItem::cut(app, None)?,
+                &PredefinedMenuItem::copy(app, None)?,
+                &PredefinedMenuItem::paste(app, None)?,
+                &PredefinedMenuItem::select_all(app, None)?,
+            ],
+        )?,
+        Submenu::with_items(
+            app,
+            "View",
+            true,
+            &[
+                &item("reload", "Reload", "CmdOrCtrl+R")?,
+                &item("reconnect", "Reconnect to Server", "CmdOrCtrl+Shift+R")?,
+                &sep()?,
+                &item("back", "Back", "CmdOrCtrl+[")?,
+                &item("forward", "Forward", "CmdOrCtrl+]")?,
+                &sep()?,
+                &PredefinedMenuItem::fullscreen(app, None)?,
+            ],
+        )?,
+        Submenu::with_items(
+            app,
+            "Window",
+            true,
+            &[
+                &PredefinedMenuItem::minimize(app, None)?,
+                &PredefinedMenuItem::maximize(app, None)?,
+                &sep()?,
+                &PredefinedMenuItem::close_window(app, None)?,
+            ],
+        )?,
+    ];
+    menus.extend(rest.iter().map(|m| m as &dyn IsMenuItem<tauri::Wry>));
+    Menu::with_items(app, &menus)
 }
 
 fn start_page() -> Url {
@@ -255,11 +317,8 @@ fn on_menu(app: &AppHandle, id: &str) {
         "reload" => {
             std::thread::spawn(move || {
                 let on_server = w.url().is_ok_and(|u| u.scheme().starts_with("http"));
-                let up = w
-                    .state::<State>()
-                    .target
-                    .as_ref()
-                    .is_ok_and(|t| server::probe(&t.url, PROBE_TIMEOUT).is_ok());
+                let st = w.state::<State>();
+                let up = st.target.as_ref().is_ok_and(|t| st.probe(&t.url).is_ok());
                 if on_server && !up {
                     let _ = w.navigate(start_page());
                 } else {
@@ -272,34 +331,42 @@ fn on_menu(app: &AppHandle, id: &str) {
 }
 
 fn build_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    let server = app
-        .state::<State>()
+    let st = app.state::<State>();
+    let overmind = st.profile.is_overmind();
+    let overlay = st.profile.overlay();
+    let name = st.profile.name().to_string();
+    let server = st
         .target
         .as_ref()
         .map(|t| t.url.clone())
         .unwrap_or_else(|_| start_page());
+    let frames = st.profile.frame_origins();
     let dl = app.clone();
+    let nav = app.clone();
     let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Overmind")
+        .title(&name)
         .inner_size(1280.0, 820.0)
         .min_inner_size(420.0, 480.0)
         .visible(false)
-        .initialization_script(shell::script(false))
-        .on_page_load(|w, p| {
-            if p.event() == PageLoadEvent::Finished {
-                sync_shell(&w, true);
-            }
-        })
         // Let the page get file drops (composer attachments) instead of Tauri.
         .disable_drag_drop_handler()
-        .on_navigation(move |url| match links::navigation(url, &server) {
+        .on_navigation(move |url| match links::navigation(url, &server, &frames) {
             Action::Allow => true,
             Action::Open => {
                 open_external(url.as_str());
                 false
             }
+            // `overmind://` links are Overmind.app's only.
             Action::Attach { host, session } => {
-                attach(&host, &session);
+                if overmind {
+                    attach(&nav, &host, &session);
+                }
+                false
+            }
+            Action::Shell { host } => {
+                if overmind {
+                    shell(&nav, &host);
+                }
                 false
             }
             Action::Deny => false,
@@ -310,12 +377,14 @@ fn build_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             }
             NewWindowResponse::Deny
         })
-        .on_document_title_changed(|w, title| {
+        .on_document_title_changed(move |w, title| {
             let _ = w.set_title(if title.trim().is_empty() {
-                "Overmind"
+                &name
             } else {
                 &title
             });
+            // A new title lays the title bar out again (see `shell::place_traffic_lights`).
+            place_traffic_lights(&w);
         })
         .on_download(move |_, ev| {
             let st = dl.state::<State>();
@@ -337,14 +406,28 @@ fn build_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             }
             true
         });
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(
-            shell::TRAFFIC_LIGHTS.0,
-            shell::TRAFFIC_LIGHTS.1,
-        ));
+    // Overmind's chrome: no title bar, the traffic lights over the UI's own top bar, and
+    // the page script telling the UI so. Other profiles opt in (`"titleBar": "overlay"`).
+    let builder = if overlay {
+        let b = builder
+            .initialization_script(shell::script(false, overmind))
+            .on_page_load(|w, p| {
+                if p.event() == PageLoadEvent::Finished {
+                    sync_shell(&w, true);
+                }
+            });
+        #[cfg(target_os = "macos")]
+        let b = b
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(
+                shell::TRAFFIC_LIGHTS.0,
+                shell::TRAFFIC_LIGHTS.1,
+            ));
+        b
+    } else {
+        builder
+    };
     let w = builder.build()?;
     let _ = w.restore_state(StateFlags::all() & !StateFlags::VISIBLE);
     w.show()?;
@@ -355,11 +438,25 @@ fn build_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 /// there, so its top-bar inset collapses) — when it changed, or always (`force`,
 /// after a page load, which starts from the initialization script's default).
 fn sync_shell(w: &WebviewWindow, force: bool) {
-    let Ok(fs) = w.is_fullscreen() else { return };
-    let last = w.state::<State>().fullscreen.swap(fs, Ordering::Relaxed);
-    if force || last != fs {
-        let _ = w.eval(shell::script(fs));
+    let st = w.state::<State>();
+    if !st.profile.overlay() {
+        return;
     }
+    let Ok(fs) = w.is_fullscreen() else { return };
+    let last = st.fullscreen.swap(fs, Ordering::Relaxed);
+    if force || last != fs {
+        let _ = w.eval(shell::script(fs, st.profile.is_overmind()));
+    }
+}
+
+/// Put the traffic lights back where the overlay chrome wants them (overlay windows only).
+fn place_traffic_lights(w: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    if w.state::<State>().profile.overlay() {
+        shell::place_traffic_lights(w);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = w;
 }
 
 /// Window dragging for the page's top bar (`data-tauri-drag-region`): Tauri's
@@ -391,12 +488,32 @@ fn show_main(app: &AppHandle) {
 }
 
 fn main() {
-    let loaded = overmind::core::config::load();
-    let env_url = std::env::var("OVERMIND_DESKTOP_URL").ok();
-    let target = match &loaded.problem {
-        Some(p) => Err(p.clone()),
-        None => server::resolve(env_url.as_deref(), loaded),
+    let profile = profile::load().unwrap_or_else(|e| {
+        eprintln!("overmind-desktop: profile: {e}");
+        std::process::exit(1);
+    });
+    let target = match &profile {
+        Profile::Overmind => {
+            let loaded = overmind::core::config::load();
+            let env_url = std::env::var("OVERMIND_DESKTOP_URL").ok();
+            match &loaded.problem {
+                Some(p) => Err(p.clone()),
+                None => server::resolve(env_url.as_deref(), loaded),
+            }
+        }
+        Profile::Remote(r) => {
+            let env_url = r.url_env.as_deref().and_then(|k| std::env::var(k).ok());
+            server::resolve_remote(env_url.as_deref(), r)
+        }
     };
+    let mut context = tauri::generate_context!();
+    if let Profile::Remote(r) = &profile {
+        // Its own identifier: its own single-instance socket, window state and config dir.
+        context.config_mut().identifier = r.identifier.clone();
+        context.config_mut().product_name = Some(r.name.clone());
+        context.package_info_mut().name = r.name.clone();
+    }
+    let menu_profile = profile.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             show_main(app)
@@ -407,6 +524,7 @@ fn main() {
                 .build(),
         )
         .manage(State {
+            profile,
             target,
             path: OnceLock::new(),
             child: Mutex::new(None),
@@ -414,10 +532,12 @@ fn main() {
             fullscreen: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![connect, open_log])
-        .menu(menu)
+        .menu(move |app| menu(app, &menu_profile))
         .on_menu_event(|app, ev| on_menu(app, ev.id().as_ref()))
         .setup(|app| {
-            allow_window_drag(app.handle())?;
+            if app.state::<State>().profile.overlay() {
+                allow_window_drag(app.handle())?;
+            }
             build_window(app.handle())?;
             Ok(())
         })
@@ -432,13 +552,22 @@ fn main() {
                 WindowEvent::Resized(_) => {
                     if let Some(wv) = w.app_handle().get_webview_window(w.label()) {
                         sync_shell(&wv, false);
+                        place_traffic_lights(&wv);
+                    }
+                }
+                // AppKit may lay the title bar out again on these (see `shell`).
+                WindowEvent::Focused(_)
+                | WindowEvent::ThemeChanged(_)
+                | WindowEvent::ScaleFactorChanged { .. } => {
+                    if let Some(wv) = w.app_handle().get_webview_window(w.label()) {
+                        place_traffic_lights(&wv);
                     }
                 }
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
-        .expect("error while building Overmind");
+        .build(context)
+        .expect("error while building the app");
     app.run(|app, ev| match ev {
         RunEvent::Reopen { .. } => show_main(app),
         RunEvent::Exit => {

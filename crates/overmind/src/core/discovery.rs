@@ -44,6 +44,9 @@ pub struct Session {
     pub status: String,
     /// Milliseconds since the epoch of the last status update.
     pub updated_at: Option<i64>,
+    /// Milliseconds since the epoch of the last human prompt ([`crate::core::prompted`]);
+    /// `null` when unknown (no prompt yet, or a Codex / pi session).
+    pub prompted_at: Option<i64>,
     pub tty: Option<String>,
     pub backend: Backend,
     /// Backend-specific control handle: iTerm session GUID or tmux pane id.
@@ -72,6 +75,9 @@ pub struct Session {
     /// caller knows it by). Stamped by `list`; `None` inside discovery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Subagents and background shells it runs ([`crate::core::background`]); `null` when
+    /// none (or unknown). With them, a session whose main turn has ended is `idle`.
+    pub background: Option<crate::core::background::Background>,
     /// Context-window usage from the transcript tail; `null` when unknown.
     pub context: Option<crate::core::context::ContextUsage>,
     /// The session stack it belongs to (`{ id, label }`, see [`crate::core::stack`]);
@@ -87,6 +93,17 @@ pub struct Session {
     pub transcript: Option<String>,
     /// The [job](crate::core::jobs) run that started it (`{ job, run }`); `null` when none.
     pub origin: Option<crate::core::jobs::Origin>,
+    /// The GitHub identity it acts as ([`crate::core::gh_identity`]); `null` = the user's own.
+    pub gh_identity: Option<String>,
+    /// The app whose embedded Overmind panel started it (the web embed view's `app`, the pane's
+    /// `@overmind_embed` option); `null` when none.
+    pub embed: Option<String>,
+    /// The git checkout its cwd is in (`{ branch, root, linked, repo }`, see
+    /// [`crate::core::git`]); `null` outside one. Stamped by `list`; `None` inside discovery.
+    pub git: Option<crate::core::git::GitHead>,
+    /// It reported its work finished (`overmind done`: `{ at, note }`) and was not prompted since;
+    /// `null` otherwise. Stamped by `list`; `None` inside discovery.
+    pub done: Option<crate::core::done::DoneRef>,
 }
 
 impl Default for Session {
@@ -98,6 +115,7 @@ impl Default for Session {
             cwd: None,
             status: "unknown".into(),
             updated_at: None,
+            prompted_at: None,
             tty: None,
             backend: Backend::Unknown,
             handle: None,
@@ -109,12 +127,17 @@ impl Default for Session {
             gen_title: None,
             display_title: None,
             host: None,
+            background: None,
             context: None,
             stack: None,
             harness: Harness::Claude,
             model: None,
             transcript: None,
             origin: None,
+            gh_identity: None,
+            embed: None,
+            git: None,
+            done: None,
         }
     }
 }
@@ -208,6 +231,9 @@ struct Reg {
     updated_at: Option<i64>,
     #[serde(rename = "statusUpdatedAt")]
     status_updated_at: Option<i64>,
+    /// When this process started (ms): what it launched before is not running.
+    #[serde(rename = "startedAt")]
+    started_at: Option<i64>,
     #[serde(rename = "nameSource")]
     name_source: Option<String>,
     #[serde(rename = "waitingFor")]
@@ -228,6 +254,10 @@ pub struct Pane {
     pub session_name: String,
     /// The pane's `@overmind_job_run` option: the job run it belongs to (empty when none).
     pub job_run: String,
+    /// The pane's `@overmind_gh_identity` option: the GitHub identity it acts as (empty when none).
+    pub gh_identity: String,
+    /// The pane's `@overmind_embed` option: the app whose embedded panel started it (empty when none).
+    pub embed: String,
 }
 
 /// A canned overmind from `OVERMIND_FIXTURE=<path/to/sessions.json>`. Bypasses the
@@ -309,10 +339,42 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
         let context = reg.session_id.as_deref().and_then(|sid| {
             crate::core::context::for_session(&claude_home(), reg.cwd.as_deref(), sid)
         });
+        let prompted_at = reg.session_id.as_deref().and_then(|sid| {
+            crate::core::prompted::for_session(&claude_home(), reg.cwd.as_deref(), sid)
+        });
+        let mut status = reg.status.unwrap_or_else(|| "unknown".into());
+        let mut updated_at = reg.status_updated_at.or(reg.updated_at);
+        // `busy` / `shell` also while only subagents or background shells run: the main
+        // thread may be free (see core::background).
+        let mut background = None;
+        if status == "busy" || status == "shell" {
+            if let Some(m) = reg.session_id.as_deref().and_then(|sid| {
+                crate::core::background::for_session(
+                    &claude_home(),
+                    reg.cwd.as_deref(),
+                    sid,
+                    reg.started_at,
+                )
+            }) {
+                if let Some(ended) = m.ended_at
+                    && (!m.background.is_empty() || status == "shell")
+                {
+                    status = "idle".into();
+                    updated_at = Some(ended);
+                }
+                background = (!m.background.is_empty()).then_some(m.background);
+            }
+            // `shell`: only background shells run — the main thread is free.
+            if status == "shell" {
+                status = "idle".into();
+            }
+        }
         out.push(Session {
             pid,
-            status: reg.status.unwrap_or_else(|| "unknown".into()),
-            updated_at: reg.status_updated_at.or(reg.updated_at),
+            status,
+            updated_at,
+            background,
+            prompted_at,
             title,
             tty: Some(tty),
             backend,
@@ -333,10 +395,17 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
             harness: Harness::Claude,
             transcript: None,
             origin,
+            gh_identity: pane
+                .map(|p| p.gh_identity.clone())
+                .filter(|g| !g.is_empty()),
+            embed: pane.map(|p| p.embed.clone()).filter(|e| !e.is_empty()),
+            git: None,
+            done: None,
         });
     }
     crate::core::context::apply_native_1m(out.iter_mut().filter_map(|s| s.context.as_mut()));
     out.extend(discover_harnesses(&panes));
+    crate::core::jobs::attach_subjects(out.iter_mut().filter_map(|s| s.origin.as_mut()));
     out.sort_by_key(|s| std::cmp::Reverse(s.updated_at.unwrap_or(0)));
     Ok(out)
 }
@@ -406,6 +475,7 @@ fn harness_session(
         status: state.status,
         waiting_for: state.waiting_for,
         updated_at: Some(t.map(|t| t.mtime_ms).unwrap_or(p.start_ms)),
+        prompted_at: None,
         tty: Some(p.tty.clone()),
         backend,
         handle,
@@ -416,6 +486,10 @@ fn harness_session(
             .map(|p| p.session_name.clone())
             .filter(|w| !w.is_empty()),
         origin: pane.and_then(|p| crate::core::jobs::Origin::parse(&p.job_run)),
+        gh_identity: pane
+            .map(|p| p.gh_identity.clone())
+            .filter(|g| !g.is_empty()),
+        embed: pane.map(|p| p.embed.clone()).filter(|e| !e.is_empty()),
         title: t.and_then(|t| harness::first_prompt(p.harness, &t.path)),
         model: state.model.or_else(|| p.model_arg()),
         context: state.context,
@@ -654,7 +728,7 @@ fn tmux_panes() -> HashMap<String, Pane> {
             "list-panes",
             "-a",
             "-F",
-            "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_id}\t#{window_name}\t#{session_name}\t#{@overmind_job_run}",
+            "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_id}\t#{window_name}\t#{session_name}\t#{@overmind_job_run}\t#{@overmind_gh_identity}\t#{@overmind_embed}",
         ])
         .output()
     else {
@@ -666,7 +740,7 @@ fn tmux_panes() -> HashMap<String, Pane> {
     map
 }
 
-/// `pane_tty \t target \t pane_id \t window_name \t session_name \t job_run` -> (tty, pane).
+/// `pane_tty \t target \t pane_id \t window_name \t session_name \t job_run \t gh_identity \t embed` -> (tty, pane).
 fn parse_pane(line: &str) -> Option<(String, Pane)> {
     let mut parts = line.split('\t');
     let ptty = parts.next()?;
@@ -677,6 +751,8 @@ fn parse_pane(line: &str) -> Option<(String, Pane)> {
     // break on the `:` a session name is allowed to contain — ask tmux instead.
     let session_name = parts.next().unwrap_or("").to_string();
     let job_run = parts.next().unwrap_or("").to_string();
+    let gh_identity = parts.next().unwrap_or("").to_string();
+    let embed = parts.next().unwrap_or("").to_string();
     Some((
         ptty.to_string(),
         Pane {
@@ -685,6 +761,8 @@ fn parse_pane(line: &str) -> Option<(String, Pane)> {
             window_name,
             session_name,
             job_run,
+            gh_identity,
+            embed,
         },
     ))
 }
@@ -705,7 +783,7 @@ pub fn enrich_iterm_tabs(rows: &mut [Session]) {
     // defines a `tab` class that shadows AppleScript's tab-character constant, so
     // `& tab &` concatenates the literal text "tab" and the separator disappears.
     let script = r#"set sep to ASCII character 9
-tell application "iTerm2"
+tell application id "com.googlecode.iterm2"
   set out to ""
   repeat with w in windows
     repeat with t in tabs of w
@@ -1006,6 +1084,16 @@ mod tests {
         let (_, p) = parse_pane("/dev/ttys005\ta:b:1.0\t%1\tvim\ta:b").unwrap();
         assert_eq!(p.session_name, "a:b");
         assert!(parse_pane("garbage").is_none());
+    }
+
+    #[test]
+    fn panes_carry_their_overmind_options() {
+        let (_, p) = parse_pane("/dev/ttys006	om-1:0.0	%2	zsh	om-1	nightly/r1	bot	fin").unwrap();
+        assert_eq!(p.job_run, "nightly/r1");
+        assert_eq!(p.gh_identity, "bot");
+        assert_eq!(p.embed, "fin");
+        let (_, p) = parse_pane("/dev/ttys006	om-1:0.0	%2	zsh	om-1		").unwrap();
+        assert_eq!(p.embed, "");
     }
 
     #[test]

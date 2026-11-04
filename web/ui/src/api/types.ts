@@ -6,6 +6,27 @@ export type SessionStatus = 'busy' | 'idle' | 'waiting' | 'unknown'
 export type Backend = 'iterm' | 'tmux' | 'unknown'
 
 /** One Claude Code session: a `overmind list --json` row plus the host it runs on. */
+/** A subagent of a session (`background.agents[]`). */
+export interface BackgroundAgent {
+  id: string
+  description: string | null
+  /** The subagent type: `general-purpose`, `Explore`, … */
+  type: string | null
+  model: string | null
+  /** false: a foreground agent — the main thread waits on it. */
+  background: boolean
+  started_at: number | null
+  /** Its transcript's last write. */
+  last_activity_at: number | null
+  /** Its last tool call: `Bash: run the tests`. */
+  activity: string | null
+}
+
+export interface SessionBackground {
+  agents: BackgroundAgent[]
+  shells: number
+}
+
 export interface Session {
   host: string
   session_id: string
@@ -16,6 +37,8 @@ export interface Session {
   status?: SessionStatus | string | null
   /** Last activity, epoch ms. */
   updated_at?: number | null
+  /** Last human prompt, epoch ms; null when unknown (no prompt yet, Codex / pi, older CLI). */
+  prompted_at?: number | null
   tty?: string | null
   backend?: Backend | string | null
   /** iTerm session id or tmux pane id (`%87`). */
@@ -35,6 +58,11 @@ export interface Session {
   display_title?: string | null
   /** Context-window usage from the transcript tail; null when unknown (older CLIs omit it). */
   context?: ContextUsage | null
+  /**
+   * Subagents and background shells it runs (`overmind list --json` → `background`); null / absent =
+   * none. With them a session whose main turn has ended is `idle`: it takes input.
+   */
+  background?: SessionBackground | null
   /** "Open in editor" link for the cwd (like Brief.editorUrl, without the git-root lookup). Older servers omit it. */
   editorUrl?: string | null
   /**
@@ -53,8 +81,32 @@ export interface Session {
    * null = started by hand. Older CLIs omit it.
    */
   origin?: SessionOrigin | null
+  /**
+   * The GitHub identity (a GitHub App) it acts as on GitHub (`overmind list --json` → `gh_identity`,
+   * docs/cli.md → GitHub identities); null = the user's own. Older CLIs omit it.
+   */
+  gh_identity?: string | null
+  /** The app whose embedded Overmind panel started it (`overmind list --json` → `embed`, the pane's `@overmind_embed`); null / absent = none. */
+  embed?: string | null
+  /**
+   * The git checkout its cwd is in (`overmind list --json` → `git`): branch (null = detached),
+   * root, linked worktree or main checkout, GitHub `owner/name` of origin. Null outside one;
+   * older CLIs omit it.
+   */
+  git?: { branch: string | null; root: string; linked: boolean; repo: string | null } | null
+  /**
+   * It reported its work finished (`overmind done`, `overmind list --json` → `done`) and was not
+   * prompted since; null / absent = not done. Older CLIs omit it.
+   */
+  done?: SessionDone | null
   /** The host's voice operator (web/lib/operator.mjs): kept out of session lists. Older servers omit it. */
   operator?: boolean
+}
+
+/** `done` on a session row: when it was marked (epoch ms) and its one-line note. */
+export interface SessionDone {
+  at: number
+  note?: string | null
 }
 
 /** `origin` on a session row: the job and the run id (`<job>/<run>` in its tmux environment). */
@@ -74,11 +126,33 @@ export interface HarnessInfo {
   installed: boolean
   /** The picker; `id: ''` is the harness's own default. */
   models: ModelOption[]
+  /** Reasoning-effort levels it takes, lowest first (older servers: absent). */
+  efforts?: string[]
+  /** `harnesses.<id>.model` / `.effort`: what a spawn uses when it picks none (Settings → Models). */
+  defaultModel?: string | null
+  defaultEffort?: string | null
+}
+
+/** PUT /api/hosts/:host/harness-defaults */
+export interface HarnessDefaults {
+  host?: string
+  harness: HarnessId
+  model: string | null
+  effort: string | null
 }
 
 export interface HarnessesResponse {
   host: string
   harnesses: HarnessInfo[]
+  /** GitHub identities a session spawned there can act as (config `ghIdentities`). Older servers omit it. */
+  ghIdentities?: GhIdentity[]
+}
+
+/** A GitHub App a spawned session can act as on GitHub instead of the user. */
+export interface GhIdentity {
+  name: string
+  /** The App's GitHub login, e.g. `my-app[bot]`. */
+  login: string
 }
 
 /** `stack` on a session row. */
@@ -110,6 +184,10 @@ export interface SpawnDirEntry {
   label: string
   /** host name → directory on that host (absolute or `~/…`); a missing host = not offered there. */
   paths: Record<string, string>
+  /** Allowed for spawns (e.g. an app's embedded panel) but not offered in the New session menu. */
+  hidden?: boolean
+  /** Keys this UI does not know: sent back unchanged. */
+  [extra: string]: unknown
 }
 
 /** Whether the answering host's own path of one entry is a directory there (null: no path for it). */
@@ -131,6 +209,8 @@ export interface SpawnDirsResponse {
   checks: (SpawnDirCheck | null)[]
   /** What the host offers now (`Host.spawnDirs`). */
   offered: SpawnDir[]
+  /** Its hidden entries now (`Host.hiddenSpawnDirs`); older servers omit it. */
+  hiddenSpawnDirs?: SpawnDir[]
   limits: { maxEntries: number; maxLabel: number; maxPath: number }
   /** PUT only: false for a dry run. */
   saved?: boolean
@@ -139,7 +219,7 @@ export interface SpawnDirsResponse {
 /** A PUT spawn-dirs 400: `errors[].index` into the list sent; `host` = that host's path cell. */
 export interface SpawnDirsError {
   error: string
-  errors: { index: number; field: 'label' | 'paths' | 'list'; host?: string; error: string }[]
+  errors: { index: number; field: 'label' | 'paths' | 'hidden' | 'list'; host?: string; error: string }[]
   checks: (SpawnDirCheck | null)[]
 }
 
@@ -149,8 +229,14 @@ export interface Host {
   error?: string
   fetchedAt?: number
   spawnDirs?: SpawnDir[]
+  /** Start directories allowed for spawns but not offered (config `hidden: true`); absent when none. */
+  hiddenSpawnDirs?: SpawnDir[]
+  /** That host's home directory (expands a `~/…` path); older servers omit it. */
+  home?: string
   /** Set when that host's server has a notes explorer (`web.notes.root`). */
   notes?: { name: string | null }
+  /** A shared shed (config `hosts.<name>.shared`, as the serving host sees it): out of the default view, the Inbox and the waiting count. Older servers omit it. */
+  shared?: boolean
   sessions: Session[]
 }
 
@@ -175,6 +261,85 @@ export interface ModelOption {
 
 /** GET /api/settings */
 /** GET/POST /api/hosts/:host/focus: that host's `focus` session (Do Not Disturb + quit apps). */
+/** A Slack link (web/lib/slack.mjs): a session follows one Slack thread / conversation until `until`. */
+export interface SlackLink {
+  id: string
+  host: string
+  session: string
+  sessionName: string | null
+  channel: string
+  /** null: the whole channel / DM. */
+  threadTs: string | null
+  permalink: string
+  /** A DM link: the person it is with (the app's DM with them). */
+  dm: { user: string; name: string } | null
+  task: string
+  /** `mention`: woken when addressed (the rest goes along as context); `proactive`: sees every message. */
+  mode: 'mention' | 'proactive'
+  createdAt: number
+  /** null: no end — it lasts until it is unlinked. */
+  until: number | null
+  /** How long it was linked for (null: no end): what Link again reuses. */
+  minutes: number | null
+  pending: number
+  delivered: number
+  replies: number
+  endedAt: number | null
+  endReason: string | null
+  renewed?: boolean
+}
+
+/** A link's duration: minutes, or `forever` (no end). */
+export type SlackMinutes = number | 'forever'
+
+/** GET /api/slack: the bridge on `slack.host` (proxied there). */
+export interface SlackStatus {
+  enabled: boolean
+  host: string | null
+  error?: string
+  socket?: { connected: boolean; error: string | null }
+  bot?: SlackBot | null
+  /** This bridge's `slack.spawn` (a mention opens a session); null = off. */
+  spawn?: SlackSpawn | null
+  links: SlackLink[]
+  ended: SlackLink[]
+  /** With `slack.bridges`: every bridge (a host with its own Slack app). */
+  bridges?: SlackBridge[]
+}
+
+export interface SlackBot {
+  userId?: string
+  name?: string | null
+  team?: string | null
+  url?: string | null
+  error?: string
+}
+
+export interface SlackBridge {
+  host: string
+  enabled: boolean
+  error?: string
+  socket: { connected: boolean; error: string | null } | null
+  bot: SlackBot | null
+  spawn?: SlackSpawn | null
+}
+
+/**
+ * `slack.spawn`: a mention of the app in a channel thread no session follows opens a session on
+ * `host`, linked to the thread for `minutes`. `from`: 'anyone', user ids, or null = the owner only.
+ */
+export interface SlackSpawn {
+  host: string
+  dir?: string | null
+  model?: string | null
+  harness?: string | null
+  ghIdentity?: string | null
+  mode?: 'mention' | 'proactive' | null
+  task?: string | null
+  minutes: string | number
+  from: 'anyone' | string[] | null
+}
+
 export interface FocusStatus {
   host: string
   active: boolean
@@ -298,6 +463,15 @@ export interface FileStatResponse {
   files: FileStat[]
 }
 
+/** POST …/files/plain: the PlainLang modules of a .plain file's checkout (else its directory). */
+export interface PlainModulesResponse {
+  host: string
+  root: string
+  /** absolute paths */
+  files: string[]
+  truncated: boolean
+}
+
 export interface FileOpenResponse {
   ok: true
   host: string
@@ -372,6 +546,8 @@ export interface Question {
   header: string
   multiSelect: boolean
   options: { label: string; description: string }[]
+  /** No "Type something" row (the terminal's "Review your answers" screen). */
+  noOther?: boolean
 }
 
 /** POST …/answer: one entry per question, in order (option indexes and/or typed text). */
@@ -391,7 +567,8 @@ export interface Message {
   name?: string
   /** kind 'command': what was typed after the command, when anything was. */
   args?: string
-  /** kind 'question': the AskUserQuestion tool call's id (what …/answer names). */
+  /** kind 'question': the AskUserQuestion tool call's id (what …/answer names); `screen:…` for a
+   * prompt read off the terminal (Claude Code writes it to the transcript only once answered). */
   id?: string
   /** kind 'question': the prompt (`text` is its markdown rendering). */
   questions?: Question[]
@@ -418,6 +595,23 @@ export interface MessagesResponse {
   truncated: boolean
   updatedAt?: number | null
   capturedAt: number
+  /** Prompts waiting for the run to end (the server's prompt queue); null / absent = none. */
+  queue?: PromptQueue | null
+}
+
+export interface QueuedPrompt {
+  id: string
+  text: string
+  createdAt: number
+}
+
+/** A session's prompt queue: one goes in per run, once the session is idle (never while it waits on you). */
+export interface PromptQueue {
+  items: QueuedPrompt[]
+  /** Held for the run under way; clears itself when that run ends. */
+  paused: boolean
+  /** The paused run ended: waits for the next run to end (or Send now). */
+  held: boolean
 }
 
 export type SessionKey = 'Enter' | 'Escape' | 'Up' | 'Down'
@@ -433,6 +627,12 @@ export interface SpawnRequest {
   model?: string
   /** Which coding agent to start; absent = claude. */
   harness?: HarnessId | string
+  /** Act on GitHub as this identity (Claude only); absent = the user's own. */
+  ghIdentity?: string
+  /** Started from this app's embedded panel (the embed view's `app`): a label on the session. */
+  embed?: string
+  /** Start linked to Slack (only on `slack.host`): the prompt goes in with the link's intro. */
+  slack?: { url: string; minutes: SlackMinutes; mode?: 'mention' | 'proactive'; task?: string }
 }
 
 export interface SpawnResponse {
@@ -443,6 +643,8 @@ export interface SpawnResponse {
   tmuxSession: string
   command: string
   trusted: boolean
+  /** The link, when the spawn asked for one. */
+  slack?: SlackLink
 }
 
 /** POST /api/hosts/:host/sessions/:id/branch: a new session from the conversation up to `ref`. */
@@ -474,6 +676,18 @@ export interface KillResponse {
   name?: string | null
   process: 'terminated' | 'killed' | 'gone' | 'skipped' | string
   terminal: string
+}
+
+/** POST /api/hosts/:host/sessions/:id/sleep → `overmind sleep`: ended, kept dormant until resumed. */
+export interface SleepResponse {
+  ok: true
+  host: string
+  id: string
+  name?: string | null
+  title?: string
+  process: string
+  terminal: string
+  dormant?: DormantView | null
 }
 
 /** POST /api/hosts/:host/sessions/:id/autoname → `overmind name <id> --apply --refresh` (409 when held). */
@@ -549,7 +763,7 @@ export interface GroupsResponse {
 }
 
 /** A `## Resources` bullet of a session brief. `url` or `path` is set; `kind: null` = a hand-written line. */
-export type BriefResourceKind = 'PR' | 'Issue' | 'Artifact' | 'Spec' | 'File' | 'Git' | 'Branch' | 'Worktree' | 'Link'
+export type BriefResourceKind = 'Origin' | 'PR' | 'Issue' | 'Artifact' | 'Spec' | 'File' | 'Git' | 'Branch' | 'Worktree' | 'Link'
 
 export interface BriefResource {
   kind: BriefResourceKind | string | null
@@ -630,6 +844,8 @@ export interface StackSpawnRequest {
   title?: string
   model?: string
   harness?: HarnessId | string
+  /** Act on GitHub as this identity (Claude only); absent = the user's own. */
+  ghIdentity?: string
   /** Label for a stack this spawn creates (the model's otherwise). */
   label?: string
   /** Start the sibling on this host (a peer of the stack's home; default: the home itself). */
@@ -849,10 +1065,14 @@ export interface UsageExtra {
   limit: number | null
   currency: string | null
   percent: number | null
+  /** Prepaid credits left (OpenAI). */
+  balance?: number | null
 }
 
-export interface UsageResponse {
-  host: string
+/** One subscription's read: Claude's at the top level, the ChatGPT plan Codex uses under `openai`. */
+export interface UsageRead {
+  /** `claude` | `openai` (absent from older servers: Claude). */
+  provider?: string
   account: UsageAccount | null
   limits: UsageLimit[]
   extra_usage: UsageExtra | null
@@ -860,7 +1080,14 @@ export interface UsageResponse {
   fetched_at: string
   /** A refresh failed; these are the last good numbers. */
   stale: boolean
+  /** With `stale`: why the refresh failed. With no `limits`: why there are none. */
   error: string | null
+}
+
+export interface UsageResponse extends UsageRead {
+  host: string
+  /** The ChatGPT subscription Codex is logged in with on this host (absent: none). */
+  openai?: UsageRead | null
 }
 
 /** A Claude session inside a dormant entry (`overmind restore --json`). */
@@ -883,6 +1110,8 @@ export interface DormantView {
   windows: number
   panes: number
   sessions: DormantSession[]
+  /** Put to sleep on purpose (Sleep in the app, `overmind sleep`), not left by a reboot: Resume all skips it. */
+  slept?: boolean
 }
 
 /**
@@ -1122,6 +1351,45 @@ export interface TasksResponse {
 }
 
 /** POST /api/hosts/:host/tasks/spawn */
+/** A session started later (`overmind schedule --json`): at a time, or on a task's start date. */
+export interface ScheduledEntry {
+  id: string
+  /** ms epoch; null while a linked task has no start date. */
+  at: number | null
+  /** `HH:MM` on the task's start date (task-linked only). */
+  time?: string
+  task?: { id: string; number: string; title: string; url: string; startDate: string | null; checkedAt: number }
+  dir: string
+  prompt: string
+  name: string | null
+  model: string | null
+  harness: string
+  ghIdentity: string | null
+  createdAt: number
+  state: 'pending' | 'started' | 'skipped' | 'missed' | 'failed' | 'cancelled'
+  reason: string | null
+  firedAt: number | null
+  tmuxSession: string | null
+}
+
+export interface ScheduleResponse {
+  host: string
+  entries: ScheduledEntry[]
+}
+
+export interface ScheduleAddBody {
+  /** When: `2026-10-29T07:30`, `tomorrow 09:00`, `in 2h` — or `task` (+ `time`) instead. */
+  at?: string
+  task?: string
+  time?: string
+  dir: string
+  prompt?: string
+  name?: string
+  model?: string
+  harness?: string
+  ghIdentity?: string
+}
+
 export interface TaskSpawnResponse {
   host: string
   task: Task & { contextLine: string }
@@ -1177,6 +1445,21 @@ export interface JobRun {
   reason: string | null
   promptFile: string | null
   sessions: JobRunSession[]
+  /** A GitHub-triggered run (`trigger: 'github'`): the branch it is about; `goneAt` once deleted. */
+  subject?: { kind: string; repo: string; branch: string; sha: string; url: string; goneAt: number | null }
+}
+
+/** A GitHub bot's poll state (`overmind bots --json` → `github`). */
+export interface JobGithubState {
+  lastPoll: number | null
+  lastOk: number | null
+  nextPoll: number | null
+  error: { kind: string; message: string; at: number } | null
+  rateRemaining: number | null
+  branches: Record<
+    string,
+    { sha: string; outcome: string; run: string | null; tmuxSession: string | null; reason: string | null }
+  >
 }
 
 /** A live session of a job (`overmind jobs --json` → `live[]`). */
@@ -1214,6 +1497,9 @@ export interface Job {
   /** Epoch ms; null when paused (or the schedule never fires). */
   nextRun: number | null
   lastSlot: number | null
+  /** A bot started by a trigger instead of a schedule (`schedule` is then empty). */
+  on?: { github?: { repo: string; branch: string; every: number; backfill: boolean } } | null
+  github?: JobGithubState | null
   /** Newest first: the latest one from the list, every kept run from `show`. */
   runs: JobRun[]
   live: JobLive[]
@@ -1308,6 +1594,8 @@ export interface DiffFile {
   deletions: number
   truncated: boolean
   hunks: DiffHunk[]
+  /** a PlainLang (.plain) spec: its whole text at the base and now (null: not there, or too big) */
+  plain?: { old: string | null; new: string | null }
 }
 
 export interface DiffResponse {
@@ -1382,6 +1670,25 @@ export interface ReviewAnchor {
   code: string[]
 }
 
+/** A side question about the diff (POST …/ask, GET /asks/:id): a read-only fork of the session, kept in memory on its host only. */
+export interface SideAsk {
+  id: string
+  status: 'running' | 'done' | 'error' | 'cancelled'
+  question: string
+  /** `path:start–end` of the selection, or null */
+  label: string | null
+  /** the answer so far (markdown); the final answer once done */
+  text: string
+  /** the tool it is using right now (`Read`, `Grep`), or null */
+  activity: string | null
+  error: string | null
+  costUsd: number | null
+  /** asked in a fork of the session (it knew the conversation) */
+  forked: boolean
+  startedAt: number
+  endedAt: number | null
+}
+
 /** One checkout in GET …/diffs: the session's cwd checkout first, then those of the files it worked on. */
 export interface DiffRepo {
   root: string
@@ -1407,6 +1714,37 @@ export interface DiffsResponse {
   fingerprint: string
   unchanged: boolean
   repos?: DiffRepo[]
+}
+
+/** A PR as the reviewer sees it (GET …/prs/:owner/:repo/:n/diff, /notes). */
+export interface PrReviewInfo {
+  owner: string
+  repo: string
+  number: number
+  title: string
+  url: string
+  author: string
+  headBranch: string
+  baseBranch: string
+  headOid: string | null
+  draft: boolean
+}
+
+/** GET /api/hosts/:host/prs/:owner/:repo/:n/diff: the PR's diff from the host's clone, as one checkout. */
+export interface PrDiffResponse extends Omit<DiffsResponse, 'id'> {
+  id: null
+  pr: PrReviewInfo
+}
+
+/** A review note on a PR without a session: a draft thread kept in Overmind; `posted` once it went to GitHub. */
+export type PrNote = ReviewThread & { posted?: { url: string | null; at: number } | null }
+export interface PrNotesState {
+  host: string
+  pr: PrReviewInfo
+  threads: PrNote[]
+  reviews: never[]
+  /** notes not on GitHub */
+  drafts: number
 }
 
 /** One source of GET /api/inbox — a missing key in `sources` means that source is off. */

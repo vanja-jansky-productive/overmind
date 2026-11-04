@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { ApiError, api, isAbortError } from '@/api/client'
-import { plainSpeech, speechLang } from '@/lib/operator'
+import { plainSpeech, speechChunks, speechLang } from '@/lib/operator'
 
 export type SpeechState = 'idle' | 'loading' | 'playing'
 
@@ -34,9 +34,10 @@ function browserVoice(lang: string): SpeechSynthesisVoice | null {
 }
 
 /**
- * Read text aloud: POST /api/speak (OpenAI voice) on one reused <audio> element, else — no key,
- * or the server failed once — the browser's own voice. Call `unlock()` from a tap (the mic
- * button) so replies that arrive later may play; a new `speak` cuts the current one.
+ * Read text aloud: POST /api/speak (OpenAI voice) per piece (speechChunks) on one reused <audio>
+ * element, else — no key, or the server failed once — the browser's own voice. Call `unlock()`
+ * from a tap (the mic button) so replies that arrive later may play; a new `speak` cuts the
+ * current one.
  * `server`: this server offers /api/speak (settings.speak).
  */
 export function useSpeech({ server, rate = 1 }: { server: boolean; rate?: number }) {
@@ -61,10 +62,9 @@ export function useSpeech({ server, rate = 1 }: { server: boolean; rate?: number
 
   const element = useCallback(() => {
     if (!audio.current) {
+      // No onended → idle here: a reading is several pieces, and speak() says when it is done.
       const a = new Audio()
       a.preload = 'auto'
-      a.onended = () => setState('idle')
-      a.onerror = () => setState('idle')
       audio.current = a
     }
     return audio.current
@@ -114,24 +114,66 @@ export function useSpeech({ server, rate = 1 }: { server: boolean; rate?: number
     setState('playing')
   }, [])
 
-  const speak = useCallback(
-    async (text: string) => {
-      stop()
-      if (!useServer.current) return speakInBrowser(text)
-      const controller = new AbortController()
-      inflight.current = controller
-      setState('loading')
-      try {
-        const blob = await api.speak(text, { signal: controller.signal })
-        if (controller.signal.aborted) return
+  /** Play one piece on the shared element; resolves when it ends (or the reading is stopped). */
+  const playPiece = useCallback(
+    (blob: Blob, signal: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
         const a = element()
+        dropUrl()
         url.current = URL.createObjectURL(blob)
         a.src = url.current
         // A new source resets playbackRate to defaultPlaybackRate: set both.
         a.defaultPlaybackRate = rateRef.current
         a.playbackRate = rateRef.current
-        await a.play()
-        setState('playing')
+        const cleanup = () => {
+          a.removeEventListener('ended', done)
+          a.removeEventListener('error', fail)
+          signal.removeEventListener('abort', done)
+        }
+        function done() {
+          cleanup()
+          resolve()
+        }
+        function fail() {
+          cleanup()
+          reject(a.error ?? new Error('playback failed'))
+        }
+        a.addEventListener('ended', done)
+        a.addEventListener('error', fail)
+        signal.addEventListener('abort', done)
+        a.play().then(
+          () => setState('playing'),
+          (err) => {
+            cleanup()
+            reject(err)
+          },
+        )
+      }),
+    [element],
+  )
+
+  const speak = useCallback(
+    async (text: string) => {
+      stop()
+      if (!useServer.current) return speakInBrowser(text)
+      // Voiced piece by piece, all requested at once: the first (short) piece plays within a
+      // second while the rest is still being voiced, instead of waiting for the whole reply.
+      const pieces = speechChunks(text)
+      if (!pieces.length) return setState('idle')
+      const controller = new AbortController()
+      inflight.current = controller
+      setState('loading')
+      const audios = pieces.map((p) => api.speak(p, { signal: controller.signal }))
+      audios.forEach((p) => p.catch(() => {}))
+      let i = 0
+      try {
+        for (; i < pieces.length; i += 1) {
+          const blob = await audios[i]
+          if (controller.signal.aborted) return
+          await playPiece(blob, controller.signal)
+          if (controller.signal.aborted) return
+        }
+        setState('idle')
       } catch (err) {
         if (isAbortError(err) || controller.signal.aborted) return
         if ((err as DOMException)?.name === 'NotAllowedError') {
@@ -140,9 +182,10 @@ export function useSpeech({ server, rate = 1 }: { server: boolean; rate?: number
           return
         }
         useServer.current = false
+        const rest = i ? pieces.slice(i).join(' ') : text
         if (hasBrowserVoice()) {
           toast.message("Using this device's voice", { description: err instanceof ApiError ? err.message : String(err) })
-          speakInBrowser(text)
+          speakInBrowser(rest)
         } else {
           setState('idle')
           toast.error("Couldn't read the reply aloud", { description: err instanceof ApiError ? err.message : String(err) })
@@ -151,7 +194,7 @@ export function useSpeech({ server, rate = 1 }: { server: boolean; rate?: number
         if (inflight.current === controller) inflight.current = null
       }
     },
-    [element, stop, speakInBrowser],
+    [stop, speakInBrowser, playPiece],
   )
 
   useEffect(

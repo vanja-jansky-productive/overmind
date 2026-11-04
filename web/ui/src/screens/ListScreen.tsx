@@ -1,59 +1,56 @@
 import { useRef, useState, type TouchEvent } from 'react'
-import { EllipsisIcon, MicIcon, PlusIcon, SearchIcon, TriangleAlertIcon, XIcon, GitPullRequestIcon } from 'lucide-react'
+import { EllipsisIcon, MicIcon, PlusIcon, SearchIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useLocation } from 'wouter'
 
 import { GroupedList } from '@/components/board/GroupedList'
 import { GroupsStatus } from '@/components/board/GroupsStatus'
 import { ClosedSection } from '@/components/ClosedSection'
 import { DormantSection } from '@/components/DormantSection'
-import { HostDot } from '@/components/HostBadge'
-import { StatusFilterLabel } from '@/components/JobChip'
 import { NewSessionDrawer } from '@/components/NewSessionDrawer'
 import { MemoRecordFab } from '@/components/MemoRecorder'
 import { FocusMenuItem } from '@/components/FocusToggle'
-import { ModuleMenuItems } from '@/components/ModuleNav'
+import { MENU_ITEM, ModuleMenuItems } from '@/components/ModuleNav'
 import { ScreenHeader } from '@/components/ScreenHeader'
 import { SessionListSkeleton } from '@/components/SessionListSkeleton'
+import { SessionFilters } from '@/components/SessionFilters'
 import { SessionRow } from '@/components/SessionRow'
 import { StackGroup } from '@/components/stack/StackGroup'
 import { StatusDot } from '@/components/StatusDot'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ViewToggle } from '@/components/ViewToggle'
+import { useFlip } from '@/hooks/useFlip'
 import { useBoardColumns, useGroups, useViewMode } from '@/hooks/useGroups'
 import { useSettings } from '@/hooks/useSettings'
 import { useNow } from '@/hooks/useNow'
-import { ALL_HOSTS, useSessionList } from '@/hooks/useSessionList'
+import { useSessionList } from '@/hooks/useSessionList'
+import { DEFAULT_SELECTION, selectionLabel } from '@/lib/hosts'
 import { pullIntent } from '@/lib/gestures'
-import { allSessions, stackRuns, visibleStatusFilters, findStatusFilter, type StatusFilterId } from '@/lib/sessions'
+import { allSessions, stackRuns, findStatusFilter } from '@/lib/sessions'
 import { cn } from '@/lib/utils'
-
-const chipClass = cn(
-  'h-9 shrink-0 gap-1.5 rounded-full border border-border bg-card px-3.5 text-sm text-muted-foreground',
-  'data-[state=on]:border-primary/50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground',
-)
 
 export function ListScreen() {
   const now = useNow(1000)
-  const { overmind, error, query, setQuery, status, setStatus, setHostFilter, hosts, hostNames, host, view, hostCounts, summary, unreachable, note } =
-    useSessionList(now)
+  const list = useSessionList(now)
+  const { overmind, error, query, setQuery, status, setStatus, selection, setSelection, hosts, hostSet, view, summary, unreachable, note } = list
   const [newOpen, setNewOpen] = useState(false)
   const [, navigate] = useLocation()
   const [mode, setMode] = useViewMode()
   const settings = useSettings()
   const board = mode === 'board'
   const groups = useGroups(board)
-  const { columns } = useBoardColumns(board, view.sessions, groups.groups, overmind, host, query)
+  const { columns } = useBoardColumns(board, view.sessions, groups.groups, overmind, hostSet, query)
+  const rowsRef = useRef<HTMLDivElement>(null)
+  useFlip(rowsRef, view.sessions.map((s) => `${s.host}/${s.session_id}`).join(' '))
   // The filter rows live in a drawer under the search field, closed by default: swipe down on
   // the header (or tap the handle) opens it, swipe up closes it. Active filters show on the handle.
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const filterSummary = [status !== 'all' ? findStatusFilter(status).label : null, host].filter(Boolean).join(' · ')
+  const filterSummary = [status !== 'all' ? findStatusFilter(status).label : null, selectionLabel(selection, hosts)].filter(Boolean).join(' · ')
   const clearFilters = () => {
     setStatus('all')
-    setHostFilter(ALL_HOSTS)
+    setSelection(DEFAULT_SELECTION)
   }
   const touch = useRef<{ x: number; y: number } | null>(null)
   const onTouchStart = (e: TouchEvent) => {
@@ -108,11 +105,6 @@ export function ListScreen() {
               </a>
             </Button>
           ) : null}
-          <Button asChild variant="ghost" size="icon" className="-my-1 size-8 shrink-0 rounded-full min-[400px]:size-9 sm:size-10 text-muted-foreground [&_svg:not([class*='size-'])]:size-5">
-            <a href="#/prs" aria-label="Pull requests" title="Pull requests">
-              <GitPullRequestIcon />
-            </a>
-          </Button>
           {/* The rest of the screens sit behind one button: the header row is narrow on a phone. */}
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
@@ -126,10 +118,12 @@ export function ListScreen() {
                 <EllipsisIcon />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {/* Pull requests stay in the header, the operator is the mic button. */}
-              <ModuleMenuItems exclude={['prs', 'operator']} />
-              <FocusMenuItem />
+            <DropdownMenuContent align="end" className="w-60 p-1.5">
+              {/* The modules (the operator is the mic button), then the helpers set apart. */}
+              <ModuleMenuItems group="work" exclude={['operator']} />
+              <DropdownMenuSeparator className="my-1.5" />
+              <FocusMenuItem className={MENU_ITEM} />
+              <ModuleMenuItems group="utility" />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -169,43 +163,9 @@ export function ListScreen() {
           inert={!filtersOpen}
         >
         <div className="min-h-0 overflow-hidden">
-        <ToggleGroup
-          type="single"
-          value={status}
-          onValueChange={(v) => v && setStatus(v as StatusFilterId)}
-          aria-label="Filter by status"
-          className="no-scrollbar mt-2 w-full overflow-x-auto"
-        >
-          {visibleStatusFilters(overmind ? view.counts : null, status).map((f) => (
-            <ToggleGroupItem key={f.id} value={f.id} className={chipClass} title={f.id === 'scheduled' ? 'Sessions started by bots' : undefined}>
-              <StatusFilterLabel filter={f} />
-              <span className="text-xs text-dimmer tabular-nums group-data-[state=on]/toggle:text-accent-foreground/70">
-                {overmind ? view.counts[f.id] : ''}
-              </span>
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-
-        {hostNames.length > 1 ? (
-          <ToggleGroup
-            type="single"
-            value={host ?? ALL_HOSTS}
-            onValueChange={(v) => v && setHostFilter(v)}
-            aria-label="Filter by host"
-            className="no-scrollbar mt-2 w-full overflow-x-auto"
-          >
-            <ToggleGroupItem value={ALL_HOSTS} className={cn(chipClass, 'h-8 text-[0.8125rem]')}>
-              All
-            </ToggleGroupItem>
-            {hosts.map((h) => (
-              <ToggleGroupItem key={h.name} value={h.name} className={cn(chipClass, 'h-8 text-[0.8125rem]')}>
-                <HostDot host={h.name} />
-                <span className={cn(h.ok === false && 'text-destructive')}>{h.name}</span>
-                <span className="text-xs text-dimmer tabular-nums">{h.ok === false ? '!' : (hostCounts.get(h.name) ?? 0)}</span>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        ) : null}
+        <div className="mt-2">
+          <SessionFilters list={list} spread touch />
+        </div>
 
         {board ? <GroupsStatus state={groups} now={now} size="lg" className="mt-1 -mb-1 justify-between" /> : null}
         </div>
@@ -273,7 +233,7 @@ export function ListScreen() {
           ) : board && columns.length > 0 ? (
             <GroupedList columns={columns} now={now} />
           ) : view.sessions.length > 0 ? (
-            <div className="flex flex-col gap-2">
+            <div ref={rowsRef} className="flex flex-col gap-2">
               {stackRuns(view.sessions).map((e) =>
                 e.kind === 'stack' ? (
                   <StackGroup
@@ -291,8 +251,8 @@ export function ListScreen() {
             <EmptyState anySessions={allSessions(overmind).length > 0} />
           ) : null}
 
-          {overmind ? <DormantSection now={now} host={host} query={query} className="mt-6" /> : null}
-          {overmind ? <ClosedSection now={now} host={host} query={query} className="mt-4" /> : null}
+          {overmind ? <DormantSection now={now} hosts={hostSet} query={query} className="mt-6" /> : null}
+          {overmind ? <ClosedSection now={now} hosts={hostSet} query={query} className="mt-4" /> : null}
         </div>
       </main>
 

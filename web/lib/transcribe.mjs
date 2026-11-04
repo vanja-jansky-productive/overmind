@@ -2,6 +2,9 @@
 // endpoint and answers with the text, which the UI appends to the prompt. The key comes from
 // $OPENAI_SPEECH_TO_TEXT_API_KEY, else (macOS) the Keychain item of that name — never from
 // the config file. No key → the feature is off (/api/settings says so, the mic is hidden).
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import { HttpError } from './http.mjs';
 
 export const KEY_NAME = 'OPENAI_SPEECH_TO_TEXT_API_KEY';
@@ -36,6 +39,27 @@ export function audioType(contentType) {
 export function buildPrompt(hint, base = BASE_PROMPT) {
   const extra = String(hint ?? '').replace(/\s+/g, ' ').trim().slice(0, HINT_MAX);
   return extra ? `${base} ${extra}` : base;
+}
+
+const flat = (s) => String(s ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * Whether `text` came from the prompt, not from speech. On silence (a muted mic, an empty
+ * recording) the model answers with the prompt itself, or with prose strung from its terms:
+ * a transcript inside the prompt, one containing the prompt's opening, or one naming three or
+ * more of its hyphenated terms (session names, which nobody reads out in a row).
+ */
+export function promptEcho(text, prompt) {
+  const t = flat(text);
+  const p = flat(prompt);
+  if (!t || !p) return false;
+  if (t.length >= 20 && p.includes(t)) return true;
+  if (t.includes(p.slice(0, 30))) return true;
+  const said = String(text).toLowerCase();
+  const terms = new Set(String(prompt).toLowerCase().match(/[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)+/gu) ?? []);
+  let hits = 0;
+  for (const term of terms) if (said.includes(term) && ++hits >= 3) return true;
+  return false;
 }
 
 /** The request body as a Buffer, refusing more than `limit` bytes. */
@@ -100,9 +124,10 @@ export function createKeySource({ name = KEY_NAME, env = process.env, platform =
  *   getKey    async () => key | null (createKeySource)
  *   model     OpenAI transcription model
  *   fetch     injectable for tests
+ *   keepDir   a recording that fails to transcribe is saved here, so a long dictation is not lost
  * @returns {{ enabled(), transcribe(req, hint): Promise<{ text, model }>, transcribeAudio(audio, type, prompt): Promise<{ text, model }> }}
  */
-export function createTranscriber({ getKey, model = DEFAULT_TRANSCRIBE_MODEL, maxBytes = TRANSCRIBE_MAX_BYTES, fetch = globalThis.fetch, timeoutMs = 60 * 1000, log = () => {} }) {
+export function createTranscriber({ getKey, keepDir = null, now = () => new Date(), model = DEFAULT_TRANSCRIBE_MODEL, maxBytes = TRANSCRIBE_MAX_BYTES, fetch = globalThis.fetch, timeoutMs = 60 * 1000, log = () => {} }) {
   async function enabled() {
     return Boolean(await getKey());
   }
@@ -113,7 +138,30 @@ export function createTranscriber({ getKey, model = DEFAULT_TRANSCRIBE_MODEL, ma
     if (!type) throw new HttpError('expected an audio body (webm, ogg, mp4, mp3 or wav)', 415);
     const audio = await readAudio(req, maxBytes);
     if (!audio.length) throw new HttpError('empty recording', 400);
-    return transcribeAudio(audio, type, buildPrompt(hint));
+    try {
+      return await transcribeAudio(audio, type, buildPrompt(hint));
+    } catch (err) {
+      const kept = await keep(audio, type);
+      if (kept) {
+        log(`transcribe: kept the failed recording (${audio.length} bytes, ${type}) as ${kept}`);
+        err.message += ' (the recording is kept on the server)';
+      }
+      throw err;
+    }
+  }
+
+  /** Save a recording that failed; its path, or null. */
+  async function keep(audio, type) {
+    if (!keepDir) return null;
+    const file = path.join(keepDir, `${now().toISOString().replace(/[:.]/g, '-')}.${EXT[type]}`);
+    try {
+      await fs.mkdir(keepDir, { recursive: true });
+      await fs.writeFile(file, audio);
+      return file;
+    } catch (err) {
+      log(`transcribe: could not keep the failed recording: ${err.message}`);
+      return null;
+    }
   }
 
   /** Audio bytes of a known `type` (audioType) → text; `prompt` steers the model. */
@@ -145,7 +193,12 @@ export function createTranscriber({ getKey, model = DEFAULT_TRANSCRIBE_MODEL, ma
       // The key's problems are this server's, not the caller's: 502, never a 401 the UI would misread.
       throw new HttpError(`transcription failed: ${msg}`, res.status === 429 ? 429 : 502);
     }
-    return { text: String(data?.text ?? '').trim(), model };
+    const text = String(data?.text ?? '').trim();
+    if (promptEcho(text, prompt)) {
+      log(`transcribe: dropped a prompt echo (${text.length} chars) — silent recording?`);
+      return { text: '', model };
+    }
+    return { text, model };
   }
 
   return { enabled, transcribe, transcribeAudio };

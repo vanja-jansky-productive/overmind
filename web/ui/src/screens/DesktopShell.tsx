@@ -20,8 +20,6 @@ import {
   NotebookPenIcon,
   NotebookTextIcon,
   PaletteIcon,
-  PanelLeftIcon,
-  PanelRightIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -39,7 +37,8 @@ import type { Session } from '@/api/types'
 import { Board } from '@/components/board/Board'
 import { CommandPalette, type PaletteAction } from '@/components/desktop/CommandPalette'
 import { ShortcutsDialog } from '@/components/desktop/ShortcutsDialog'
-import { Sidebar, SidebarRail } from '@/components/desktop/Sidebar'
+import { Sidebar } from '@/components/desktop/Sidebar'
+import { TopBar } from '@/components/desktop/TopBar'
 import { NewSessionDialog } from '@/components/NewSessionDrawer'
 import { StatusDot } from '@/components/StatusDot'
 import { Kbd } from '@/components/ui/kbd'
@@ -47,7 +46,6 @@ import { useOvermind } from '@/hooks/useOvermind'
 import { focusLeft, toggleFocus, useFocus } from '@/hooks/useFocus'
 import { useBoardColumns, useGroups, useViewMode } from '@/hooks/useGroups'
 import { useNotesHosts, useNotesTree } from '@/hooks/useNotes'
-import { WIDE_QUERY } from '@/hooks/useMediaQuery'
 import { useNow } from '@/hooks/useNow'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { useSessionList } from '@/hooks/useSessionList'
@@ -57,17 +55,16 @@ import { useTheme } from '@/hooks/useTheme'
 import { openTitleEditor, startEditing, useSessionTitle } from '@/hooks/useTitles'
 import { editorLabel } from '@/lib/brief'
 import { canAttachInApp, copyWithToast, sessionAttachCommand, sessionAttachLink } from '@/lib/clipboard'
-import { boardOrder } from '@/lib/groups'
+import { boardOrder, type ViewMode } from '@/lib/groups'
 import { parseMemosLocation } from '@/lib/memos'
 import { notesHref, parseNotesLocation } from '@/lib/notes'
 import { scratchpad } from '@/lib/scratchpad'
 import { PALETTES } from '@/lib/palettes'
 import { stacksKnown } from '@/lib/stacks'
-import { STATUS_FILTERS, allSessions, byLastActivity, findSession, sessionHref, statusLabel, withoutSession } from '@/lib/sessions'
+import { STATUS_FILTERS, allSessions, byLastActivity, findSession, sessionHref, statusLabel } from '@/lib/sessions'
 import {
   clampFlyoutWidth,
   clampSidebarWidth,
-  detailsFitBeside,
   FLYOUT_KEY_STEP,
   FLYOUT_MIN_W,
   flyoutMaxWidth,
@@ -93,9 +90,9 @@ import { NotesScreen } from '@/screens/NotesScreen'
 import { PrsScreen } from '@/screens/PrsScreen'
 import { TasksScreen } from '@/screens/TasksScreen'
 import { ReviewScreen } from '@/screens/ReviewScreen'
-import { isPrsLocation } from '@/lib/prs'
+import { isPrsLocation, prHref } from '@/lib/prs'
 import { isTasksLocation } from '@/lib/tasks'
-import { parseReviewLocation, reviewHref } from '@/lib/review'
+import { parsePrReviewLocation, parseReviewLocation, reviewHref } from '@/lib/review'
 import { SessionScreen, type PaneApi } from '@/screens/SessionScreen'
 import { SettingsScreen } from '@/screens/SettingsScreen'
 import { UsageScreen } from '@/screens/UsageScreen'
@@ -104,10 +101,9 @@ import { JobsScreen } from '@/screens/JobsScreen'
 import { MemosScreen } from '@/screens/MemosScreen'
 import { OperatorScreen } from '@/screens/OperatorScreen'
 
-const parseBool01 = (raw: string) => (raw === '1' ? true : raw === '0' ? false : undefined)
 
 /**
- * ≥ lg: master–detail. Resizable / collapsible sidebar (the session list) + the selected
+ * ≥ lg: master–detail. Resizable sidebar (the session list) + the selected
  * session as a pane (+ an optional details column). Same hash routes as mobile:
  * `#/` = nothing selected, `#/s/:host/:id` = that session open. One window keydown
  * listener drives the keyboard shortcuts (lib/shortcuts.ts).
@@ -116,53 +112,43 @@ export function DesktopShell() {
   const now = useNow(1000)
   const focus = useFocus()
   const list = useSessionList(now)
-  const { overmind, refresh, applyOvermind } = useOvermind()
+  const { overmind, refresh, dropSession } = useOvermind()
   const { setTheme, setPalette } = useTheme()
   const [location, navigate] = useLocation()
   const [match, params] = useRoute('/s/:host/:id')
-  const [settingsOpen] = useRoute('/settings')
+  const [settingsOpen] = useRoute('/settings/:section?')
   const [usageOpen] = useRoute('/usage')
   const [jobsOpen] = useRoute(/^\/(?:bots|jobs)$/)
   const [inboxOpen] = useRoute('/inbox')
   const [operatorOpen] = useRoute('/operator')
   const memosOpen = parseMemosLocation(location) !== null
   const settings = useSettings()
-  // `#/prs`: the pull requests board takes the whole window too.
+  // `#/prs`: the pull requests board, in the pane.
   const prsOpen = isPrsLocation(location)
   // `#/tasks`: the tasks board too.
   const tasksOpen = isTasksLocation(location)
-  // `#/notes…`: the notes explorer takes the whole window (no sidebar / board).
+  // `#/notes…`: the notes explorer, in the pane.
   const notesLoc = parseNotesLocation(location)
   const notesOpen = notesLoc !== null
   // `#/review/:host/:id`: the diff reviewer (with the session beside it) takes the whole window.
   const reviewLoc = parseReviewLocation(location)
-  const reviewOpen = reviewLoc !== null
+  // `#/review/pr/:host/:owner/:repo/:n`: the same over a PR, with no session.
+  const prReviewLoc = parsePrReviewLocation(location)
+  const reviewOpen = reviewLoc !== null || prReviewLoc !== null
   const notesHosts = useNotesHosts()
   const selected = match ? { host: params.host, id: params.id } : null
   const selectedKey = selected ? `${selected.host}/${selected.id}` : null
   const selectedSession = selected ? findSession(overmind, selected.host, selected.id) : null
 
-  const [sidebarRaw, setSidebarRaw] = usePersistentState<string>('overmind.sidebar', '1', (r) => (parseBool01(r) === undefined ? undefined : r))
-  const sidebarOpen = sidebarRaw === '1'
   const [sidebarW, setSidebarW] = usePersistentState<number>('overmind.sidebarWidth', SIDEBAR_DEFAULT_W, (r) => clampSidebarWidth(Number(r)))
-  const [inspectorRaw, setInspectorRaw] = usePersistentState<string>(
-    'overmind.inspector',
-    typeof window !== 'undefined' && window.matchMedia?.(WIDE_QUERY).matches ? '1' : '0',
-    (r) => (parseBool01(r) === undefined ? undefined : r),
-  )
-  // The Details column: the brief first, then the session's details (⌘I).
-  const inspector = inspectorRaw === '1'
-  const toggleSidebar = () => setSidebarRaw(sidebarOpen ? '0' : '1')
-  const toggleInspector = () => setInspectorRaw(inspector ? '0' : '1')
 
   // List | Board (`overmind.view`). Board: the grouped Kanban replaces the sidebar; an open
   // session is a flyout over its right edge (the board never relayouts), so ↑/↓, Enter and
   // Esc work the same way.
   const [mode, setMode] = useViewMode()
   const board = mode === 'board'
-  const toggleView = () => setMode(board ? 'list' : 'board')
   const groups = useGroups(board)
-  const { columns, moveColumn } = useBoardColumns(board, list.view.sessions, groups.groups, overmind, list.host, list.query)
+  const { columns, moveColumn } = useBoardColumns(board, list.view.sessions, groups.groups, overmind, list.hostSet, list.query)
   // The cursor walks the sessions in on-screen order: the list, or the board column by column.
   const ordered = useMemo(() => (board ? boardOrder(columns) : list.view.sessions), [board, columns, list.view.sessions])
 
@@ -206,8 +192,21 @@ export function DesktopShell() {
     [navigate, selectedKey],
   )
 
-  // Focus moves that must wait for the next commit (the sidebar may be collapsed, the
-  // cursor row not rendered yet). An effect, not requestAnimationFrame: rAF never fires
+  // Board is for the overview: it closes the open session. List is for working through the
+  // top: it opens the first session.
+  const switchView = (v: ViewMode) => {
+    if (v === mode) return
+    setMode(v)
+    if (v === 'board') {
+      if (selectedKey) navigate('/')
+    } else if (list.view.sessions[0]) {
+      openSession(list.view.sessions[0], false)
+    }
+  }
+  const toggleView = () => switchView(board ? 'list' : 'board')
+
+  // Focus moves that must wait for the next commit (the cursor row may not be rendered
+  // yet). An effect, not requestAnimationFrame: rAF never fires
   // in a background tab, and a late focus would steal the caret from the composer.
   const [focusReq, setFocusReq] = useState<{ to: 'search' | 'row'; key?: string; n: number } | null>(null)
   useEffect(() => {
@@ -226,7 +225,6 @@ export function DesktopShell() {
       notesSearchRef.current?.select()
       return
     }
-    if (!sidebarOpen && !board) setSidebarRaw('1')
     setFocusReq((r) => ({ to: 'search', n: (r?.n ?? 0) + 1 }))
   }
 
@@ -268,7 +266,7 @@ export function DesktopShell() {
       .kill(s.host, s.session_id)
       .then((res) => {
         toast.success(`Closed ${res.name || name}`, { id: pending, description: String(res.terminal || 'done').replace(/-/g, ' ') })
-        if (overmind) applyOvermind(withoutSession(overmind, s.host, s.session_id))
+        dropSession(s.host, s.session_id)
         setTimeout(refresh, 2500)
         if (selectedKey === key) navigate('/', { replace: true })
       })
@@ -277,11 +275,7 @@ export function DesktopShell() {
 
   const run = (action: ShortcutAction, target: HTMLElement | null): boolean => {
     const cur = cursorKey ? byKey.get(cursorKey) : null
-    // The session list isn't on screen in the notes explorer: its keys do nothing there.
-    if (notesOpen && !['search', 'new', 'back', 'blur', 'palette', 'help', 'notes', 'scratchpad'].includes(action)) return false
     if (reviewOpen && !['new', 'back', 'blur', 'palette', 'help', 'notes', 'scratchpad'].includes(action)) return false
-    if (prsOpen && !['new', 'back', 'blur', 'palette', 'help', 'notes', 'scratchpad', 'tasks'].includes(action)) return false
-    if (tasksOpen && !['new', 'back', 'blur', 'palette', 'help', 'notes', 'scratchpad', 'prs'].includes(action)) return false
     switch (action) {
       case 'next':
         moveCursor(1)
@@ -311,6 +305,10 @@ export function DesktopShell() {
           navigate(sessionHref({ host: reviewLoc.host, session_id: reviewLoc.id }))
           return true
         }
+        if (prReviewLoc) {
+          navigate(prHref(prReviewLoc))
+          return true
+        }
         if (selectedKey || settingsOpen || usageOpen || jobsOpen || inboxOpen || operatorOpen || memosOpen || notesOpen || prsOpen || tasksOpen) {
           navigate('/')
           return true
@@ -322,16 +320,8 @@ export function DesktopShell() {
       case 'mode':
         paneRef.current?.toggleMode()
         return !!paneRef.current
-      case 'sidebar':
-        if (board) return false
-        toggleSidebar()
-        return true
       case 'view':
         toggleView()
-        return true
-      case 'inspector':
-        if (!selectedKey) return false
-        toggleInspector()
         return true
       case 'palette':
         setPaletteOpen((o) => !o)
@@ -442,7 +432,8 @@ export function DesktopShell() {
   useEffect(() => {
     const el = boardAreaRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(([entry]) => entry && setBoardW(entry.contentRect.width))
+    // An unmounting board reports 0 wide: keep the last real width.
+    const ro = new ResizeObserver(([entry]) => entry && entry.contentRect.width > 0 && setBoardW(entry.contentRect.width))
     ro.observe(el)
     return () => ro.disconnect()
   }, [board])
@@ -501,14 +492,6 @@ export function DesktopShell() {
           ? [
               { id: 'chat', label: 'Chat view', icon: <MessageSquareTextIcon />, shortcut: shortcutHint('mode'), run: () => paneRef.current?.setMode('chat') },
               { id: 'term', label: 'Terminal view', icon: <SquareTerminalIcon />, shortcut: shortcutHint('mode'), run: () => paneRef.current?.setMode('term') },
-              {
-                id: 'inspector',
-                label: inspector ? 'Hide details (brief)' : 'Show details (brief: summary, todos, resources)',
-                icon: <PanelRightIcon />,
-                shortcut: shortcutHint('inspector'),
-                keywords: ['details', 'brief', 'todos', 'summary', 'resources', 'continue', 'inspector'],
-                run: toggleInspector,
-              },
               ...(selected
                 ? [
                     {
@@ -528,9 +511,6 @@ export function DesktopShell() {
         ...(board && groups.groups?.enabled
           ? [{ id: 'regroup', label: 'Regroup now', icon: <SparklesIcon />, keywords: ['group', 'board'], run: () => void groups.run() }]
           : []),
-        ...(board
-          ? []
-          : [{ id: 'sidebar', label: sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar', icon: <PanelLeftIcon />, shortcut: shortcutHint('sidebar'), run: toggleSidebar }]),
         ...(selectedSession && selectedKey
           ? [{ id: 'rename', label: 'Rename session…', icon: <PencilIcon />, shortcut: shortcutHint('rename'), keywords: ['title', 'name'], run: () => startEditing('header', selectedKey) }]
           : []),
@@ -667,12 +647,9 @@ export function DesktopShell() {
       host={selected.host}
       id={selected.id}
       layout="pane"
-      inspector={inspector}
-      onToggleInspector={toggleInspector}
       paneRef={paneRef}
       autoFocusComposer={focusOnOpen === selectedKey}
       onClose={board ? () => navigate('/') : undefined}
-      detailsOverlay={board && !detailsFitBeside(flyoutW, parseFloat(getComputedStyle(document.documentElement).fontSize))}
     />
   ) : settingsOpen ? (
     <SettingsScreen layout="pane" />
@@ -686,153 +663,144 @@ export function DesktopShell() {
     <OperatorScreen layout="pane" />
   ) : memosOpen ? (
     <MemosScreen layout="pane" />
+  ) : prsOpen ? (
+    <PrsScreen layout="pane" />
+  ) : tasksOpen ? (
+    <TasksScreen layout="pane" />
+  ) : notesOpen ? (
+    <NotesScreen layout="pane" searchRef={notesSearchRef} />
   ) : null
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background text-foreground">
-      {notesOpen ? (
-        <main className="flex min-w-0 flex-1">
-          <NotesScreen layout="pane" searchRef={notesSearchRef} />
-        </main>
-      ) : prsOpen ? (
-        <main className="flex min-w-0 flex-1">
-          <PrsScreen layout="pane" />
-        </main>
-      ) : tasksOpen ? (
-        <main className="flex min-w-0 flex-1">
-          <TasksScreen layout="pane" />
-        </main>
-      ) : reviewOpen ? (
-        <main className="flex min-w-0 flex-1">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+      {reviewOpen ? (
+        <main className="flex min-h-0 min-w-0 flex-1">
           <ReviewScreen layout="pane" />
         </main>
-      ) : board ? (
-        <div ref={boardAreaRef} className="relative flex min-w-0 flex-1">
-          <section aria-label="Session board" className="flex min-w-0 flex-1">
-            <Board
-              list={list}
-              groups={groups}
-              columns={columns}
-              onMoveColumn={moveColumn}
-              now={now}
-              cursorKey={cursorKey}
-              selectedKey={selectedKey}
-              overlayInset={pane ? flyoutW : 0}
-              searchRef={searchRef}
-              onSearchNav={onSearchNav}
-              onOpen={(s) => openSession(s, false)}
-              onNew={() => setNewOpen(true)}
-              view={mode}
-              onView={setMode}
-            />
-          </section>
-          {pane ? (
-            // Non-modal: no backdrop, the board stays scrollable and clickable (a card switches the session).
-            <main
-              className={cn(
-                'absolute inset-y-0 right-0 z-20 flex border-l bg-background shadow-2xl',
-                'animate-in duration-200 ease-out fade-in-0 slide-in-from-right-8 motion-reduce:animate-none',
-              )}
-              style={{ width: flyoutW, ...titlebarOffset(boardW - flyoutW) }}
-            >
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize session panel"
-                aria-valuemin={Math.min(FLYOUT_MIN_W, flyoutMaxWidth(boardW))}
-                aria-valuemax={flyoutMaxWidth(boardW)}
-                aria-valuenow={flyoutW}
-                tabIndex={0}
-                title="Drag to resize · double-click to reset"
-                onPointerDown={onFlyoutDown}
-                onPointerMove={onFlyoutMove}
-                onPointerUp={onFlyoutUp}
-                onPointerCancel={onFlyoutUp}
-                onDoubleClick={() => setFlyoutPref(0)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                    e.preventDefault()
-                    const step = e.shiftKey ? FLYOUT_KEY_STEP * 4 : FLYOUT_KEY_STEP
-                    setFlyoutPref(clampFlyoutWidth(flyoutW + (e.key === 'ArrowLeft' ? step : -step), boardW))
-                  }
-                }}
-                className={cn(
-                  'group/grip absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize touch-none outline-none',
-                  'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
-                  'hover:after:w-0.5 hover:after:bg-primary/50 focus-visible:after:w-0.5 focus-visible:after:bg-ring',
-                )}
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    'absolute top-1/2 left-1/2 h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-background opacity-0 shadow-sm transition-opacity',
-                    'group-hover/grip:opacity-100 group-focus-visible/grip:opacity-100',
-                  )}
-                />
-              </div>
-              {pane}
-            </main>
-          ) : null}
-        </div>
-      ) : sidebarOpen ? (
-        <aside aria-label="Session list" className="relative shrink-0 border-r bg-background" style={{ width: sidebarW }}>
-          <Sidebar
+      ) : (
+        <>
+          <TopBar
             list={list}
             now={now}
-            cursorKey={cursorKey}
-            selectedKey={selectedKey}
+            view={mode}
+            onView={switchView}
             searchRef={searchRef}
             onSearchNav={onSearchNav}
             onNew={() => setNewOpen(true)}
-            onCollapse={toggleSidebar}
-            viewMode={mode}
-            onViewMode={setMode}
+            groups={board ? groups : undefined}
           />
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            aria-valuemin={SIDEBAR_MIN_W}
-            aria-valuemax={SIDEBAR_MAX_W}
-            aria-valuenow={sidebarW}
-            tabIndex={0}
-            title="Drag to resize · double-click to reset"
-            onPointerDown={onResizeDown}
-            onPointerMove={onResizeMove}
-            onPointerUp={onResizeUp}
-            onPointerCancel={onResizeUp}
-            onDoubleClick={() => setSidebarW(SIDEBAR_DEFAULT_W)}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                e.preventDefault()
-                setSidebarW(clampSidebarWidth(sidebarW + (e.key === 'ArrowRight' ? 24 : -24)))
-              }
-            }}
-            className={cn(
-              'absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize touch-none outline-none',
-              'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
-              'hover:after:w-0.5 hover:after:bg-primary/50 focus-visible:after:w-0.5 focus-visible:after:bg-ring',
+          <div className="flex min-h-0 flex-1">
+            {board ? (
+              <div ref={boardAreaRef} className="relative flex min-w-0 flex-1">
+                <section aria-label="Session board" className="flex min-w-0 flex-1">
+                  <Board
+                    list={list}
+                    groups={groups}
+                    columns={columns}
+                    onMoveColumn={moveColumn}
+                    now={now}
+                    cursorKey={cursorKey}
+                    selectedKey={selectedKey}
+                    overlayInset={pane ? flyoutW : 0}
+                    onOpen={(s) => openSession(s, false)}
+                  />
+                </section>
+                {pane ? (
+                  // Non-modal: no backdrop, the board stays scrollable and clickable (a card switches the session).
+                  <main
+                    className={cn(
+                      'absolute inset-y-0 right-0 z-20 flex border-l bg-background shadow-2xl',
+                      'animate-in duration-200 ease-out fade-in-0 slide-in-from-right-8 motion-reduce:animate-none',
+                    )}
+                    style={{ width: flyoutW, ...UNDER_TOP_BAR }}
+                  >
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Resize session panel"
+                      aria-valuemin={Math.min(FLYOUT_MIN_W, flyoutMaxWidth(boardW))}
+                      aria-valuemax={flyoutMaxWidth(boardW)}
+                      aria-valuenow={flyoutW}
+                      tabIndex={0}
+                      title="Drag to resize · double-click to reset"
+                      onPointerDown={onFlyoutDown}
+                      onPointerMove={onFlyoutMove}
+                      onPointerUp={onFlyoutUp}
+                      onPointerCancel={onFlyoutUp}
+                      onDoubleClick={() => setFlyoutPref(0)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                          e.preventDefault()
+                          const step = e.shiftKey ? FLYOUT_KEY_STEP * 4 : FLYOUT_KEY_STEP
+                          setFlyoutPref(clampFlyoutWidth(flyoutW + (e.key === 'ArrowLeft' ? step : -step), boardW))
+                        }
+                      }}
+                      className={cn(
+                        'group/grip absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize touch-none outline-none',
+                        'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
+                        'hover:after:w-0.5 hover:after:bg-primary/50 focus-visible:after:w-0.5 focus-visible:after:bg-ring',
+                      )}
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'absolute top-1/2 left-1/2 h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-background opacity-0 shadow-sm transition-opacity',
+                          'group-hover/grip:opacity-100 group-focus-visible/grip:opacity-100',
+                        )}
+                      />
+                    </div>
+                    {pane}
+                  </main>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <aside aria-label="Session list" className="relative shrink-0 border-r bg-background" style={{ width: sidebarW }}>
+                  <Sidebar
+                    list={list}
+                    now={now}
+                    cursorKey={cursorKey}
+                    selectedKey={selectedKey}
+                  />
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize sidebar"
+                    aria-valuemin={SIDEBAR_MIN_W}
+                    aria-valuemax={SIDEBAR_MAX_W}
+                    aria-valuenow={sidebarW}
+                    tabIndex={0}
+                    title="Drag to resize · double-click to reset"
+                    onPointerDown={onResizeDown}
+                    onPointerMove={onResizeMove}
+                    onPointerUp={onResizeUp}
+                    onPointerCancel={onResizeUp}
+                    onDoubleClick={() => setSidebarW(SIDEBAR_DEFAULT_W)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                        e.preventDefault()
+                        setSidebarW(clampSidebarWidth(sidebarW + (e.key === 'ArrowRight' ? 24 : -24)))
+                      }
+                    }}
+                    className={cn(
+                      'absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize touch-none outline-none',
+                      'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
+                      'hover:after:w-0.5 hover:after:bg-primary/50 focus-visible:after:w-0.5 focus-visible:after:bg-ring',
+                    )}
+                  />
+                </aside>
+                <main className="flex min-w-0 flex-1" style={UNDER_TOP_BAR}>
+                  {pane ?? (
+                    <EmptyPane
+                      waitingSessions={paletteSessions.filter((s) => s.status === 'waiting').slice(0, 6)}
+                      onOpen={(s) => openSession(s, true)}
+                    />
+                  )}
+                </main>
+              </>
             )}
-          />
-        </aside>
-      ) : (
-        <SidebarRail
-          waiting={waiting}
-          onExpand={toggleSidebar}
-          onNew={() => setNewOpen(true)}
-          onPalette={() => setPaletteOpen(true)}
-        />
-      )}
-
-      {board || notesOpen || prsOpen || tasksOpen || reviewOpen ? null : (
-        <main className="flex min-w-0 flex-1" style={titlebarOffset(sidebarOpen ? sidebarW : '3rem')}>
-          {pane ?? (
-            <EmptyPane
-              waitingSessions={paletteSessions.filter((s) => s.status === 'waiting').slice(0, 6)}
-              onOpen={(s) => openSession(s, true)}
-            />
-          )}
-        </main>
+          </div>
+        </>
       )}
 
       <NewSessionDialog open={newOpen} onOpenChange={setNewOpen} onOpenSession={(href) => navigate(href)} />
@@ -849,11 +817,9 @@ export function DesktopShell() {
   )
 }
 
-/** How far a pane's top bar is from the window's left edge: the desktop app's traffic lights
- *  (index.css → Desktop app) only need room in a bar that starts under them. */
-function titlebarOffset(left: number | string): CSSProperties {
-  return { '--titlebar-offset': typeof left === 'number' ? `${left}px` : left } as CSSProperties
-}
+/** Panes under the top bar are clear of the desktop app's traffic lights (index.css → Desktop
+ *  app): their own bars need no room for them. */
+const UNDER_TOP_BAR = { '--titlebar-offset': '100vw' } as CSSProperties
 
 function EmptyPane({ waitingSessions, onOpen }: { waitingSessions: Session[]; onOpen: (s: Session) => void }) {
   const hints: [string[], string][] = [

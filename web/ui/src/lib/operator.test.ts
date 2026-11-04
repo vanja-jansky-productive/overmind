@@ -30,6 +30,32 @@ describe('replyToSpeak', () => {
     expect(replyToSpeak(turns, 'idle', turns[1].key)).toBeNull()
     expect(replyToSpeak(turns.slice(0, 1), 'idle', null)).toBeNull()
   })
+  it('reads a final reply while the status still says busy, when told the turn is final', () => {
+    expect(replyToSpeak(turns, 'busy', null, { final: true })?.text).toBe('a')
+    expect(replyToSpeak(turns, 'busy', turns[1].key, { final: true })).toBeNull()
+  })
+})
+
+describe('speechChunks', () => {
+  it('keeps a short reply whole', async () => {
+    const { speechChunks } = await import('./operator')
+    expect(speechChunks('Tri sesije rade. Jedna te čeka.')).toEqual(['Tri sesije rade. Jedna te čeka.'])
+    expect(speechChunks('```\ncode\n```')).toEqual([])
+  })
+  it('starts with a short piece and groups the rest', async () => {
+    const { speechChunks } = await import('./operator')
+    const s = (n: number) => `${'riječ '.repeat(n).trim()}.`
+    const text = [s(3), s(10), s(20), s(30), s(40), s(10)].join(' ')
+    const parts = speechChunks(text)
+    expect(parts.join(' ')).toBe(text)
+    expect(parts[0]).toBe(`${s(3)} ${s(10)}`)
+    expect(parts.slice(1).every((p) => p.length <= 500)).toBe(true)
+    expect(parts.length).toBeGreaterThan(2)
+    expect(speechChunks(`Gotovo. ${s(60)} ${s(5)}`)[0]).toBe(`Gotovo. ${s(60)}`)
+    const long = `${'riječ '.repeat(15).trim()}, ${s(40)} ${s(5)}`
+    expect(speechChunks(long)[0]).toBe(`${'riječ '.repeat(15).trim()},`)
+    expect(speechChunks(long).join(' ')).toBe(long)
+  })
 })
 
 describe('waiting sessions', () => {

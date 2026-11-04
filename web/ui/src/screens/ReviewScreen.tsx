@@ -1,11 +1,17 @@
-import { ChevronLeftIcon, Columns2Icon, FoldVerticalIcon, FolderGitIcon, GitBranchIcon, ListTreeIcon, MessageSquarePlusIcon, MessageSquareTextIcon, RowsIcon, UnfoldVerticalIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ExternalLinkIcon, RefreshCwIcon, SparklesIcon, ChevronLeftIcon, Columns2Icon, FoldVerticalIcon, FolderGitIcon, GitBranchIcon, ListTreeIcon, MessageSquarePlusIcon, MessageSquareTextIcon, RowsIcon, UnfoldVerticalIcon } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
 
 import { HostBadge } from '@/components/HostBadge'
 import { DiffStat, FileDiff, type DiffView } from '@/components/review/FileDiff'
 import { FileTree } from '@/components/review/FileTree'
 import { CommentComposer, ReviewThreadCard } from '@/components/review/ReviewThread'
+import { SideAsks } from '@/components/review/SideAsks'
+import { api, type PrKey } from '@/api/client'
+import { watchForSpawned } from '@/api/spawnWatch'
+import { toast } from 'sonner'
+import { usePrDiff, usePrNotes } from '@/hooks/usePrReview'
+import { useAsks, type AskBody } from '@/hooks/useAsks'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
@@ -17,8 +23,9 @@ import { useNow } from '@/hooks/useNow'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { useSessionTitle } from '@/hooks/useTitles'
 import { relTime } from '@/lib/format'
-import { fileAnchor, fileSignature, orphanThreadsByKey, parseReviewLocation, rangeText, repoViews, rowsToRange, selectLine, selectionCode, threadKey, type LineRow, type LineSelection, type Side } from '@/lib/review'
-import type { DiffRepo, ReviewThread } from '@/api/types'
+import { DEFAULT_KINDS, FILE_KINDS, fileAnchor, fileKey, fileSignature, kindCounts, orphanThreadsByKey, parsePrReviewLocation, parseReviewLocation, rangeText, repoViews, rowsToRange, selectLine, selectionCode, threadKey, type FileKind, type LineRow, type LineSelection, type Side } from '@/lib/review'
+import type { DiffRepo, PrNote, ReviewAnchor, ReviewThread, SideAsk } from '@/api/types'
+import { prHref } from '@/lib/prs'
 import { findSession, sessionHref } from '@/lib/sessions'
 import { storage } from '@/lib/storage'
 import { cn } from '@/lib/utils'
@@ -29,29 +36,213 @@ const FRESH_MS = 10_000
 const NO_THREADS: ReviewThread[] = []
 const parseView = (r: string) => (r === 'split' || r === 'unified' ? r : undefined)
 const parseBool = (r: string) => (r === 'true' ? true : r === 'false' ? false : undefined)
+const KIND_NAMES = new Set<string>(FILE_KINDS.map((k) => k.kind))
+const DEFAULT_SHOWN = FILE_KINDS.filter((k) => DEFAULT_KINDS[k.kind]).map((k) => k.kind).join(',')
+/** The shown kinds, stored as `spec,code`; anything unknown falls back to the default. */
+const parseKinds = (r: string) => (r === '' || r.split(',').every((k) => KIND_NAMES.has(k)) ? r : undefined)
+
+type Layout = 'screen' | 'pane'
+
+/** What the reviewer needs from where the diff comes from: a session's checkouts, or a PR without a session. */
+interface ReviewSource {
+  kind: 'session' | 'pr'
+  host: string
+  /** the Viewed ticks are kept under this */
+  storageKey: string
+  title: ReactNode
+  backLabel: string
+  back: () => void
+  data: { repos?: DiffRepo[] } | null
+  error: string | null
+  changedAt: number | null
+  rv: {
+    review: { threads: ReviewThread[]; drafts: number } | null
+    error: string | null
+    comment: (anchor: ReviewAnchor, body: string, draft: boolean, base: string | null) => Promise<boolean>
+    reply: (thread: string, body: string) => Promise<boolean>
+    edit: (thread: string, body: string) => Promise<boolean>
+    resolve: (thread: string, resolved: boolean) => Promise<boolean>
+    remove: (thread: string) => Promise<boolean>
+  }
+  askStart: ((body: AskBody) => Promise<SideAsk>) | null
+  plainSession: { host: string; id: string } | null
+  /** the session beside the diff (desktop) */
+  chat: ReactNode | null
+  /** the header's submit button and its dialog */
+  submit: { label: string; hint: string; title: string; description: (drafts: number) => string; placeholder: string; run: (summary: string) => Promise<boolean> }
+  /** PR notes: a single comment is a note; the composer has one button */
+  notes?: { post: (thread: string) => Promise<boolean> }
+  hint: string
+  empty: string
+  headerActions?: ReactNode
+}
 
 /**
  * `#/review/<host>/<id>`: GitHub's "Files changed" over every checkout the session works in
  * (its cwd's, and the worktrees it edits from there — a meta repo's PRs), following it live. Desktop (`pane`): file tree | diff | the session itself (chat + composer), so the
  * review and the conversation sit side by side. Mobile: the diff alone.
+ * `#/review/pr/<host>/<owner>/<repo>/<n>`: the same over a PR from the host's clone, with no
+ * session: comments are notes kept in Overmind (post one to GitHub, or hand them all to a session).
  */
-export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }) {
-  const pane = layout === 'pane'
-  const [location, navigate] = useLocation()
+export function ReviewScreen({ layout = 'screen' }: { layout?: Layout }) {
+  const [location] = useLocation()
+  const prLoc = parsePrReviewLocation(location)
+  if (prLoc) return <PrReview key={`${prLoc.host}/${prLoc.owner}/${prLoc.repo}/${prLoc.number}`} host={prLoc.host} pr={prLoc} layout={layout} />
   const loc = parseReviewLocation(location)
-  const host = loc?.host ?? ''
-  const id = loc?.id ?? ''
+  if (!loc) return null
+  return <SessionReview key={`${loc.host}/${loc.id}`} host={loc.host} id={loc.id} layout={layout} />
+}
+
+function SessionReview({ host, id, layout }: { host: string; id: string; layout: Layout }) {
+  const [, navigate] = useLocation()
   const { overmind } = useOvermind()
   const session = findSession(overmind, host, id)
+  const plainSession = useMemo(() => ({ host, id }), [host, id])
   const { title } = useSessionTitle(session, `${host}/${id}`)
-  const now = useNow(5_000)
   const { data, error, changedAt } = useDiff(host, id)
+  const review = useReview(host, id)
+  const askStart = useCallback((body: AskBody) => api.ask(host, id, body).then((r) => r.ask), [host, id])
+  const source: ReviewSource = {
+    kind: 'session',
+    host,
+    storageKey: `${host}/${id}`,
+    title: <>Changes · {title}</>,
+    backLabel: 'Back to session',
+    back: () => navigate(session ? sessionHref(session) : `/s/${encodeURIComponent(host)}/${encodeURIComponent(id)}`),
+    data,
+    error,
+    changedAt,
+    rv: review,
+    askStart,
+    plainSession,
+    chat: <SessionScreen key={`${host}/${id}`} host={host} id={id} layout="pane" embedded />,
+    submit: {
+      label: 'Submit review',
+      hint: 'Send the pending comments to the session in one prompt',
+      title: 'Submit review',
+      description: (drafts) => `${drafts === 1 ? 'The pending comment goes' : `${drafts} pending comments go`} to the session in one prompt, each with its lines. The answer shows in every thread and in the conversation.`,
+      placeholder: 'Overall comment (optional)',
+      run: (summary) => review.submit(summary),
+    },
+    hint: 'To comment: select code with the mouse, or click a line number (shift-click for a range). The comment goes to the session with those lines.',
+    empty: 'This session works in no git checkout yet. Checkouts show up here as the session edits files in them.',
+  }
+  return <ReviewView layout={layout} source={source} />
+}
+
+function PrReview({ host, pr, layout }: { host: string; pr: PrKey; layout: Layout }) {
+  const [, navigate] = useLocation()
+  const { applyOvermind } = useOvermind()
+  const { data, error, changedAt, refetch } = usePrDiff(host, pr)
+  const notes = usePrNotes(host, pr)
+  const info = data?.pr ?? notes.review?.pr ?? null
+  const repo = data?.repos?.[0] ?? null
+  const head = repo?.head ?? null
+  const base = repo?.base?.sha ?? null
+  const askStart = useCallback(
+    (body: AskBody) => api.prAsk(host, pr, { ...body, head, base }).then((r) => r.ask),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [host, pr.owner, pr.repo, pr.number, head, base],
+  )
+  const ref = `${pr.owner}/${pr.repo}#${pr.number}`
+  const handoff = async (summary: string) => {
+    try {
+      const res = await api.prHandoff(host, pr, summary)
+      const name = res.spawn?.name || res.spawn?.tmuxSession || ref
+      const tid = toast.loading(`Starting ${name} on ${host} with your notes…`)
+      watchForSpawned(
+        { host: res.spawn?.host || host, name, tmuxSession: res.spawn?.tmuxSession ?? name },
+        {
+          onOvermind: applyOvermind,
+          onFound: (s) => {
+            toast.success(`${name} is up`, { id: tid })
+            navigate(sessionHref(s))
+          },
+          onTimeout: () => toast.error(`${name} has not shown up yet`, { id: tid, description: 'Check the list in a moment' }),
+        },
+      )
+      return true
+    } catch (err) {
+      toast.error('Could not start a session', { description: (err as Error)?.message })
+      return false
+    }
+  }
+  const source: ReviewSource = {
+    kind: 'pr',
+    host,
+    storageKey: `pr:${host}/${pr.owner}/${pr.repo}/${pr.number}`.toLowerCase(),
+    title: (
+      <>
+        <span className="font-mono font-semibold text-muted-foreground">{ref}</span> {info?.title ?? ''}
+      </>
+    ),
+    backLabel: 'Back to the PR',
+    back: () => navigate(prHref({ owner: pr.owner, repo: pr.repo, number: pr.number })),
+    data,
+    error,
+    changedAt,
+    rv: notes,
+    askStart,
+    plainSession: null,
+    chat: null,
+    notes: {
+      post: (thread) => {
+        if (!head) {
+          toast.error('The PR head is not known yet — wait for the diff')
+          return Promise.resolve(false)
+        }
+        return notes.post(thread, head)
+      },
+    },
+    submit: {
+      label: 'Hand to a session',
+      hint: 'Start a session on the PR’s worktree with your notes as its first prompt',
+      title: 'Hand the notes to a session',
+      description: (drafts) =>
+        `A new session checks ${ref} out in a worktree and gets ${drafts === 1 ? 'your note' : `your ${drafts} notes`} (each with its lines) to work through with you. Resolved notes stay out.`,
+      placeholder: 'What should it do with them? (optional, e.g. “turn the good ones into review comments”)',
+      run: handoff,
+    },
+    hint: 'Notes stay in Overmind: select code (or click a line number) to write one, post any of them to GitHub, or hand them all to a session. Ask asks Claude about the lines on the side.',
+    empty: 'This PR changes no files.',
+    headerActions: (
+      <>
+        <Button variant="ghost" size="icon" className="size-10 shrink-0 rounded-xl" aria-label="Fetch the PR now" title="Fetch the PR now (otherwise at most once a minute)" onClick={refetch}>
+          <RefreshCwIcon className="size-5" />
+        </Button>
+        {info?.url ? (
+          <Button asChild variant="ghost" size="icon" className="size-10 shrink-0 rounded-xl" title="Open on GitHub">
+            <a href={info.url} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
+              <ExternalLinkIcon className="size-5" />
+            </a>
+          </Button>
+        ) : null}
+      </>
+    ),
+  }
+  return <ReviewView layout={layout} source={source} />
+}
+
+function ReviewView({ layout, source }: { layout: Layout; source: ReviewSource }) {
+  const pane = layout === 'pane'
+  const { host, data, error, changedAt, plainSession } = source
+  const now = useNow(5_000)
 
   const [view, setView] = usePersistentState<DiffView>('overmind.diffView', pane ? 'split' : 'unified', parseView)
   const [showTree, setShowTree] = usePersistentState<boolean>('overmind.reviewTree', true, parseBool)
   const [showChat, setShowChat] = usePersistentState<boolean>('overmind.reviewChat', true, parseBool)
 
-  const views = useMemo(() => repoViews(data?.repos ?? []), [data])
+  const [shownRaw, setShownRaw] = usePersistentState<string>('overmind.reviewKinds', DEFAULT_SHOWN, parseKinds)
+  const shown = useMemo(() => {
+    const on = new Set(shownRaw.split(','))
+    return Object.fromEntries(FILE_KINDS.map((k) => [k.kind, on.has(k.kind)])) as Record<FileKind, boolean>
+  }, [shownRaw])
+  const toggleKind = (kind: FileKind) => setShownRaw(FILE_KINDS.filter((k) => (k.kind === kind ? !shown[k.kind] : shown[k.kind])).map((k) => k.kind).join(','))
+  const counts = useMemo(() => kindCounts(data?.repos ?? []), [data])
+  const views = useMemo(() => repoViews(data?.repos ?? [], shown), [data, shown])
+  // Every changed file's key, shown or not: a thread on a hidden file is not an orphan.
+  const allKeys = useMemo(() => new Set((data?.repos ?? []).flatMap((r) => (r.files ?? []).map((f) => fileKey(r.root, f.path)))), [data])
+  const hiddenCount = allKeys.size - views.reduce((n, v) => n + v.files.length, 0)
   const clean = useMemo(() => (data?.repos ?? []).filter((r) => !r.error && !r.files?.length), [data])
   // Every file across checkouts, by key (root + path).
   const entries = useMemo(() => new Map(views.flatMap((v) => v.files.map((f) => [f.key, { ...f, repo: v.repo }] as const))), [views])
@@ -63,7 +254,7 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
   )
 
   // Viewed: per session, path → the diff's signature when ticked (a new change unticks it).
-  const viewedKey = `overmind.reviewViewed:${host}/${id}`
+  const viewedKey = `overmind.reviewViewed:${source.storageKey}`
   const [viewedMap, setViewedMap] = useState<Record<string, string>>(() => storage.getJSON<Record<string, string>>(viewedKey) ?? {})
   const isViewed = useCallback((path: string) => viewedMap[path] != null && viewedMap[path] === signatures.get(path), [viewedMap, signatures])
   const toggleViewed = useCallback(
@@ -122,9 +313,11 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
   }
 
   // --- comments --------------------------------------------------------------
-  const rv = useReview(host, id)
+  const rv = source.rv
   const threads = useMemo(() => rv.review?.threads ?? [], [rv.review])
   const drafts = rv.review?.drafts ?? 0
+  // What the header's button sends: a session's pending comments, or a PR's open notes.
+  const toSubmit = source.notes ? threads.filter((t) => !t.resolved).length : drafts
   // Threads made before the reviewer knew several checkouts belong to the session's own (the first).
   const defaultRoot = data?.repos?.[0]?.root ?? ''
   const byKey = useMemo(() => {
@@ -135,18 +328,32 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
     }
     return m
   }, [threads, defaultRoot])
-  const orphans = useMemo(() => (data ? orphanThreadsByKey(new Set(entries.keys()), threads, defaultRoot) : []), [data, entries, threads, defaultRoot])
+  const orphans = useMemo(() => (data ? orphanThreadsByKey(allKeys, threads, defaultRoot) : []), [data, allKeys, threads, defaultRoot])
   const [selection, setSelection] = useState<LineSelection | null>(null)
   const [composing, setComposing] = useState(false)
+  // Opened from the selection's "Ask": the composer asks on the side by default.
+  const [asking, setAsking] = useState(false)
   const onLine = useCallback((path: string, side: Side, n: number, extend: boolean) => {
     setSelection((prev) => selectLine(prev, path, side, n, extend))
     setComposing(true)
+    setAsking(false)
   }, [])
   const closeComposer = useCallback(() => {
     setComposing(false)
     setSelection(null)
+    setAsking(false)
   }, [])
-  const renderThread = useCallback((t: ReviewThread, outdated: boolean) => <ReviewThreadCard thread={t} outdated={outdated} actions={rv} />, [rv])
+
+  // --- side questions: a read-only fork of the session answers; nothing reaches its thread ---
+  const side = useAsks(host, source.askStart)
+  const askFiles = useRef(new Map<string, string>()) // ask id → file key, to jump back to its lines
+  const notes = source.notes
+  const renderThread = useCallback(
+    (t: ReviewThread, outdated: boolean) => (
+      <ReviewThreadCard thread={t} outdated={outdated} actions={rv} note={notes ? { posted: (t as PrNote).posted ?? null, onPost: () => notes.post(t.id) } : undefined} />
+    ),
+    [rv, notes],
+  )
   // Select code with the mouse → a "Comment on lines …" button at the selection's end.
   const bodyRef = useRef<HTMLDivElement>(null)
   const [pick, setPick] = useState<{ sel: LineSelection; x: number; y: number } | null>(null)
@@ -170,13 +377,14 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
     const rect = s.getRangeAt(0).getBoundingClientRect()
     // Inside the diff column (the session pane sits to its right).
     const box = bodyRef.current?.getBoundingClientRect()
-    const right = (box?.right ?? window.innerWidth) - 230
+    const right = (box?.right ?? window.innerWidth) - 300
     setPick({ sel: { path: key, ...range }, x: Math.max(box?.left ?? 0, Math.min(rect.right, right)), y: Math.min(rect.bottom + 6, window.innerHeight - 48) })
   }, [])
-  const commentOnPick = () => {
+  const commentOnPick = (ask = false) => {
     if (!pick) return
     setSelection(pick.sel)
     setComposing(true)
+    setAsking(ask)
     setPick(null)
     window.getSelection()?.removeAllRanges()
   }
@@ -188,7 +396,8 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
       <CommentComposer
         key={`${selection.path}:${selection.side}:${selection.start}`}
         label={rangeText(selection)}
-        drafts={drafts}
+        drafts={notes ? 0 : drafts}
+        submitLabel={notes ? 'Add note' : undefined}
         onCancel={closeComposer}
         onSubmit={(body, draft) =>
           rv.comment(
@@ -198,6 +407,12 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
             sel.repo.base?.sha ?? null,
           )
         }
+        asking={asking}
+        onAsk={async (question) => {
+          const a = await side.ask({ root: sel.repo.root, path: sel.file.path, side: selection.side, start: selection.start, end: selection.end, code: selectionCode(sel.file, selection), question })
+          if (a) askFiles.current.set(a.id, selection.path)
+          return !!a
+        }}
       />
     ) : null
   const [submitOpen, setSubmitOpen] = useState(false)
@@ -205,7 +420,7 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
   const [submitting, setSubmitting] = useState(false)
   const submit = async () => {
     setSubmitting(true)
-    const ok = await rv.submit(summary)
+    const ok = await source.submit.run(summary)
     setSubmitting(false)
     if (ok) {
       setSubmitOpen(false)
@@ -213,19 +428,17 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
     }
   }
 
-  const back = () => navigate(session ? sessionHref(session) : `/s/${encodeURIComponent(host)}/${encodeURIComponent(id)}`)
-
   const header = (
     <header
       data-tauri-drag-region={pane ? 'deep' : undefined}
       className="z-20 shrink-0 border-b bg-background/90 pt-safe px-safe backdrop-blur-md backdrop-saturate-150"
     >
       <div className={cn('flex w-full items-center gap-1 py-1.5 pr-2', pane ? 'titlebar titlebar-lead pl-2 [--titlebar-pad:0.5rem]' : 'pl-1')}>
-        <Button variant="ghost" size="icon" aria-label="Back to session" title="Back to session" onClick={back} className="size-11 shrink-0 rounded-xl">
+        <Button variant="ghost" size="icon" aria-label={source.backLabel} title={source.backLabel} onClick={source.back} className="size-11 shrink-0 rounded-xl">
           <ChevronLeftIcon className="size-6" />
         </Button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[0.9375rem] leading-tight font-bold">Changes · {title}</div>
+          <div className="truncate text-[0.9375rem] leading-tight font-bold">{source.title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs whitespace-nowrap text-muted-foreground">
             <HostBadge host={host} className="h-4 px-1 text-[0.625rem]" />
             {data ? (
@@ -254,8 +467,10 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
             {viewedCount} / {files.length} viewed
           </span>
         ) : null}
-        <Button size="sm" variant={drafts ? 'default' : 'outline'} className="mr-1 shrink-0" disabled={!drafts} onClick={() => setSubmitOpen(true)} title={drafts ? 'Send the pending comments to the session in one prompt' : 'Start a review from a comment to submit it'}>
-          Submit review{drafts ? ` (${drafts})` : ''}
+        {source.headerActions}
+        <Button size="sm" variant={toSubmit ? 'default' : 'outline'} className="mr-1 shrink-0" disabled={!toSubmit} onClick={() => setSubmitOpen(true)} title={toSubmit ? source.submit.hint : source.notes ? 'Write a note first' : 'Start a review from a comment to submit it'}>
+          {source.submit.label}
+          {toSubmit ? ` (${toSubmit})` : ''}
         </Button>
         <Button
           variant="ghost"
@@ -280,12 +495,36 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
             <Button variant="ghost" size="icon" aria-label="File tree" title="File tree" aria-pressed={showTree} onClick={() => setShowTree(!showTree)} className={cn('size-10 shrink-0 rounded-xl', showTree && 'bg-muted text-foreground')}>
               <ListTreeIcon className="size-5" />
             </Button>
-            <Button variant="ghost" size="icon" aria-label="Session" title="Session" aria-pressed={showChat} onClick={() => setShowChat(!showChat)} className={cn('size-10 shrink-0 rounded-xl', showChat && 'bg-muted text-foreground')}>
-              <MessageSquareTextIcon className="size-5" />
-            </Button>
+            {source.chat ? (
+              <Button variant="ghost" size="icon" aria-label="Session" title="Session" aria-pressed={showChat} onClick={() => setShowChat(!showChat)} className={cn('size-10 shrink-0 rounded-xl', showChat && 'bg-muted text-foreground')}>
+                <MessageSquareTextIcon className="size-5" />
+              </Button>
+            ) : null}
           </>
         ) : null}
       </div>
+      {data && allKeys.size ? (
+        <div className="px-2 pb-1.5">
+          <div role="group" aria-label="Show files" className="flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-xl bg-muted p-0.5">
+            {FILE_KINDS.map(({ kind, label }) => (
+              <button
+                key={kind}
+                type="button"
+                aria-pressed={shown[kind]}
+                disabled={!counts[kind]}
+                title={`${shown[kind] ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
+                onClick={() => toggleKind(kind)}
+                className={cn(
+                  'h-8 rounded-[10px] px-2.5 text-xs font-medium text-muted-foreground tabular-nums disabled:opacity-40',
+                  shown[kind] && 'bg-background text-foreground shadow-sm dark:bg-accent',
+                )}
+              >
+                {label} <span className="text-dimmer">{counts[kind]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </header>
   )
 
@@ -300,16 +539,24 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
     >
       {files.length && !threads.length ? (
         <p className="px-1 text-xs text-muted-foreground">
-          To comment: select code with the mouse, or click a line number (shift-click for a range). The comment goes to the session with those lines.
+          {source.hint}
         </p>
       ) : null}
       {error ? <p className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p> : null}
       {!data && !error ? <p className="px-1 py-6 text-center text-sm text-muted-foreground">Loading the diff…</p> : null}
-      {data && !files.length ? (
+      {data && !files.length && hiddenCount ? (
+        <div className="px-1 py-12 text-center">
+          <p className="text-base font-semibold">Everything is filtered out</p>
+          <p className="mt-1 text-sm text-dimmer">
+            {hiddenCount === 1 ? '1 changed file is' : `${hiddenCount} changed files are`} hidden. Turn on Specs, Docs, Code or Tests above.
+          </p>
+        </div>
+      ) : null}
+      {data && !files.length && !hiddenCount ? (
         <div className="px-1 py-12 text-center">
           <p className="text-base font-semibold">No changes</p>
           <p className="mt-1 text-sm text-dimmer">
-            {clean.length ? `Nothing changed in ${clean.map((r) => r.label).join(', ')}.` : 'This session works in no git checkout yet.'} Checkouts show up here as the session edits files in them.
+            {clean.length && source.kind === 'session' ? `Nothing changed in ${clean.map((r) => r.label).join(', ')}. Checkouts show up here as the session edits files in them.` : source.empty}
           </p>
         </div>
       ) : null}
@@ -317,6 +564,7 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
         <section key={v.repo.root} aria-label={v.repo.label} className="space-y-3">
           {views.length > 1 || v.repo.error ? <RepoHeader repo={v.repo} /> : null}
           {v.repo.error ? <p className="rounded-lg border border-destructive/40 px-3 py-2 text-sm text-destructive">{v.repo.error}</p> : null}
+          {!v.files.length && !v.repo.error ? <p className="px-1 text-xs text-dimmer">All changed files here are filtered out.</p> : null}
           {v.repo.truncated ? <p className="text-xs text-muted-foreground">The diff is very large: later files are listed without their lines.</p> : null}
           {v.files.map(({ key, file }) => (
             <FileDiff
@@ -335,6 +583,7 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
               threads={byKey.get(key) ?? NO_THREADS}
               renderThread={renderThread}
               renderComposer={renderComposer}
+              session={plainSession}
             />
           ))}
         </section>
@@ -352,18 +601,41 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
       ) : null}
       {rv.error ? <p className="text-xs text-destructive">Comments: {rv.error}</p> : null}
       {pick ? (
-        <Button
-          size="sm"
-          className="fixed z-30 shadow-lg"
-          style={{ left: pick.x, top: pick.y }}
-          // Keep the text selection while clicking.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={commentOnPick}
-        >
-          <MessageSquarePlusIcon />
-          Comment on {rangeText(pick.sel)}
-        </Button>
+        <div className="fixed z-30 flex gap-1" style={{ left: pick.x, top: pick.y }}>
+          <Button
+            size="sm"
+            className="shadow-lg"
+            // Keep the text selection while clicking.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => commentOnPick()}
+          >
+            <MessageSquarePlusIcon />
+            Comment on {rangeText(pick.sel)}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="bg-background shadow-lg"
+            title="Ask Claude about these lines on the side — the answer stays out of the session"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => commentOnPick(true)}
+          >
+            <SparklesIcon />
+            Ask
+          </Button>
+        </div>
       ) : null}
+      <SideAsks
+        asks={side.asks}
+        onClose={(qid) => {
+          askFiles.current.delete(qid)
+          side.close(qid)
+        }}
+        onOpen={(a) => {
+          const key = askFiles.current.get(a.id)
+          if (key) openFile(key)
+        }}
+      />
     </div>
   )
 
@@ -371,10 +643,8 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
     <Dialog open={submitOpen} onOpenChange={setSubmitOpen}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Submit review</DialogTitle>
-          <DialogDescription>
-            {drafts === 1 ? 'The pending comment goes' : `${drafts} pending comments go`} to the session in one prompt, each with its lines. The answer shows in every thread and in the conversation.
-          </DialogDescription>
+          <DialogTitle>{source.submit.title}</DialogTitle>
+          <DialogDescription>{source.submit.description(toSubmit)}</DialogDescription>
         </DialogHeader>
         <Textarea
           value={summary}
@@ -385,22 +655,21 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
               void submit()
             }
           }}
-          placeholder="Overall comment (optional)"
+          placeholder={source.submit.placeholder}
           className="min-h-24 text-sm"
         />
         <DialogFooter>
           <Button variant="ghost" onClick={() => setSubmitOpen(false)}>
             Cancel
           </Button>
-          <Button disabled={!drafts || submitting} onClick={() => void submit()}>
-            Submit review
+          <Button disabled={!toSubmit || submitting} onClick={() => void submit()}>
+            {source.submit.label}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 
-  if (!loc) return null
   if (!pane) {
     return (
       <div className="flex h-dvh flex-col bg-background">
@@ -433,9 +702,9 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane'
           {body}
         </div>
       </div>
-      {showChat ? (
+      {showChat && source.chat ? (
         <aside aria-label="Session" className="flex w-[28rem] shrink-0 border-l xl:w-[32rem]">
-          <SessionScreen key={`${host}/${id}`} host={host} id={id} layout="pane" embedded />
+          {source.chat}
         </aside>
       ) : null}
       {dialog}

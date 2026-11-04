@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { DiffFile, DiffHunk, ReviewThread } from '@/api/types'
 
-import { diffBar, fileKey, rowsToRange, fileSignature, fileTree, orphanThreads, orphanThreadsByKey, repoViews, threadKey, parseReviewLocation, placeThreads, reviewHref, selectLine, selectionCode, splitRows, treeOrder } from './review'
+import { diffPlain } from './plain'
+import { parsePrReviewLocation, prReviewHref, fileKind, kindCounts, allClauses, clauseAt, placeOnClauses, diffBar, fileKey, rowsToRange, fileSignature, fileTree, orphanThreads, orphanThreadsByKey, repoViews, threadKey, parseReviewLocation, placeThreads, reviewHref, selectLine, selectionCode, splitRows, treeOrder } from './review'
 
 const file = (path: string, o: Partial<DiffFile> = {}): DiffFile => ({
   path,
@@ -163,5 +164,67 @@ describe('rowsToRange', () => {
     ]
     expect(rowsToRange(rows, 'new')).toEqual({ side: 'new', start: 7, end: 8 })
     expect(rowsToRange(rows, 'old')).toEqual({ side: 'old', start: 7, end: 8 })
+  })
+})
+
+describe('a .plain spec: threads on clauses', () => {
+  const oldText = '***functional specs***\n\n- Alpha one.\n- Beta two\n  continued.\n'
+  const newText = '***functional specs***\n\n- Alpha one.\n- Beta two\n  continued.\n- Gamma three.\n'
+  const file: DiffFile = {
+    path: 's.plain',
+    oldPath: 's.plain',
+    status: 'modified',
+    binary: false,
+    additions: 1,
+    deletions: 0,
+    truncated: false,
+    hunks: [{ header: '@@ -5 +5,2 @@', oldStart: 5, oldLines: 1, newStart: 5, newLines: 2, section: '', lines: [{ t: ' ', o: 5, n: 5, text: '  continued.' }, { t: '+', o: null, n: 6, text: '- Gamma three.' }] }],
+    plain: { old: oldText, new: newText },
+  } as DiffFile
+  const thread = (id: string, start: number, end: number, code: string[]): ReviewThread => ({ id, path: 's.plain', side: 'new', start, end, code, base: null, createdAt: 0, status: 'draft', resolved: false, reviewId: null, entries: [] })
+  const clauses = allClauses(diffPlain(oldText, newText))
+
+  it('the whole text answers for lines outside the hunks', () => {
+    expect(selectionCode(file, { path: 's.plain', side: 'new', start: 3, end: 3 })).toEqual(['- Alpha one.'])
+  })
+  it('a thread goes under the clause holding its last line', () => {
+    expect(clauseAt(clauses, 'new', 5)).toBe('new:4')
+    const p = placeOnClauses(file, clauses, [thread('a', 4, 5, ['- Beta two', '  continued.']), thread('b', 3, 3, ['- Alpha zero.']), thread('c', 1, 1, ['***functional specs***'])])
+    expect([...p.at.keys()]).toEqual(['new:4', 'new:3'])
+    expect(p.unplaced.map((t) => t.id)).toEqual(['c'])
+    expect([...p.outdated]).toEqual(['b'])
+  })
+  it('the diff view keeps a thread outside the hunks current while its lines read the same', () => {
+    const p = placeThreads(file, [thread('a', 3, 3, ['- Alpha one.'])])
+    expect(p.unplaced.map((t) => t.id)).toEqual(['a'])
+    expect(p.outdated.size).toBe(0)
+  })
+})
+
+describe('fileKind', () => {
+  it('sorts changed files into specs, docs, tests and code', () => {
+    expect(fileKind('specs/review.plain')).toBe('spec')
+    expect(fileKind('README.md')).toBe('docs')
+    expect(fileKind('docs/guide.mdx')).toBe('docs')
+    expect(fileKind('src/lib/review.ts')).toBe('code')
+    expect(fileKind('app/models/user.rb')).toBe('code')
+    expect(fileKind('Cargo.toml')).toBe('code')
+    for (const t of ['src/lib/review.test.ts', 'web/tests/api.test.mjs', 'spec/models/user_spec.rb', 'pkg/diff_test.go', 'tests/test_api.py', 'src/__tests__/x.tsx', 'crates/overmind/tests/cli.rs', 'e2e/login.spec.ts', 'tests/fixtures/README.md'])
+      expect(fileKind(t), t).toBe('tests')
+  })
+
+  it('counts kinds across checkouts', () => {
+    const f = (path: string) => ({ path, oldPath: null, status: 'modified' as const, additions: 1, deletions: 0, hunks: [] })
+    expect(kindCounts([{ root: '/a', label: 'a', files: [f('a.plain'), f('x.ts')] }, { root: '/b', label: 'b', files: [f('x.test.ts'), f('y.md')] }] as never)).toEqual({ spec: 1, docs: 1, code: 1, tests: 1 })
+  })
+})
+
+describe('PR review locations', () => {
+  it('round-trips host, owner, repo and number; a session review is not one', () => {
+    const href = prReviewHref('work station', { owner: 'acme', repo: 'api.js', number: 12 })
+    expect(href).toBe('/review/pr/work%20station/acme/api.js/12')
+    expect(parsePrReviewLocation(href)).toEqual({ host: 'work station', owner: 'acme', repo: 'api.js', number: 12 })
+    expect(parsePrReviewLocation('/review/laptop/abc')).toBeNull()
+    expect(parsePrReviewLocation('/review/pr/h/o/r/x')).toBeNull()
   })
 })

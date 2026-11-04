@@ -37,6 +37,10 @@ function fakeHost(self, sessions) {
       return autoNamer.lastRun;
     },
   };
+  cli.sleep = async ({ target }) => (
+    calls.push(['sleep', target]),
+    { sessionId: target, title: 'one', process: 'terminated', terminal: 'tmux-session-killed', dormant: { kind: 'tmux', target: 'one', slept: true }, dryRun: false }
+  );
   cli.rename = async ({ target, title }) => {
     calls.push(['rename', target, title]);
     if (title === 'while waiting') return { ok: false, result: 'held', held: 'waiting', title, message: `${target} is waiting on you — nothing sent (--force overrides)` };
@@ -86,6 +90,9 @@ function fakeHost(self, sessions) {
     if (id === '404') throw new Error('no task 404 among your open tasks');
     return { id, title: 'Fix it', contextLine: `Productive task #12 “Fix it”: https://app.productive.io/1-acme/tasks/${id}.` };
   };
+  cli.schedule = async () => (calls.push(['schedule']), { host: 'ignored', entries: [] });
+  cli.scheduleAdd = async (o) => (calls.push(['scheduleAdd', o]), { id: 'sabc', state: 'pending', ...o });
+  cli.scheduleCancel = async (id) => (calls.push(['scheduleCancel', id]), `cancelled ${id}`);
   cli.taskStatus = async (id, status) => {
     calls.push(['taskStatus', id, status]);
     return { task: { id, status: { id: '5', name: status, category: 'started' } } };
@@ -280,6 +287,22 @@ test('kill is POST-only, served locally or proxied once, and reports what happen
   assert.equal(proxied.body.host, 'workstation');
   assert.deepEqual(remote.calls.at(-1), ['kill', 'bbbbbbbb-0000-0000-0000-000000000002']);
   assert.equal((await post(`${urls.laptop}/api/hosts/laptop/sessions/zzzzzzzzzz/kill`, {})).status, 404);
+});
+
+test('sleep is POST-only, runs overmind sleep on the session id and reports the dormant entry', async (t) => {
+  const { urls, lap, remote } = await startPair(t);
+  assert.equal((await get(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/sleep`)).status, 405);
+  const local = await post(`${urls.laptop}/api/hosts/laptop/sessions/aaaaaaaa/sleep`, {});
+  assert.equal(local.status, 200);
+  assert.equal(local.body.ok, true);
+  assert.equal(local.body.id, 'aaaaaaaa-0000-0000-0000-000000000001');
+  assert.equal(local.body.terminal, 'tmux-session-killed');
+  assert.deepEqual(local.body.dormant, { kind: 'tmux', target: 'one', slept: true });
+  assert.deepEqual(lap.calls.at(-1), ['sleep', 'aaaaaaaa-0000-0000-0000-000000000001']);
+  const proxied = await post(`${urls.laptop}/api/hosts/workstation/sessions/bbbbbbbb/sleep`, {});
+  assert.equal(proxied.body.host, 'workstation');
+  assert.deepEqual(remote.calls.at(-1), ['sleep', 'bbbbbbbb-0000-0000-0000-000000000002']);
+  assert.equal((await post(`${urls.laptop}/api/hosts/laptop/sessions/zzzzzzzzzz/sleep`, {})).status, 404);
 });
 
 test('autoname runs on the target host and shows up in /api/health', async (t) => {
@@ -665,6 +688,60 @@ test('tasks/spawn: a session in a spawn dir whose first prompt is the task conte
   assert.equal(lap.calls.filter((c) => c[0] === 'spawn').length, 0);
 });
 
+test('schedule: add (a time, or a task + time) on the named host, list, cancel; bad input is a 400', async (t) => {
+  const { urls, lap, remote } = await startPair(t);
+  const list = await fetch(`${urls.laptop}/api/hosts/workstation/schedule`).then((r) => r.json());
+  assert.deepEqual([list.host, list.entries], ['workstation', []]);
+
+  const timed = await post(`${urls.laptop}/api/hosts/workstation/schedule`, { at: '2026-10-29T07:30', dir: os.tmpdir(), prompt: ' Triage. ', model: 'opus' });
+  assert.equal(timed.status, 200);
+  assert.equal(timed.body.host, 'workstation');
+  const [, o] = remote.calls.find((c) => c[0] === 'scheduleAdd');
+  assert.deepEqual([o.at, o.task, o.prompt, o.model, o.name], ['2026-10-29T07:30', null, 'Triage.', 'opus', null]);
+
+  const linked = await post(`${urls.laptop}/api/hosts/workstation/schedule`, { task: 'https://app.productive.io/1-acme/tasks/1001', time: '09:15', dir: os.tmpdir() });
+  assert.equal(linked.status, 200);
+  const [, o2] = remote.calls.filter((c) => c[0] === 'scheduleAdd')[1];
+  assert.deepEqual([o2.at, o2.task, o2.time], [null, '1001', '09:15']);
+
+  const cancel = await post(`${urls.laptop}/api/hosts/workstation/schedule/sabc/cancel`, {});
+  assert.equal(cancel.status, 200);
+  assert.deepEqual(remote.calls.find((c) => c[0] === 'scheduleCancel'), ['scheduleCancel', 'sabc']);
+
+  for (const body of [
+    { dir: os.tmpdir() }, // no when
+    { at: 'tomorrow 09:00', task: '1001', dir: os.tmpdir() }, // both
+    { at: '$(reboot)', dir: os.tmpdir() },
+    { at: 'in 2h', time: '09:00', dir: os.tmpdir() }, // time without a task
+    { task: 'x', dir: os.tmpdir() },
+    { at: 'in 2h', dir: os.tmpdir(), model: 'x y' },
+  ]) {
+    assert.equal((await post(`${urls.laptop}/api/hosts/laptop/schedule`, body)).status, 400, JSON.stringify(body));
+  }
+  const outside = await post(`${urls.laptop}/api/hosts/laptop/schedule`, { at: 'in 2h', dir: '/' });
+  assert.ok(outside.status >= 400, String(outside.status));
+  assert.equal(lap.calls.filter((c) => c[0] === 'scheduleAdd').length, 0);
+});
+
+test('overmind CLI schedule / add / cancel pass every value as one flag', async () => {
+  const calls = [];
+  const run = async (bin, args) => {
+    calls.push(args);
+    return { stdout: args.includes('add') ? JSON.stringify({ id: 's1' }) : JSON.stringify({ host: 'h', entries: [] }), stderr: '' };
+  };
+  const cli = createOvermindCli({ run, bin: '/x/overmind' });
+  await cli.schedule();
+  await cli.scheduleAdd({ at: 'in 2h', dir: '/d', prompt: '-rf', harness: 'codex' });
+  await cli.scheduleAdd({ task: '1001', time: '09:00', dir: '/d', name: 'n', ghIdentity: 'bot' });
+  await cli.scheduleCancel('s1');
+  assert.deepEqual(calls, [
+    ['--local', 'schedule', '--json'],
+    ['--local', 'schedule', 'add', '--json', '--at=in 2h', '--dir=/d', '--harness=codex', '--', '-rf'],
+    ['--local', '--gh-identity=bot', 'schedule', 'add', '--json', '--task=1001', '--time=09:00', '--dir=/d', '--name=n'],
+    ['--local', 'schedule', 'cancel', '--', 's1'],
+  ]);
+});
+
 test('overmind CLI tasks / task show / task status run the CLI and flag a missing command', async () => {
   const calls = [];
   let stderr = null;
@@ -726,6 +803,45 @@ test('overmind CLI usage runs `overmind --local usage --json [--refresh]` and su
   assert.deepEqual(calls, [['--local', 'usage', '--json'], ['--local', 'usage', '--json', '--refresh']]);
   fail = true;
   await assert.rejects(cli.usage(), /^OvermindCliError: no Claude Code login found/);
+});
+
+test('a question only on screen (not yet in the transcript) shows in messages and is answered tab by tab', async (t) => {
+  const id = 'cccccccc-0000-0000-0000-000000000004';
+  const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%4', updated_at: 4 }]);
+  host.transcripts = { messages: async () => ({ messages: [{ role: 'assistant', kind: 'assistant', text: 'Need a pick.' }], total: 1, truncated: false }) };
+  const tab = (q, cursor = 1) =>
+    `←  ☐ A  ☐ B  ✔ Submit  →\n\n${q}\n\n${cursor === 1 ? '❯' : ' '} 1. Yes\n${cursor === 2 ? '❯' : ' '} 2. No\n  3. Type something.\n${'─'.repeat(20)}\n  4. Chat about this\n\nEnter to select · Esc to cancel`;
+  let screen = tab('First?');
+  host.backend.peek = async () => screen;
+  host.backend.type = async (s, text) => void host.calls.push(['type', s.session_id, text]);
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, warmOvermind: false, sleep: async () => {} });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  const pending = async () => (await (await fetch(`${base}/api/hosts/solo/sessions/${id}/messages`)).json()).messages.at(-1);
+  const call = async (body) => (await post(`${base}/api/hosts/solo/sessions/${id}/answer`, body)).status;
+  const typed = () => host.calls.filter((c) => c[0] === 'keys' || c[0] === 'type').map((c) => c[2]);
+
+  const first = await pending();
+  assert.equal(first.kind, 'question');
+  assert.match(first.id, /^screen:/);
+  assert.equal(first.questions[0].question, 'First?');
+  assert.deepEqual(first.questions[0].options.map((o) => o.label), ['Yes', 'No']);
+
+  screen = tab('First?', 2);
+  assert.equal(await call({ toolUseId: first.id, answers: [{ options: [0] }] }), 409, 'moved in the terminal');
+  screen = tab('First?');
+  assert.equal(await call({ toolUseId: first.id, answers: [{ options: [1] }] }), 200);
+  assert.deepEqual(typed(), ['Down', 'Enter']);
+
+  screen = tab('Second?');
+  const second = await pending();
+  assert.notEqual(second.id, first.id);
+  assert.equal(await call({ toolUseId: first.id, answers: [{ options: [0] }] }), 409, 'the first tab is gone');
+
+  screen = '⏺ Done.';
+  assert.equal((await pending()).kind, 'assistant', 'no prompt on screen, no card');
 });
 
 test('answer types the keys for the pending question, only when it is safe to', async (t) => {

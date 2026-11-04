@@ -10,14 +10,14 @@ what `overmind install --host` copies — sources and `node_modules` never leave
 ## Build
 
 ```sh
-overmind web build                               # npm ci (if needed) + npm run build
+overmind web build                                  # npm ci (if needed) + npm run build
 npm --prefix web/ui ci && npm --prefix web/ui run build   # the same, by hand
 ```
 
 ## Develop
 
 ```sh
-overmind web serve --port 7796 --bind 127.0.0.1  # an API to talk to (any running server works)
+overmind web serve --port 7796 --bind 127.0.0.1     # an API to talk to (any running server works)
 OVERMIND_WEB_URL=http://127.0.0.1:7796 npm run dev  # Vite on :5173, /api proxied (default target :7878)
 ```
 
@@ -47,6 +47,8 @@ src/
                       withStackColumns() (session stacks → `stack:<id>` columns first)
   lib/stacks.ts       session stacks: memberLive()/memberCounts()/memberCountsText(), sortedMembers(),
                       stacksMissing() (server predates stacks), stacksKnown(), conflictUpdated() (409 body)
+  lib/embed.ts        the embed view: parseEmbedHash()/readEmbed() (hash or page query), resolveEmbedDir()
+                      (`~` via the host's home, must be a spawn dir or beneath one), isInside(), sessionsIn()
   lib/styles.ts       static Tailwind class maps: status dot/text colours, host badge colours
   lib/shortcuts.ts    desktop keyboard map: BINDINGS (⌘/Ctrl combos), matchShortcut() (key + platform /
                       typing context → action), shortcutHint() (per browser / Overmind.app), isTypingTarget(),
@@ -72,20 +74,30 @@ src/
   lib/spawnDirs.ts    Settings → Start directories: the editable draft (DraftRow), fromDraft()/toDraft(), sameList(),
                       validateDraft() (mirrors lib/spawn-dirs.mjs), moveRow(), hostPathErrors()/checksByPath() (a
                       host's answer → its column), baseHost(), divergedHosts(), withOffered()
-  lib/palettes.ts     colour palettes (Settings → Theme: Default / Earth / Dusk, `data-palette` on <html>, tokens in
-                      index.css): PALETTES (picker swatches), parsePalette(), themeColor() (meta theme-color per mode)
+  lib/palettes.ts     colour palettes (Settings → Theme: Suite (default) / Graphite / Earth / Dusk, `data-palette` on <html>, tokens
+                      in index.css; Suite's in the generated `suite/palette-suite.css`): PALETTES (picker swatches),
+                      parsePalette(), themeColor() (meta theme-color per mode)
+  suite/              generated, do not edit: `palette-suite.css`, the opt-in **Suite** palette (warm neutrals and a
+                      terracotta accent shared with a few sibling apps). It and the app icons in `public/` (and the
+                      desktop icons) come from a shared design system kept outside this repo; Default is unchanged
   lib/notes.ts        notes explorer: buildTree(), notesHref() / parseNotesLocation() (`#/notes/<host>/<path>`),
                       indexNotes() + resolveNoteLink() (relative + `[[wiki]]` links), splitRanges(), highlightTerms()
   lib/review.ts       diff reviewer: reviewHref() / parseReviewLocation() (`#/review/<host>/<id>`), fileTree() +
                       treeOrder(), splitRows() (side-by-side pairing), fileSignature() (Viewed resets on change),
-                      selectLine() / selectionCode(), placeThreads() (anchors, outdated), orphanThreads()
+                      selectLine() / selectionCode(), placeThreads() (anchors, outdated), orphanThreads(),
+                      placeOnClauses() / clauseAt() (threads on a .plain spec's clauses)
+  lib/plainConcepts.ts where a PlainLang term is defined: this module, then import / requires (transitive,
+                      nearest first), then the rest of the checkout (`files/plain`); usePlainConcepts caches
+                      texts 30 s across the specs on screen
+  lib/plain.ts        PlainLang (.plain) specs: parsePlain() (clauses with their lines), diffPlain() (by clause:
+                      added / changed with a word diff / removed in place; specs using a changed definition)
   lib/outbox.ts       composer outbox (send with an undo delay): pure transitions (schedule / cancel / flush / retry),
                       reconcile() (dedupe optimistic bubbles against the transcript), the Outbox class (timer +
                       one-at-a-time sender), SEND_DELAYS (Settings → Send delay, `overmind.sendDelay`)
   lib/drafts.ts       composer drafts per session: unsent text saved in `overmind.drafts` (saveDraft, 14 days,
                       cleared on send) + one-shot parked text (setDraft) — "Send to session" from a note
   lib/brief.ts        brief helpers: briefTodos(), setTodoItem() (`## Todos`, legacy `## Plan`), groupResources()
-                      (RESOURCE_ORDER), gitLine(), editorLabel(), todoProgress(), continueDraft()
+                      (RESOURCE_ORDER), gitLine(), editorLabel(), todoProgress(), continueDraft(), withContinueTask()
   lib/storage.ts      localStorage that never throws
   lib/dormant.ts      dormant sessions (a reboot left them): dormantIndex() / dormantMember() (Board cards, the server's
                       `dormant` flag or the dormant list), dormantTitles() / dormantMeta(), restoreSummary(), dormantMissing();
@@ -95,7 +107,7 @@ src/
   hooks/usePoller.ts  setTimeout-chained poller: no overlap, pauses while hidden, abort on unmount,
                       refresh() (runs even while hidden)
   hooks/useFollowScroll.ts  follow-the-tail scrolling for chat / term
-  hooks/useOvermind.ts overmind context + localStorage snapshot (`overmind.snapshot`)
+  hooks/useOvermind.ts   overmind context + localStorage snapshot (`overmind.snapshot`)
   hooks/useSessionList.ts  list state shared by the mobile list and the desktop sidebar (search, filters, counts)
   hooks/useGroups.ts  useViewMode() (`overmind.view`: list | board), useGroups(enabled): polls /api/groups
                       every 30s (4s while a pass runs) only while the Board is shown; run() = Regroup now;
@@ -185,14 +197,26 @@ src/
 
 ## Features
 
-- **List** (`#/`): all sessions across hosts, status + host filter chips, search, unreachable-host
-  banners, `+` → New session. Mobile: the filter chips (and the Board's regroup line) sit in a
-  drawer under the search field, closed by default — swipe down on the header (not in the
+- **Embed view** (`/?host=…&dir=…[&theme=…]#/embed`, also `#/embed?…`): one directory's sessions
+  for another app to frame — its own tree in `App.tsx` (`EmbedApp`, `screens/EmbedScreen.tsx`),
+  without Overmind's navigation. List (sessions on that host with their cwd in `dir`) + New session
+  (the form with host / directory fixed, `SpawnPrefill.fixed`; the session is labelled with `app`, `SpawnPrefill.embed`) → the mobile session screen with
+  `embedded` (no Review / scratchpad / stack bar) and `onBack` to the list. `theme` forces the
+  mode (`ThemeProvider forced`, and index.html's pre-paint) without saving it. Moves replace
+  history entries. Contract: [docs/architecture.md → Embed view](../../docs/architecture.md#embed-view).
+- **List** (`#/`): the sessions of the selected hosts (default: own hosts), status + host filter chips, search, unreachable-host
+  banners, `+` → New session. Mobile: the filters — as on desktop, `SessionFilters touch`: Sessions | Bots, then status
+  and host behind one icon each; the host menu is Mine / Shared / All plus a checkbox per host — (and the Board's regroup line) sit in a drawer under the search field, closed by default — swipe down on the header (not in the
   field) or tap the handle to open, swipe up / tap to close; the list itself scrolls as usual.
   While closed, active filters show on the handle ("Needs you · workstation") with ✕ to clear.
-  The List | Board toggle stays next to the search field.
+  The List | Board toggle stays next to the search field. The header's ⋯ opens every module
+  (Inbox, Pull requests, Tasks, …, Bots; finger-sized rows), then Focus, Usage limits, Settings
+  below a separator.
 - **Bot sessions**: a session a bot started (`origin` on its row) wears a bot chip
-  (bot icon + bot name; the run id in a tooltip) on list rows and board cards. **Bots** is a status
+  (bot icon + bot name; the run id in a tooltip) on list rows and board cards. **Apps** does the
+  same for sessions an app's embedded panel started (`embed`: app icon + app name, the Apps
+  filter beside Bots). **Slack** sets aside the sessions with an active Slack link (from
+  `/api/slack`; the Slack filter, between Bots and Apps, shown when there are some). **Bots** is a status
   filter (the bot-icon chip after Idle, shown when there are job sessions): it lists only job
   sessions. Every other filter leaves them out, except ones waiting on you (they always show, and
   every "needs you" counter counts them); the header counters count every session.
@@ -384,28 +408,30 @@ src/
   (cwd-relative), host, size · age; Download (`files/raw?download=1`), "Open on <host>" (opens it
   with that machine's default app, not in the browser), Copy path, Close (Esc). Content by kind:
   markdown rendered with `<Markdown>` (relative links open in the preview with Back; relative
-  images load via `files/raw`; Source toggle, the default when the mention has a line), text with
+  images load via `files/raw`; Source toggle, the default when the mention has a line), a
+  PlainLang `.plain` spec rendered with `<PlainView>` (index of sections and specs, acceptance tests
+  per spec, import / requires chips open those modules; same Source toggle; terms as below), text with
   line numbers (the line highlighted and scrolled to; first 20k lines), image, PDF (iframe),
   else / over 5 MB an info panel with Download and Open. Markdown safety is unchanged: file
   nodes exist only with `parseMarkdown(text, { files: true })` and render as buttons.
 - **⋯ → Details** (drawer, the same content as the desktop details column): name, host · cwd,
-  context, **Open in VS Code / Cursor** (`editorUrl`, a plain `vscode://` / `cursor://` link; hidden
-  on touch screens), the **brief** (below), Chat/Terminal, scrollback (`overmind.termLines`),
-  Auto-name → Run now (+ last run / schedule from `/api/health` when the host is this server),
-  session details (tmux, backend, pid, id), Close session (two taps within 5s → `api.kill`, back
-  to the list, row dropped optimistically).
+  context, ⏻ Close session top right (two taps within 5s, the second shows "Tap to close" →
+  `api.kill`, back to the list, row dropped optimistically); then one row of action buttons (labels drop when the row is under 15rem) —
+  Review (the diff reviewer; the session header has no Review or Scratchpad button), New (session from here), Link (to a
+  stack), Attach (iTerm link, else copies the attach command); the **brief** (below); session
+  details (stack, tmux, backend, pid, id).
 - **Brief** (top of Details; web/ARCHITECTURE.md → Session briefs): "updated 3m ago · edited",
   Regenerate, Edit (the body markdown in a textarea; ⌘/Ctrl+Enter saves, Esc cancels — in the
   drawer Esc cancels the edit, not the drawer); Summary; **Todos** with clickable checkboxes and
   `3/7` (checked items are muted, not struck through; toggling rewrites that line of `## Todos`,
-  or of a legacy `## Plan`, and PUTs the body); Resources grouped Git (one row: branch · worktree
+  or of a legacy `## Plan`, and PUTs the body) — Origin and Pull requests sit between Summary and Todos as parts of their own; Resources (below the Todos) grouped Git (one row: branch · worktree
   / repo + path; legacy Branch / Worktree rows too), Pull requests, Issues, Artifacts, Specs,
   Links, Files (collapsed by default with a count; `overmind.briefFilesOpen`), Notes — files open the
   preview, URLs a new tab; **Continue in new session** (the New session form prefilled with the
-  host, the session's cwd and `continuePrompt`, caret at the end). GET while Details is open,
+  host, the session's cwd and `continuePrompt`, caret below its `---` line, where the task goes;
+  sent with nothing there, the default task is added). GET while Details is open,
   every 30s, every 2.5s while generating.
-- **Settings** (`#/settings`: the ⋯ More menu in the list header on mobile, the sidebar footer / rail and
-  the board header on desktop, ⌘K → Settings…): Text size (Small / Default /
+- **Settings** (`#/settings`: the ⋯ More menu in the list header on mobile, the top bar on desktop, ⌘K → Settings…): Text size (Small / Default /
   Large = chat at 13 / 15 / 17px, `overmind.chatFont`) scales the **whole** UI via the `<html>`
   font-size (index.html applies it before first paint); Terminal text (`overmind.termFont`, in rem so
   it follows the text size); Theme (`overmind.theme`); Progress notes (`overmind.chatHideNotes`); Send
@@ -418,7 +444,8 @@ src/
   **Start directories** (`components/SpawnDirsEditor.tsx`)
   is overmind-wide instead: the `spawnDirs` the New session form offers, one row per label with a
   path field per host (hosts from `/api/overmind`; empty = not offered there), add / rename / delete /
-  move up-down. Loaded with `GET …/spawn-dirs` from every host (this server's list is the one
+  move up-down, and an eye toggle that hides a row (`hidden: true`: still allowed for spawns, e.g. an
+  app's embed panel, but not offered in New session; unknown entry keys round-trip). Loaded with `GET …/spawn-dirs` from every host (this server's list is the one
   edited; a host with a different one is named). Each cell shows that host's own check (✓ is a
   directory, ✗ missing / not a directory) from a debounced dry-run `PUT` of the draft; labels and
   path syntax are checked as you type. Save (enabled when dirty and valid; Revert resets; the
@@ -439,6 +466,15 @@ src/
   `overmind.reviewViewed:<host>/<id>` as the diff's signature, so a new change unticks it). Desktop:
   file tree (`overmind.reviewTree`) | diff | the session itself as a pane (`overmind.reviewChat`) —
   review and conversation side by side.
+  A `.plain` spec (the diff carries both whole texts, `plain`) shows as **Spec** by default, Diff
+  one click away (`overmind.plainView`): `<PlainView>` with a Changes card (what changed per section
+  and spec, specs whose definitions changed; Highlight changes, Only what changed) and the clause
+  states in place. A clause is a comment target (the button left of it): its own lines on its side
+  (`old` for a removed one); threads show under the clause holding their last line, in either view.
+  In both views a term chip (`:Widget:`) opens a popover with its definition rendered, looked up
+  across modules (`lib/plainConcepts.ts`): where it comes from (this module, `x.plain` via the
+  import chain, or "not imported by this module"), Go to definition / Open; terms inside it open
+  in the popover, with Back.
   **Comments** (`useReview`, ../ARCHITECTURE.md → `…/review`): select code with the mouse → a
   "Comment on lines X–Y" button at the selection's end (`rowsToRange` over the rows' `data-*`;
   split view: the side the selection ends on), or click a line number (a "+" shows on the
@@ -454,7 +490,7 @@ src/
 - **Notes** (`#/notes[/<host>[/<path>]]`; ../ARCHITECTURE.md → notes): browse, search and read the
   markdown notes of any host with `web.notes.root` (hosts come from `/api/overmind` entries carrying
   `notes`; the last one used is `overmind.notesHost`). Reached from the ⋯ More menu in the mobile
-  list header, the sidebar footer / rail and the board header, ⌘K → Notes… (the palette also
+  list header, the desktop top bar, ⌘K → Notes… (the palette also
   lists the first notes host's 300 most recent notes) and ⌘⇧E. Folder tree (expanded folders
   per host in `overmind.notesOpen.<host>`, the open note's folders expand), search (180 ms debounce,
   previous request aborted; words AND-ed, `"phrases"`, `#tag`; Enter opens the first hit, Esc
@@ -470,7 +506,9 @@ src/
   (← Sessions, name, host picker, search ⌘F, root, editor link), then tree | results or recent |
   note. Mobile: the browse/search screen (recent + tree, or results), a note is its own screen;
   swipe right = back on both.
-- **PWA**: `public/` has the manifest (standalone, `/#/`) and the app icons;
+- **PWA**: `public/` has the manifest (standalone, `/#/`) and the app icons (generated, like
+  `src/suite/`, from the shared design system: a white arrowhead on a terracotta tile; the 512 PNG
+  is `any maskable`);
   `index.html` sets theme-color (kept in sync with the theme), apple-mobile-web-app meta,
   `viewport-fit=cover` and `interactive-widget=resizes-content`. No service worker (the app is
   useless offline; the server revalidates every file).
@@ -480,11 +518,18 @@ src/
 Master–detail on the same hash routes as mobile (`#/` = nothing open, `#/s/<host>/<id>` = that
 session in the pane), so a link opens the same session on either layout.
 
-- **Sidebar** (left): Overmind summary, "updated Xs ago", `+`, search (⌘F), compact status + host
-  filter chips, the session list (the open row is highlighted, the keyboard cursor has a ring),
-  footer buttons for the palette and the shortcuts. Resizable by dragging its edge (280–560px,
-  double-click resets, ←/→ on the focused handle; `overmind.sidebarWidth`), collapsible to a rail
-  with ⌘\ (`overmind.sidebar`).
+- **Top bar** (the same over List and Board): Overmind summary (own hosts only), Sessions | Bots |
+  Slack | Apps toggle with the status picker, search (⌘F), List | Board, the **host rail**
+  (`HostRail`, which is also the host filter): a chip per host (colour mark + session count), own
+  hosts in one group, shared sheds (`hosts.<name>.shared`, a hollow diamond) in a dashed one, a
+  waiting dot on a shared chip with waiting sessions. Click: only that host (again: back to its
+  group, *Mine* or *Shared*); ⌘ / Ctrl / Shift-click adds or removes it (multi-select, persisted in
+  `overmind.hostFilter`, lib/hosts.ts; default *Mine*); `!` and a red ring when unreachable.
+  Right-click or ⌥-click opens the host card (`HostCard`: state, error and Open terminal:
+  Overmind.app opens an iTerm tab via `overmind://shell`, a browser copies `overmind -H <host> new`), modules, the helpers in their own group — Focus, Usage, Settings — and `+`.
+- **Sidebar** (left, List only): the session list (the open row is highlighted, the keyboard
+  cursor has a ring), Dormant and Recently closed; an unreachable host shows only in the top bar (on the Board too). Resizable by dragging its edge (280–560px,
+  double-click resets, ←/→ on the focused handle; `overmind.sidebarWidth`).
 - **Pane**: the session screen without the back button; header adds the cwd; chat is a wider
   (max-w-4xl) readable column, the terminal uses the full width; the composer sends on Enter (also
   ⌘/Ctrl+Enter, touch-capable laptops included), Shift+Enter is a newline. Nothing open → an empty
@@ -497,12 +542,13 @@ session in the pane), so a link opens the same session on either layout.
   its width and layout, stays scrollable (the last columns scroll out from under the flyout) and
   clickable — another card switches the flyout. Its left edge resizes it (drag, or focus it and
   ←/→, Shift for bigger steps; double-click resets to 55% of the board; min 420px, max the board
-  minus 240px; `overmind.flyoutWidth`). Esc (outside a field) or ✕ closes it. A flyout narrower than
-  54rem lays the Details panel over the chat instead of beside it. ⌘\ does nothing on the board.
-- **Details panel** (right, ⌘I, the header button or ⌘K; ✕ top-right closes it; `overmind.inspector`,
-  open by default from 1440px): the mobile ⋯ drawer's content (`DetailsPanel`) — the brief first
-  (summary, todos, resources, continue), then chat/terminal, scrollback, auto-name,
-  tmux/backend/pid/id, Close session (click twice).
+  minus 240px; `overmind.flyoutWidth`). Esc (outside a field) or ✕ closes it.
+- **Details panel** (right of the chat, always open): resizable from its left edge like the
+  sidebar (260–560px, default 320px, double-click resets, ←/→ on the focused handle;
+  `overmind.detailsWidth`); the chat keeps at least 380px, and a pane too narrow for both shows the
+  ⋯ button (the drawer) instead. The mobile ⋯ drawer's content (`DetailsPanel`) — the brief first
+  (summary, todos, resources, continue) under the action row, then the session details; ⏻ Close
+  session top right (click twice).
 - **New session**: the mobile form in a dialog. Toasts sit bottom-right, above the composer.
 - **Polling** is unchanged: one `/api/overmind` loop (OvermindProvider, 5s) feeds the sidebar and the
   pane's status; the pane runs exactly one messages (3s) or peek (2s) loop. The tab title is

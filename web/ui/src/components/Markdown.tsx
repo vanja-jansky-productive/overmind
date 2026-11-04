@@ -278,15 +278,18 @@ export const Markdown = memo(function Markdown({ text, className, notes = false 
   )
 })
 
-/** Plain text with bare http(s) URLs as links — the terminal view. */
+/** Plain text with bare http(s) URLs as links (and, inside a provider, file paths) — user prompts, the terminal view. */
 export const Linkified = memo(function Linkified({ text }: { text: string }) {
+  const links = useContext(FileLinksContext)
   return linkify(text).map((n, i) =>
     n.t === 'link' ? (
       <Link key={i} href={n.href}>
         {n.href}
       </Link>
     ) : n.t === 'text' ? (
-      <Fragment key={i}>{n.v}</Fragment>
+      <Fragment key={i}>
+        <TextWithPaths v={n.v} links={links} />
+      </Fragment>
     ) : null,
   )
 })

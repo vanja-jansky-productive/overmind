@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronLeftIcon,
   CircleAlertIcon,
+  CircleCheckBigIcon,
   EllipsisIcon,
-  FileDiffIcon,
   MessageSquareTextIcon,
-  PanelRightIcon,
   SquareTerminalIcon,
   WifiOffIcon,
   XIcon,
@@ -14,7 +13,7 @@ import { useLocation } from 'wouter'
 import { toast } from 'sonner'
 
 import { ApiError, api, isAbortError, isSessionGone, sendErrorMessage, sessionErrorMessage } from '@/api/client'
-import type { FileStat, Message, SessionKey } from '@/api/types'
+import type { FileStat, Message, PromptQueue, SessionKey } from '@/api/types'
 import { ContextMeter } from '@/components/ContextMeter'
 import { DropOverlay } from '@/components/DropOverlay'
 import { EditableTitle } from '@/components/EditableTitle'
@@ -28,13 +27,14 @@ import { BranchDialog } from '@/components/session/BranchDialog'
 import { ChatView } from '@/components/session/ChatView'
 import { CompactHint } from '@/components/session/CompactHint'
 import { Composer, type ComposerApi } from '@/components/session/Composer'
+import { QueuePanel } from '@/components/session/QueuePanel'
+import { BackgroundPanel } from '@/components/BackgroundWork'
 import { FilePreview } from '@/components/session/FilePreview'
 import { OutboxBubbles } from '@/components/session/OutboxBubbles'
 import type { QuestionActions } from '@/components/session/QuestionCard'
 import { DetailsDrawer, DetailsPanel, type DetailsPanelProps } from '@/components/session/DetailsPanel'
 import { LiveTerm } from '@/components/session/LiveTerm'
 import { TermView } from '@/components/session/TermView'
-import { ScratchpadButton } from '@/components/Scratchpad'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useFileDrop } from '@/hooks/useAttach'
@@ -56,11 +56,12 @@ import { canBranchSession } from '@/lib/branch'
 import { modelLabel, relTime, shortCwd } from '@/lib/format'
 import { harnessLabel } from '@/lib/harness'
 import { tailAnchor } from '@/lib/outbox'
-import { findSession, statusMeta, withoutSession } from '@/lib/sessions'
+import { findSession, sessionDone, statusMeta } from '@/lib/sessions'
 import { reviewHref } from '@/lib/review'
 import { stacksKnown } from '@/lib/stacks'
 import { isUndoBackspace, withHint } from '@/lib/shortcuts'
 import { STATUS_TEXT } from '@/lib/styles'
+import { clampDetailsWidth, DETAILS_DEFAULT_W, DETAILS_MAX_W, DETAILS_MIN_W, detailsWidth } from '@/lib/layout'
 import { cn } from '@/lib/utils'
 
 interface ChatState {
@@ -90,19 +91,19 @@ export interface SessionScreenProps {
   id: string
   /** `screen` (mobile, default): fixed full-screen page. `pane`: the desktop detail pane. */
   layout?: 'screen' | 'pane'
-  /** Pane only: show the details column (brief + session details; the header button toggles it). */
-  inspector?: boolean
-  onToggleInspector?: () => void
   /** Pane only: filled with the pane's API while mounted. */
   paneRef?: React.RefObject<PaneApi | null>
   /** Pane only: focus the composer on mount (opened with Enter). */
   autoFocusComposer?: boolean
-  /** Pane only: shown beside the diff reviewer — no Review / Details buttons in its header. */
+  /**
+   * Shown beside the diff reviewer (pane) or inside another app (the embed view, screen): no
+   * Review / Details actions, no stack bar.
+   */
   embedded?: boolean
+  /** Screen only: Back (and after closing the session) goes here instead of the history / the list. */
+  onBack?: () => void
   /** Pane only: a close button in the header (the Board view's flyout). */
   onClose?: () => void
-  /** Pane only: the pane is too narrow for a details column — lay it over the chat instead. */
-  detailsOverlay?: boolean
 }
 
 /**
@@ -114,16 +115,14 @@ export function SessionScreen({
   host,
   id,
   layout = 'screen',
-  inspector = false,
-  onToggleInspector,
   paneRef,
   autoFocusComposer = false,
   onClose,
-  detailsOverlay = false,
   embedded = false,
+  onBack,
 }: SessionScreenProps) {
   const pane = layout === 'pane'
-  const { overmind, refresh: refreshOvermind, applyOvermind } = useOvermind()
+  const { overmind, refresh: refreshOvermind, dropSession } = useOvermind()
   const settings = useSettings()
   const [, navigate] = useLocation()
   const now = useNow(1000)
@@ -140,6 +139,34 @@ export function SessionScreen({
   const [liveUnsupportedFor, setLiveUnsupportedFor] = useState<string | null>(null)
 
   const [menuOpen, setMenuOpen] = useState(false)
+  // Pane: the Details column (brief + session details) is always beside the chat, resizable
+  // from its left edge (`overmind.detailsWidth`); a pane too narrow for both uses the ⋯ drawer.
+  const paneEl = useRef<HTMLDivElement>(null)
+  const [paneW, setPaneW] = useState(0)
+  useLayoutEffect(() => {
+    const el = paneEl.current
+    if (!el) return
+    setPaneW(el.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([entry]) => entry && entry.contentRect.width > 0 && setPaneW(entry.contentRect.width))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const [detailsPref, setDetailsPref] = usePersistentState<number>('overmind.detailsWidth', DETAILS_DEFAULT_W, (r) => clampDetailsWidth(Number(r)))
+  const detailsW = pane && !embedded ? detailsWidth(detailsPref, paneW) : 0
+  const detailsDrag = useRef<{ x: number; w: number } | null>(null)
+  const onDetailsDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    detailsDrag.current = { x: e.clientX, w: detailsW }
+  }
+  const onDetailsMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!detailsDrag.current) return
+    setDetailsPref(clampDetailsWidth(detailsDrag.current.w - (e.clientX - detailsDrag.current.x)))
+  }
+  const onDetailsUp = () => {
+    detailsDrag.current = null
+  }
   const [jumpSignal, setJumpSignal] = useState(0)
   // Paths in Claude's messages that exist on the host → links → this preview.
   const sessionKey = `${host}/${id}`
@@ -152,7 +179,7 @@ export function SessionScreen({
 
   // Brief: the top of the Details panel — the desktop column (open state owned by the shell)
   // or the mobile drawer (⋯). Polled only while it shows.
-  const brief = useBrief(host, id, pane ? inspector : menuOpen)
+  const brief = useBrief(host, id, detailsW > 0 || menuOpen)
   // "Continue in new session" → the New session form, prefilled (host, this cwd, the brief's prompt).
   const [continueWith, setContinueWith] = useState<SpawnPrefill | null>(null)
 
@@ -189,6 +216,8 @@ export function SessionScreen({
   const [peekBackend, setPeekBackend] = useState<string | null>(null)
 
   const [gone, setGone] = useState(false)
+  // The server's prompt queue for this session (lib/queue.mjs): carried by every chat poll.
+  const [queue, setQueue] = useState<PromptQueue | null>(null)
 
   const pollChat = useCallback(
     async (signal: AbortSignal) => {
@@ -202,6 +231,8 @@ export function SessionScreen({
         const at = data.capturedAt || Date.now()
         setChat((prev) => (prev?.key === key ? { ...prev, at } : { messages, truncated, status, name, at, key }))
         if (data.backend) setMsgBackend(String(data.backend))
+        const q = data.queue ?? null
+        setQueue((prev) => (JSON.stringify(prev) === JSON.stringify(q) ? prev : q))
         setChatErr(null)
         setGone(false)
       } catch (err) {
@@ -361,6 +392,31 @@ export function SessionScreen({
     const text = box.discard(itemId)
     if (text != null) composerApi.current?.restore(text)
   }
+  // Typed while the agent works: queued on the server, it goes in when the run ends (⌘Enter: now).
+  const queueing = status === 'busy' && !lockedReason
+  const enqueue = (text: string): boolean => {
+    if (lockedReason || !text.trim()) return false
+    api
+      .queueAdd(host, id, text)
+      .then(({ items, paused, held }) => setQueue({ items, paused, held }))
+      .catch((err) => {
+        steerError(err)
+        composerApi.current?.restore(text)
+      })
+    return true
+  }
+  const queueAction = (p: Promise<PromptQueue>, after?: () => void) =>
+    p
+      .then((q) => {
+        setQueue({ items: q.items, paused: q.paused, held: q.held })
+        after?.()
+      })
+      .catch(steerError)
+  const queueEdit = (itemId: string) => {
+    const it = queue?.items.find((x) => x.id === itemId)
+    if (!it) return
+    void queueAction(api.queueDelete(host, id, itemId), () => composerApi.current?.restore(it.text))
+  }
   const retryFailed = (itemId: number) => box.retry(itemId, tailAnchor(chatRef.current?.messages))
 
   // Backspace cancels the pending message (not while it edits text: in a non-empty field it
@@ -422,7 +478,8 @@ export function SessionScreen({
   )
 
   const back = () => {
-    if (window.history.length > 1) window.history.back()
+    if (onBack) onBack()
+    else if (window.history.length > 1) window.history.back()
     else navigate('/', { replace: true })
   }
   // Mobile: swipe right anywhere on the screen = Back (the installed PWA has no native back swipe).
@@ -482,14 +539,28 @@ export function SessionScreen({
     session,
     brief: { host, brief, fileLinks },
     onNewFromHere: session ? newFromHere : undefined,
-    onClose: pane ? onToggleInspector : undefined,
-    stack: stackMenu,
+    onReview: session?.cwd && !embedded ? () => navigate(reviewHref(host, id)) : undefined,
+    stack: embedded ? null : stackMenu,
     onClosed: () => {
-      // Drop it from the list now; the next polls confirm (discovery caches ~2s).
-      if (overmind) applyOvermind(withoutSession(overmind, host, id))
+      // Drop it from the list now and keep stale polls from bringing it back.
+      dropSession(host, id)
       setTimeout(refreshOvermind, 2500)
-      navigate('/', { replace: true })
+      if (onBack) onBack()
+      else navigate('/', { replace: true })
     },
+  }
+
+  // Close from the Done card at the end of the chat: like Close in the details panel.
+  const done = gone ? null : sessionDone(session)
+  const closeDone = async () => {
+    try {
+      const res = await api.kill(host, id)
+      toast.success(`Closed ${res.name || id.slice(0, 8)}`, { description: String(res.terminal || 'done').replace(/-/g, ' ') })
+      menuProps.onClosed()
+    } catch (err) {
+      toast.error('Close failed', { description: sessionErrorMessage(err) })
+      throw err
+    }
   }
 
   const NewSession = pane ? NewSessionDialog : NewSessionDrawer
@@ -535,8 +606,8 @@ export function SessionScreen({
               {session ? <EditableTitle session={session} scope="header" tapToEdit className="text-[0.9375rem] font-bold" /> : <span className="truncate">{name}</span>}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs whitespace-nowrap">
-              <StatusDot status={status} className="size-2" />
-              <span className={cn('shrink-0', STATUS_TEXT[meta.key])}>{gone ? 'gone' : meta.label}</span>
+              {done ? <CircleCheckBigIcon className="size-3 shrink-0 text-primary" aria-hidden /> : <StatusDot status={status} className="size-2" />}
+              <span className={cn('shrink-0', done ? 'font-medium text-primary' : STATUS_TEXT[meta.key])}>{gone ? 'gone' : done ? 'done' : meta.label}</span>
               <HostBadge host={host} className="h-4 px-1 text-[0.625rem]" />
               {session?.session_id ? <PrChip session={{ host, session_id: session.session_id }} className="h-4" /> : null}
               {session?.session_id ? <TaskChip session={{ host, session_id: session.session_id }} className="h-4" /> : null}
@@ -574,33 +645,7 @@ export function SessionScreen({
               </ToggleGroupItem>
             </ToggleGroup>
           ) : null}
-          {session?.cwd && !embedded ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Review changes"
-              title="Review changes (diff)"
-              onClick={() => navigate(reviewHref(host, id))}
-              className="size-11 shrink-0 rounded-xl text-muted-foreground"
-            >
-              <FileDiffIcon className="size-5" />
-            </Button>
-          ) : null}
-          {pane && !embedded ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Details panel"
-              title={withHint('Details', 'inspector')}
-              aria-pressed={inspector}
-              onClick={onToggleInspector}
-              className={cn('size-11 shrink-0 rounded-xl', inspector && 'bg-muted text-foreground')}
-            >
-              <PanelRightIcon className="size-5" />
-            </Button>
-          ) : (
-            <>
-            <ScratchpadButton className="size-11 shrink-0 rounded-xl text-muted-foreground [&_svg:not([class*='size-'])]:size-5" />
+          {detailsW > 0 ? null : (
             <Button
               variant="ghost"
               size="icon"
@@ -611,7 +656,6 @@ export function SessionScreen({
             >
               <EllipsisIcon className="size-5" />
             </Button>
-            </>
           )}
           {pane && onClose ? (
             <Button variant="ghost" size="icon" aria-label="Close session" title="Close (Esc)" onClick={onClose} className="size-11 shrink-0 rounded-xl">
@@ -621,7 +665,7 @@ export function SessionScreen({
         </div>
       </header>
 
-      {session?.stack ? <StackBar session={session} pane={pane} /> : null}
+      {session?.stack && !embedded ? <StackBar session={session} pane={pane} /> : null}
 
       {hostDown || missing ? (
         <div className="shrink-0 px-3 px-safe">
@@ -663,6 +707,8 @@ export function SessionScreen({
             outbox={outboxView('chat')}
             outboxKey={outbox.map((it) => `${it.id}:${it.state}`).join(',')}
             questionActions={questionActions}
+            done={done}
+            onCloseDone={closeDone}
             onBranch={!gone && session && canBranchSession(session.harness) ? openBranch : null}
           />
         ) : (
@@ -677,7 +723,7 @@ export function SessionScreen({
                 onError={(message) => toast.error(message, { id: 'live-term' })}
               />
             ) : (
-              <TermView text={peek?.text ?? null} failed={!!peekErr} fontSize={termFont} jumpSignal={jumpSignal} />
+              <TermView text={peek?.text ?? null} failed={!!peekErr} fontSize={termFont} jumpSignal={jumpSignal} fileLinks={fileLinks} />
             )}
             {canLive ? (
               <button
@@ -694,15 +740,6 @@ export function SessionScreen({
         {(session?.harness || 'claude') === 'claude' && !lockedReason && !gone && !outbox.some((it) => it.state !== 'sent' && it.text.trim() === '/compact') ? (
           <CompactHint context={session?.context} onCompact={() => send('/compact')} />
         ) : null}
-        {pane && inspector && detailsOverlay ? (
-          // A narrow pane: the details lie over the chat (header and composer stay usable).
-          <aside
-            aria-label="Session details"
-            className="absolute inset-y-0 right-0 z-30 w-80 max-w-[90%] border-l bg-background shadow-xl xl:w-96"
-          >
-            <DetailsPanel {...menuProps} open variant="panel" />
-          </aside>
-        ) : null}
         {errText ? (
           <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-3">
             <div className="flex max-w-full items-center gap-2 rounded-full border border-destructive/40 bg-popover/95 px-3 py-1.5 text-xs text-destructive shadow-md backdrop-blur-sm">
@@ -713,6 +750,20 @@ export function SessionScreen({
         ) : null}
       </main>
 
+      <BackgroundPanel session={session} desktop={pane} />
+      <QueuePanel
+        queue={queue}
+        agent={harnessLabel(session?.harness)}
+        desktop={pane}
+        onSendNow={(itemId) => void queueAction(api.queueSend(host, id, itemId), afterSteer)}
+        onEdit={queueEdit}
+        onDelete={(itemId) => void queueAction(api.queueDelete(host, id, itemId))}
+        onMoveUp={(itemId) => {
+          const i = queue?.items.findIndex((x) => x.id === itemId) ?? -1
+          if (i > 0) void queueAction(api.queueMove(host, id, itemId, i - 1))
+        }}
+        onPause={(paused) => void queueAction(api.queuePause(host, id, paused))}
+      />
       {mode === 'term' && outbox.some((it) => it.state !== 'sent') ? (
         <div className={cn('shrink-0 px-safe', pane ? 'mx-auto w-full max-w-4xl px-4 pt-2' : 'mx-auto w-full max-w-3xl px-3 pt-2')}>
           {outboxView('strip')}
@@ -722,6 +773,8 @@ export function SessionScreen({
         quickReplies={settings.quickReplies}
         lockedReason={lockedReason}
         onSend={send}
+        onQueue={queueing ? enqueue : null}
+        onSendQueued={queue?.items.length ? () => void queueAction(api.queueSend(host, id, queue.items[0].id), afterSteer) : null}
         onKey={sendKey}
         desktop={pane}
         inputRef={composerRef}
@@ -741,15 +794,43 @@ export function SessionScreen({
 
   if (pane) {
     return (
-      <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-background">
+      <div ref={paneEl} className="flex h-full min-w-0 flex-1 overflow-hidden bg-background">
         <section aria-label={`Session ${name}`} className="relative flex min-w-0 flex-1 flex-col" {...drop.bind}>
           {column}
         </section>
-        {inspector && !detailsOverlay ? (
-          <aside aria-label="Session details" className="w-80 shrink-0 border-l bg-card/30 xl:w-96">
+        {detailsW > 0 ? (
+          <aside aria-label="Session details" className="relative shrink-0 border-l bg-card/30" style={{ width: detailsW }}>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize details"
+              aria-valuemin={DETAILS_MIN_W}
+              aria-valuemax={DETAILS_MAX_W}
+              aria-valuenow={detailsW}
+              tabIndex={0}
+              title="Drag to resize · double-click to reset"
+              onPointerDown={onDetailsDown}
+              onPointerMove={onDetailsMove}
+              onPointerUp={onDetailsUp}
+              onPointerCancel={onDetailsUp}
+              onDoubleClick={() => setDetailsPref(DETAILS_DEFAULT_W)}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                  e.preventDefault()
+                  setDetailsPref(clampDetailsWidth(detailsW + (e.key === 'ArrowLeft' ? 24 : -24)))
+                }
+              }}
+              className={cn(
+                'absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize touch-none outline-none',
+                'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
+                'hover:after:w-0.5 hover:after:bg-primary/50 focus-visible:after:w-0.5 focus-visible:after:bg-ring',
+              )}
+            />
             <DetailsPanel {...menuProps} open variant="panel" />
           </aside>
-        ) : null}
+        ) : (
+          <DetailsDrawer {...menuProps} />
+        )}
         {continueForm}
         {branchForm}
       </div>

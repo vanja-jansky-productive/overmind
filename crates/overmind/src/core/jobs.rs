@@ -23,9 +23,13 @@
 //! `mon`/`jan`, and `@hourly` / `@daily` / `@weekly`). `prompt` (inline) or `promptFile` (read
 //! at run time) is the first prompt. `command` replaces the launcher (config `claude`) for the
 //! job's sessions *and* everything they spawn — it travels as `OVERMIND_CMD`. `harness` and
-//! `model` as for `overmind spawn`. `enabled: false` pauses the job. `keep` (default `24h`,
-//! `"never"` to keep forever): a run's sessions are closed once they are idle and the run is
-//! older than this; a session waiting for input is never closed.
+//! `model` as for `overmind spawn`. `ghIdentity` names a GitHub identity (`ghIdentities`) the
+//! job's sessions act as on GitHub — see [`crate::core::gh_identity`]. `enabled: false` pauses
+//! the job. `pull: true` brings `dir`'s git checkout up to date before each run (fetch, then a
+//! fast-forward only, as `overmind repos sync`); when it can't (local changes, diverged, offline)
+//! the run starts all the same, with the reason in the run's `pull` and a line in its prompt.
+//! `keep` (default `72h`, `"never"` to keep forever): a run's sessions are closed once
+//! they are idle and the run is older than this; a session waiting for input is never closed.
 //!
 //! The launchd agent runs `overmind jobs tick` every minute. A tick fires a job when its latest
 //! scheduled slot is newer than the last slot it saw; a slot more than [`CATCH_UP_SECS`] old
@@ -35,6 +39,9 @@
 //! Tagging: a job session runs with `OVERMIND_JOB_RUN=<job>/<run>` in its environment and the
 //! tmux pane option `@overmind_job_run` set to the same; `overmind list` reports it as `origin`.
 //! A spawn made with `OVERMIND_JOB_RUN` set passes both on, so the whole tree is one run.
+//!
+//! A bot with `on.github` instead of `schedule` starts one run per new branch matching a
+//! pattern, polled by the same tick — see [`crate::core::gh_watch`].
 //!
 //! State (`$OVERMIND_JOBS_DIR`, else `${XDG_STATE_HOME:-~/.local/state}/overmind/jobs`):
 //! `<job>.json` — the last slot seen and the latest [`KEEP_RUNS`] runs with their sessions;
@@ -46,6 +53,7 @@ use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::core::gh_watch::{GithubOn, WatchState};
 use crate::core::harness::Harness;
 use crate::core::tools;
 use crate::error::Result;
@@ -59,7 +67,7 @@ pub const TICK_SECS: u64 = 60;
 pub const CATCH_UP_SECS: i64 = 6 * 3600;
 /// Runs kept per job in its state file.
 pub const KEEP_RUNS: usize = 50;
-pub const DEFAULT_KEEP: &str = "24h";
+pub const DEFAULT_KEEP: &str = "72h";
 /// How far back [`Cron::prev`] looks for a slot.
 const LOOKBACK_MINUTES: i64 = 8 * 24 * 60;
 /// How far ahead [`Cron::next`] looks.
@@ -387,19 +395,46 @@ pub enum PromptSrc {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub name: String,
+    /// The cron expression; empty for a bot started by a trigger (`on`).
     pub schedule: String,
-    pub cron: Cron,
+    /// `None` for a bot started by a trigger.
+    pub cron: Option<Cron>,
+    /// `on.github`: runs start when a matching branch appears (see [`crate::core::gh_watch`]).
+    pub github: Option<GithubOn>,
+    /// `sessionName`: the name of a triggered run's session, a template (`{branch}`, `{repo}`,
+    /// `{sha}`, `{bot}`); default `<bot> {branch}`.
+    pub session_name: Option<String>,
     pub dir: String,
     pub prompt: PromptSrc,
     pub harness: Harness,
     pub model: Option<String>,
     /// Launcher for the job's sessions and their descendants (`OVERMIND_CMD`).
     pub command: Option<String>,
+    /// The GitHub identity its sessions act as (`ghIdentity`, see [`crate::core::gh_identity`]).
+    pub gh_identity: Option<String>,
     pub enabled: bool,
     /// Seconds after a run starts that its idle sessions are closed; `None` = never.
     pub keep: Option<i64>,
+    /// `pull`: fast-forward `dir`'s checkout before each run.
+    pub pull: bool,
     /// The config section it came from: `bots`, or the legacy `jobs`.
     pub section: &'static str,
+}
+
+impl Job {
+    /// What starts it, in plain English: the schedule, or the trigger.
+    pub fn trigger_text(&self) -> String {
+        match (&self.cron, &self.github) {
+            (Some(c), _) => c.describe(),
+            (None, Some(g)) => g.describe(),
+            (None, None) => String::new(),
+        }
+    }
+
+    /// Its next scheduled run (none for a triggered bot).
+    pub fn next_run(&self, now: DateTime<Local>) -> Option<DateTime<Local>> {
+        self.cron.as_ref().and_then(|c| c.next(now))
+    }
 }
 
 /// The `bots` config section (plus the legacy `jobs` one), parsed.
@@ -482,8 +517,26 @@ fn job_from_value(name: &str, v: &Value) -> std::result::Result<Job, String> {
             Some(other) => Err(format!("{key} must be a string, not {other}")),
         }
     };
-    let schedule = text("schedule")?.ok_or("schedule is required")?;
-    let cron = Cron::parse(&schedule)?;
+    let schedule = text("schedule")?;
+    let github = match o.get("on") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(on)) => {
+            if let Some(k) = on.keys().find(|k| *k != "github") {
+                return Err(format!("on.{k}: unknown trigger (github)"));
+            }
+            on.get("github")
+                .filter(|v| !v.is_null())
+                .map(GithubOn::parse)
+                .transpose()?
+        }
+        Some(other) => return Err(format!("on must be an object, not {other}")),
+    };
+    let cron = match (&schedule, &github) {
+        (Some(_), Some(_)) => return Err("set schedule or on.github, not both".into()),
+        (None, None) => return Err("schedule (or on.github) is required".into()),
+        (Some(s), None) => Some(Cron::parse(s)?),
+        (None, Some(_)) => None,
+    };
     let dir = text("dir")?.ok_or("dir is required")?;
     let prompt = match (o.get("prompt"), text("promptFile")?) {
         (Some(Value::String(p)), None) if !p.trim().is_empty() => PromptSrc::Inline(p.clone()),
@@ -504,23 +557,93 @@ fn job_from_value(name: &str, v: &Value) -> std::result::Result<Job, String> {
         Some(Value::Bool(b)) => *b,
         Some(other) => return Err(format!("enabled must be true or false, not {other}")),
     };
+    let pull = match o.get("pull") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => return Err(format!("pull must be true or false, not {other}")),
+    };
+    let gh_identity = text("ghIdentity")?;
+    if let Some(g) = &gh_identity
+        && !crate::core::gh_identity::valid_name(g)
+    {
+        return Err(format!("ghIdentity `{g}` is not a valid name"));
+    }
     let keep = match text("keep")?.as_deref().unwrap_or(DEFAULT_KEEP) {
         "never" => None,
         k => Some(crate::core::tmux::parse_span(k).map_err(|e| format!("keep: {e}"))?),
     };
     Ok(Job {
         name: name.to_string(),
-        schedule,
+        schedule: schedule.unwrap_or_default(),
         cron,
+        github,
+        session_name: text("sessionName")?,
         dir,
         prompt,
         harness,
         model: text("model")?,
         command: text("command")?,
+        gh_identity,
         enabled,
         keep,
+        pull,
         section: "bots",
     })
+}
+
+// --- pull ----------------------------------------------------------------------
+
+/// `pull: true`: bring the git checkout `dir` is in up to date — `overmind repos sync` on that one
+/// repo: fetch, then a fast-forward only (and the default branch when it is checked out
+/// nowhere). Never stashes, resets or merges; what can't fast-forward is a warning.
+pub fn pull_dir(dir: &Path) -> Pull {
+    let top = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
+    let Some(top) = top else {
+        return Pull {
+            outcome: "notARepo".into(),
+            pulled: 0,
+            warning: Some("dir is not in a git checkout".into()),
+        };
+    };
+    let name = top
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let r = crate::core::repos::sync_one(&crate::core::repos::Repo {
+        name,
+        path: top,
+        every: 0,
+    });
+    use crate::core::repos::Outcome;
+    let warning = match r.outcome {
+        Outcome::Updated | Outcome::Current | Outcome::Ahead => None,
+        o => Some(match &r.detail {
+            Some(d) => format!("{}: {d}", o.label()),
+            None => o.label().to_string(),
+        }),
+    };
+    Pull {
+        outcome: serde_json::to_value(r.outcome)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        pulled: r.pulled,
+        warning,
+    }
+}
+
+/// The line a run's prompt starts with when its `dir` could not be brought up to date.
+pub fn pull_warning_line(dir: &str, warning: &str) -> String {
+    format!(
+        "Note from overmind: `{dir}` could not be updated before this run ({warning}), so files you read there may be out of date."
+    )
 }
 
 // --- tags ----------------------------------------------------------------------
@@ -569,6 +692,9 @@ pub fn split_run(tag: &str) -> Option<(&str, &str)> {
 pub struct Origin {
     pub job: String,
     pub run: String,
+    /// The branch a GitHub-triggered run is about (`gone_at` set once it was deleted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Subject>,
 }
 
 impl Origin {
@@ -576,7 +702,24 @@ impl Origin {
         split_run(tag.trim()).map(|(job, run)| Origin {
             job: job.into(),
             run: run.into(),
+            subject: None,
         })
+    }
+}
+
+/// Fill `subject` of the rows' origins from their bots' state (one read per bot).
+pub fn attach_subjects<'a>(origins: impl Iterator<Item = &'a mut Origin>) {
+    let mut cache: std::collections::HashMap<String, JobState> = Default::default();
+    for o in origins {
+        let st = cache
+            .entry(o.job.clone())
+            .or_insert_with(|| load_state(&o.job));
+        o.subject = st
+            .runs
+            .iter()
+            .rev()
+            .find(|r| r.id == o.run)
+            .and_then(|r| r.subject.clone());
     }
 }
 
@@ -590,6 +733,9 @@ pub struct JobState {
     pub last_slot: Option<i64>,
     /// Newest last.
     pub runs: Vec<Run>,
+    /// A GitHub bot's poll state and the branches it remembers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<WatchState>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -607,6 +753,38 @@ pub struct Run {
     /// The run's first prompt, as it was sent.
     pub prompt_file: Option<String>,
     pub sessions: Vec<RunSession>,
+    /// What started a triggered run (`trigger: github`): the branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Subject>,
+    /// `pull: true`: how bringing `dir` up to date went before the run started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull: Option<Pull>,
+}
+
+/// The pull before a run (`pull: true`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Pull {
+    /// A `overmind repos sync` outcome (`updated`, `current`, `blocked`, …), or `notARepo`.
+    pub outcome: String,
+    /// Commits fast-forwarded.
+    pub pulled: usize,
+    /// Why it could not fast-forward; `None` when `dir` is up to date.
+    pub warning: Option<String>,
+}
+
+/// The branch a GitHub-triggered run is about.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Subject {
+    /// `branch`.
+    pub kind: String,
+    pub repo: String,
+    pub branch: String,
+    pub sha: String,
+    pub url: String,
+    /// When a poll found the branch deleted (its session is left open).
+    pub gone_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -691,6 +869,45 @@ pub fn record_session(tag: &Tag, s: RunSession) {
     }
 }
 
+/// A closed session of run `run` (`<job>/<run>`) is back (`overmind restore`), now in the tmux
+/// session `now`: open its record again (or add one when the run never had it).
+pub fn rejoin_session(run: &str, was: &str, now: &str) {
+    let Some((job, id)) = split_run(run) else {
+        return;
+    };
+    let mut st = load_state(job);
+    let found = st.runs.iter_mut().rev().find(|r| r.id == id).and_then(|r| {
+        r.sessions
+            .iter_mut()
+            .find(|s| s.tmux_session == was || s.tmux_session == now)
+    });
+    match found {
+        Some(s) => {
+            s.tmux_session = now.into();
+            s.closed_at = None;
+        }
+        None => {
+            let tag = Tag {
+                run: run.into(),
+                command: None,
+            };
+            return record_session(
+                &tag,
+                RunSession {
+                    tmux_session: now.into(),
+                    name: None,
+                    parent: None,
+                    at: chrono::Local::now().timestamp_millis(),
+                    closed_at: None,
+                },
+            );
+        }
+    }
+    if let Err(e) = save_state(job, &st) {
+        crate::core::hosts::debug(&format!("jobs: could not reopen a session of {job}: {e}"));
+    }
+}
+
 // --- scheduling ----------------------------------------------------------------
 
 /// What a tick does with a job.
@@ -733,6 +950,16 @@ pub fn run_id(t: DateTime<Local>, manual: bool) -> String {
     } else {
         t.format("%Y%m%d-%H%M").to_string()
     }
+}
+
+/// The id of a run a trigger started for `branch`: `YYYYMMDD-HHMMSS-<branch slug>` — unique
+/// even when one poll starts several.
+pub fn trigger_run_id(t: DateTime<Local>, branch: &str) -> String {
+    format!(
+        "{}-{}",
+        t.format("%Y%m%d-%H%M%S"),
+        crate::core::gh_watch::slug(branch)
+    )
 }
 
 /// The name a run's first session gets: `<job>-<run id without the year>`
@@ -920,7 +1147,7 @@ mod tests {
         assert_eq!(s.problems.len(), 3);
         let t = s.get("triage").unwrap();
         assert_eq!(t.prompt, PromptSrc::File("~/notes/triage.md".into()));
-        assert_eq!(t.keep, Some(86_400));
+        assert_eq!(t.keep, Some(259_200));
         assert!(t.enabled);
         assert_eq!(t.model.as_deref(), Some("opus"));
         let p = s.get("paused").unwrap();
@@ -933,6 +1160,87 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(Settings::from_value(&json!([1]), "bots").problems.len(), 1);
+    }
+
+    #[test]
+    fn pull_is_a_boolean_default_off() {
+        let s = Settings::from_value(
+            &json!({
+                "a": { "schedule": "@daily", "dir": "/tmp" },
+                "b": { "schedule": "@daily", "dir": "/tmp", "pull": true },
+                "c": { "schedule": "@daily", "dir": "/tmp", "pull": "yes" }
+            }),
+            "bots",
+        );
+        assert!(!s.get("a").unwrap().pull);
+        assert!(s.get("b").unwrap().pull);
+        assert!(
+            s.problems
+                .iter()
+                .any(|p| p.contains("pull must be true or false"))
+        );
+    }
+
+    fn sh(dir: &Path, script: &str) {
+        let ok = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "{script}");
+    }
+
+    #[test]
+    fn pull_dir_fast_forwards_a_subdir_checkout_and_warns_when_it_cannot() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        sh(
+            d,
+            "git init -q -b main seed && cd seed && mkdir -p bots/x && echo v1 > bots/x/run.md \
+               && git add . && git commit -q -m one && git clone -q --bare . ../origin.git",
+        );
+        sh(d, "git clone -q origin.git work");
+        sh(
+            d,
+            "cd seed && echo v2 > bots/x/run.md && git commit -qam two && git push -q ../origin.git main",
+        );
+        // `dir` may be a directory inside the checkout.
+        let p = pull_dir(&d.join("work/bots/x"));
+        assert_eq!(
+            (p.outcome.as_str(), p.pulled, p.warning.clone()),
+            ("updated", 1, None),
+            "{p:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.join("work/bots/x/run.md")).unwrap(),
+            "v2\n"
+        );
+
+        sh(
+            d,
+            "cd seed && echo v3 > bots/x/run.md && git commit -qam three && git push -q ../origin.git main",
+        );
+        sh(d, "cd work && git commit -q --allow-empty -m local");
+        let p = pull_dir(&d.join("work"));
+        assert_eq!(p.outcome, "diverged");
+        assert!(
+            p.warning.as_deref().unwrap().starts_with("diverged"),
+            "{p:?}"
+        );
+        assert!(
+            pull_warning_line("~/work", p.warning.as_deref().unwrap())
+                .contains("may be out of date")
+        );
+
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(pull_dir(plain.path()).outcome, "notARepo");
     }
 
     #[test]
@@ -952,6 +1260,35 @@ mod tests {
     }
 
     #[test]
+    fn settings_read_github_triggers() {
+        let s = Settings::from_value(
+            &json!({
+                "release": {
+                    "on": { "github": { "repo": "o/r", "branch": "release/*" } },
+                    "sessionName": "release-bot {branch}",
+                    "dir": "/tmp"
+                },
+                "both": { "schedule": "@daily", "on": { "github": { "repo": "o/r", "branch": "x" } }, "dir": "/tmp" },
+                "neither": { "dir": "/tmp" },
+                "unknown": { "on": { "gitlab": {} }, "dir": "/tmp" },
+                "badrepo": { "on": { "github": { "repo": "nope", "branch": "x" } }, "dir": "/tmp" }
+            }),
+            "bots",
+        );
+        assert_eq!(s.jobs.len(), 1, "{:?}", s.problems);
+        assert_eq!(s.problems.len(), 4, "{:?}", s.problems);
+        let r = s.get("release").unwrap();
+        assert!(r.cron.is_none());
+        assert_eq!(r.schedule, "");
+        assert_eq!(r.github.as_ref().unwrap().branch, "release/*");
+        assert_eq!(r.session_name.as_deref(), Some("release-bot {branch}"));
+        assert_eq!(
+            trigger_run_id(at(2026, 11, 3, 9, 5), "release/42"),
+            "20261103-090500-release-42"
+        );
+    }
+
+    #[test]
     fn tags_round_trip() {
         let t = Tag {
             run: "triage/20261013-0700".into(),
@@ -968,7 +1305,8 @@ mod tests {
             Origin::parse("triage/20261013-0700"),
             Some(Origin {
                 job: "triage".into(),
-                run: "20261013-0700".into()
+                run: "20261013-0700".into(),
+                subject: None,
             })
         );
         assert_eq!(Origin::parse(""), None);

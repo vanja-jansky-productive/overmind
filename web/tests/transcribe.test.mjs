@@ -1,9 +1,12 @@
 // Voice prompts: key lookup (env → Keychain), request validation and the OpenAI call (fetch mocked).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 
-import { KEY_NAME, audioType, buildPrompt, createKeySource, createTranscriber } from '../lib/transcribe.mjs';
+import { KEY_NAME, audioType, buildPrompt, createKeySource, createTranscriber, promptEcho } from '../lib/transcribe.mjs';
 
 function audioReq(body, type = 'audio/webm;codecs=opus') {
   const req = Readable.from([Buffer.from(body)]);
@@ -74,6 +77,36 @@ test('transcribe sends model, prompt and the file to OpenAI and returns the text
   assert.equal(file.name, 'voice.webm');
   assert.equal(file.type, 'audio/webm');
   assert.equal(await file.text(), 'RIFFfake');
+});
+
+test('promptEcho catches the prompt coming back instead of speech', () => {
+  const prompt = buildPrompt('operator, fix-auth-login, api-rate-limits, web-dark-mode, em-weekly');
+  // The prompt itself, whole or cut off.
+  assert.ok(promptEcho(prompt, prompt));
+  assert.ok(promptEcho(prompt.slice(0, 200), prompt));
+  // Prose strung from its session names.
+  assert.ok(promptEcho('Treba poboljšati fix-auth-login, a zatim api-rate-limits i web-dark-mode.', prompt));
+  // Real speech, naming a session or two.
+  assert.equal(promptEcho('Pogledaj fix-auth-login i javi što je s api-rate-limits.', prompt), false);
+  assert.equal(promptEcho('Claude', prompt), false);
+  assert.equal(promptEcho('', prompt), false);
+});
+
+test('transcribe returns no text for a prompt echo', async () => {
+  const logs = [];
+  const echo = buildPrompt('my-session, other-session');
+  const tr = createTranscriber({ getKey: async () => 'sk-test', fetch: okFetch([], echo), log: (m) => logs.push(m) });
+  assert.deepEqual(await tr.transcribe(audioReq('RIFFfake'), 'my-session, other-session'), { text: '', model: 'gpt-4o-transcribe' });
+  assert.match(logs[0], /prompt echo/);
+});
+
+test('a recording that fails to transcribe is kept in keepDir', async () => {
+  const keepDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-voice-')), 'failed');
+  const fail = async () => new Response(JSON.stringify({ error: { message: 'Audio file might be corrupted or unsupported' } }), { status: 400 });
+  const tr = createTranscriber({ getKey: async () => 'sk-test', fetch: fail, keepDir, now: () => new Date('2026-10-30T08:30:00Z') });
+  await assert.rejects(tr.transcribe(audioReq('RIFFlong'), ''), (err) => err.status === 502 && /kept on the server/.test(err.message));
+  assert.deepEqual(fs.readdirSync(keepDir), ['2026-10-30T08-30-00-000Z.webm']);
+  assert.equal(fs.readFileSync(path.join(keepDir, '2026-10-30T08-30-00-000Z.webm'), 'utf8'), 'RIFFlong');
 });
 
 test('transcribe refuses without a key, non-audio, empty and oversized bodies', async () => {

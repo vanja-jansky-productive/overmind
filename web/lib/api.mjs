@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { HttpError, readJsonBody } from './http.mjs';
 import { clampLines, findSession, resolveHost, sleep as defaultSleep, validateInputData, validateKey, validateSendText, validateTitle } from './util.mjs';
-import { answerSteps, screenShowsPrompt, validateAnswer } from './questions.mjs';
+import { answerSteps, parseScreenPrompt, questionsText, screenShowsPrompt, validateAnswer } from './questions.mjs';
 import { resolveAllowedDir, validateSpawnRequest } from './spawn.mjs';
 import {
   fetchPeerHost as defaultFetchPeerHost,
@@ -17,10 +17,13 @@ import {
 import { createSnapshot } from './snapshot.mjs';
 import { DISABLED_GROUPS } from './grouping.mjs';
 import { checkInboxSettings } from './inbox.mjs';
-import { DEFAULT_MODELS } from './config.mjs';
+import { DEFAULT_MODELS, slackSpawn, spawnRoots } from './config.mjs';
 import { parseNameOutput } from './autoname.mjs';
 import { SESSION_ID_RE } from './briefs.mjs';
-import { validThreadId } from './reviews.mjs';
+import { displayPath, validThreadId } from './reviews.mjs';
+import { askPrompt, validAskId, ASK_TOOLS } from './asks.mjs';
+import { notesPrompt, validNoteId } from './pr-notes.mjs';
+import { validItemId } from './queue.mjs';
 import { editorUrl, editorViewer, withBriefEditor, withSessionEditors } from './editor.mjs';
 import {
   STACK_BODY_LIMIT,
@@ -35,11 +38,12 @@ import {
 import { DEFAULT_STACKS_MODEL } from './config.mjs';
 import { validateDormantRequest } from './dormant.mjs';
 import { validJobName } from './jobs.mjs';
+import { MAX_FIRST, MAX_TASK, MODES, SlackError, isPersonTarget, linkMinutes, parseSlackUrl, validLinkId } from './slack.mjs';
 
 export const API_VERSION = 1;
 
-const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|screen|input|messages|send|keys|answer|kill|rename|autoname|branch)$/;
-const POST_ACTIONS = new Set(['input', 'send', 'keys', 'answer', 'kill', 'rename', 'autoname', 'branch']);
+const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|screen|input|messages|send|keys|answer|kill|sleep|rename|autoname|branch)$/;
+const POST_ACTIONS = new Set(['input', 'send', 'keys', 'answer', 'kill', 'sleep', 'rename', 'autoname', 'branch']);
 
 const GROUP_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/;
 const MEMBER_HOST_RE = /^[^/\s]{1,128}$/;
@@ -76,11 +80,16 @@ export function groupEditOp(body) {
 const SPAWN_ROUTE = /^\/api\/hosts\/([^/]+)\/spawn$/;
 const AUTONAME_ROUTE = /^\/api\/hosts\/([^/]+)\/autoname$/;
 const UPLOAD_ROUTE = /^\/api\/hosts\/([^/]+)\/uploads$/;
-const FILES_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/files\/(stat|raw|open)$/;
+const FILES_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/files\/(stat|raw|open|plain)$/;
 const COMPLETE_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/complete$/;
 const COMPLETE_KINDS = new Set(['skills', 'files', 'brain']);
 const DIFF_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(diffs?)$/;
 const REVIEW_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/review(?:\/(submit)|\/(threads)(?:\/([^/]+)(?:\/(reply))?)?)?$/;
+/** Side questions: POST …/sessions/:id/ask starts one in a fork of the session; GET / DELETE /asks/:ask polls / cancels it. */
+const ASK_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/ask$/;
+const ASK_ID_ROUTE = /^\/api\/hosts\/([^/]+)\/asks\/([^/]+)$/;
+/** The prompt queue: …/queue (GET list, POST add), …/queue/pause, …/queue/:item (PUT edit, DELETE), …/queue/:item/send|move. */
+const QUEUE_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/queue(?:\/(pause)|\/([^/]+)(?:\/(send|move))?)?$/;
 /** A review comment quotes the selected code: room for a big selection. */
 const REVIEW_BODY_LIMIT = 1024 * 1024;
 const BRIEF_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/brief(\/regenerate)?$/;
@@ -100,6 +109,11 @@ const JOBS_ROUTE = /^\/api\/hosts\/([^/]+)\/jobs(?:\/([^/]+)(?:\/(run|enabled))?
 const JOB_RUN_PROXY_MS = 90 * 1000;
 const USAGE_ROUTE = /^\/api\/hosts\/([^/]+)\/usage$/;
 const PRS_ROUTE = /^\/api\/hosts\/([^/]+)\/prs(?:\/(checkout|spawn|seen))?$/;
+/** A PR in the diff reviewer without a session: …/prs/:owner/:repo/:n/diff | ask | notes[/:note[/post]] | notes/handoff. */
+const PR_REVIEW_ROUTE = /^\/api\/hosts\/([^/]+)\/prs\/([^/]+)\/([^/]+)\/(\d{1,9})\/(diff|ask|notes)(?:\/([^/]+)(?:\/(post))?)?$/;
+const SHA_RE = /^[0-9a-f]{40}$/;
+/** What a side question about a PR may run: read-only git, to see the PR's files rather than the clone's working tree. */
+const PR_ASK_TOOLS = [...ASK_TOOLS, 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git blame:*)'];
 /** `owner/repo#123` — what the PR screen sends; the CLI parses it again. */
 const PR_REF_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}#[1-9][0-9]{0,9}$/;
 /** A checkout fetches the PR's head (a big repo, a slow link): the peer gets as long as the CLI. */
@@ -109,6 +123,11 @@ const PRS_PROXY_MS = 130 * 1000;
 const TASKS_ROUTE = /^\/api\/hosts\/([^/]+)\/tasks(?:\/(status|spawn))?$/;
 /** A Productive task: its numeric id. */
 const TASK_ID_RE = /^[1-9][0-9]{0,14}$/;
+/** Scheduled sessions: GET list, POST add, POST :id/cancel (`overmind schedule`). */
+const SCHEDULE_ROUTE = /^\/api\/hosts\/([^/]+)\/schedule(?:\/([a-z0-9]{1,24})\/(cancel))?$/;
+/** A `--at` as the UI sends it (`2026-10-29T07:30`, `tomorrow 09:00`, `in 2h`): passed to the CLI as one flag value. */
+const SCHEDULE_AT_RE = /^[A-Za-z0-9 :+-]{1,40}$/;
+const SCHEDULE_TIME_RE = /^\d{1,2}:\d{2}$/;
 /** A Productive task link: `https://app.productive.io/<org>-<slug>/tasks/<id>`. */
 const TASK_URL_RE = /^https?:\/\/app\.productive\.io\/\d+-[\w-]+\/tasks?\/([1-9][0-9]{0,14})(?:[/?#].*)?$/;
 /** A task fetch is a few API calls; status changes and spawns one more. */
@@ -119,6 +138,14 @@ const FOCUS_PROXY_MS = 45 * 1000;
 const HARNESSES_ROUTE = /^\/api\/hosts\/([^/]+)\/harnesses$/;
 /** `overmind harness list` runs `pi --list-models` (a node start): keep its answer a while. */
 const HARNESSES_TTL_MS = 10 * 60 * 1000;
+const HARNESS_DEFAULTS_ROUTE = /^\/api\/hosts\/([^/]+)\/harness-defaults$/;
+const HARNESS_IDS = ['claude', 'codex', 'pi'];
+// Fallback effort levels for a CLI that predates `efforts` in `overmind harness list`.
+const DEFAULT_EFFORTS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['minimal', 'low', 'medium', 'high', 'xhigh'], pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] };
+const SLACK_LINK_ACTION_ROUTE = /^\/api\/slack\/links\/([^/]+)\/(unlink|relink)$/;
+/** `overmind slack history | thread | file`: the linked session reads its conversation (read-only). */
+const SLACK_READS = new Set(['history', 'thread', 'file']);
+const SLACK_ACTIONS = new Set(['/api/slack/link', '/api/slack/reply', ...[...SLACK_READS].map((a) => `/api/slack/${a}`)]);
 const DORMANT_ROUTE = /^\/api\/hosts\/([^/]+)\/dormant(?:\/(restore|forget))?$/;
 /** A restore types launch lines into new tmux panes; `--all` may bring back many sessions. */
 const DORMANT_PROXY_MS = 6 * 60 * 1000;
@@ -142,7 +169,7 @@ export const DEFAULT_QUICK_REPLIES = [
  *   spawner     lib/spawn.mjs spawner
  *   brancher    lib/branch.mjs#createBrancher (…/branch: a new session from a message; absent → 501)
  *   killer      lib/kill.mjs killer (kill action; absent → 501)
- *   cli         lib/overmind-cli.mjs instance — `rename`, `nameOne`, `usage`, `prs`, `prCheckout`, `tasks`, `taskShow`, `taskStatus` (absent → 501)
+ *   cli         lib/overmind-cli.mjs instance — `rename`, `nameOne`, `usage`, `prs`, `prCheckout`, `tasks`, `taskShow`, `taskStatus`, `schedule`, `scheduleAdd`, `scheduleCancel` (absent → 501)
  *   autoNamer   lib/autoname.mjs instance (autoname route + health; absent → 501)
  *   spawnNamer  lib/autoname.mjs#createSpawnNamer — a targeted naming pass after an unnamed
  *               spawn with a first prompt (only when web.autoName is enabled; absent → none)
@@ -151,11 +178,14 @@ export const DEFAULT_QUICK_REPLIES = [
  *   speaker     lib/transcribe.mjs#createSpeaker (POST /api/speak, settings.speak; absent → off)
  *   memos       lib/memos.mjs#createMemos (/api/memos…, settings.memos; needs the transcriber's key)
  *   operator    lib/operator.mjs instance (GET/POST /api/operator; absent → 501)
- *   files       lib/files.mjs instance (files/stat|raw|open; absent → 501)
+ *   files       lib/files.mjs instance (files/stat|raw|open|plain; absent → 501)
  *   completer   lib/complete.mjs instance (…/complete: composer autocomplete; absent → 501)
  *   differ      lib/diff.mjs#createDiffer (…/diff, …/diffs: the diff reviewer; absent → 501)
  *   touched     lib/touched.mjs index — the files a session worked on (…/diffs finds their checkouts)
  *   reviews     lib/reviews.mjs#createReviews (…/review: comment threads sent to the session; absent → 501)
+ *   asks        lib/asks.mjs#createAsks (…/ask, /asks/:id: side questions in a fork of the session; absent → 501)
+ *   prNotes     lib/pr-notes.mjs#createPrNotes (…/prs/:owner/:repo/:n/notes: review notes on a PR without a session; absent → 501)
+ *   queue       lib/queue.mjs#createPromptQueue (…/queue: prompts that wait for the run to end; absent → 501)
  *   briefs      lib/briefs.mjs instance (brief, brief/regenerate; absent → 501)
  *   notes       lib/notes.mjs instance (notes/tree|search|file|raw; absent → 501: web.notes.root unset)
  *   spawnDirs   lib/spawn-dirs.mjs#createSpawnDirsEditor (GET/PUT spawn-dirs; absent → 501)
@@ -196,6 +226,9 @@ export function createApi({
   differ = null,
   touched = null,
   reviews = null,
+  asks = null,
+  prNotes = null,
+  queue = null,
   notes = null,
   spawnDirs = null,
   repos = null,
@@ -205,6 +238,7 @@ export function createApi({
   focus = null,
   grouper = null,
   inbox = null,
+  slack = null,
   groupingDiscoveryMs = 5 * 60 * 1000,
   name = 'overmind-web',
   version = '0.0.0',
@@ -222,7 +256,14 @@ export function createApi({
   logError = () => {},
   sleep = defaultSleep,
   answerKeyGapMs = 80,
+  spawnLinkWaitMs = 45 * 1000,
 }) {
+  // Each host advertises its start directories: `spawnDirs` (the New session menu) and, when it
+  // has any, `hiddenSpawnDirs` (allowed for spawns, e.g. an app's embedded panel, but not offered).
+  const spawnDirsInfo = () => ({
+    spawnDirs: config.spawnDirs,
+    ...(config.hiddenSpawnDirs?.length ? { hiddenSpawnDirs: config.hiddenSpawnDirs } : {}),
+  });
   // Each host advertises whether it has a notes explorer (like its spawnDirs).
   const notesInfo = () => (notes ? { notes: { name: notes.name ?? null } } : {});
   // …and its session stacks, compact, so a peer can stamp the rows of their members on its side.
@@ -230,15 +271,20 @@ export function createApi({
   // …and marks its voice operator's row (`operator: true`), which the UI keeps out of session lists.
   const stampOperator = (host) => (operator ? operator.stamp(host) : host);
 
+  // `home`: a `~/…` path from the UI (the embed view's `dir`) is matched against the absolute
+  // spawnDirs and session cwds.
   async function buildOvermind({ force = false } = {}) {
-    const selfHost = stampOperator({ ...(await overmind.localHost({ force })), spawnDirs: config.spawnDirs, ...notesInfo(), ...stacksInfo() });
+    const selfHost = stampOperator({ ...(await overmind.localHost({ force })), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
     const peerNames = Object.keys(config.peers);
     const peerHosts = await Promise.all(
       peerNames.map((n) => fetchPeerHost(n, config.peers[n], { timeoutMs: peerOvermindTimeoutMs })),
     );
     // Editor links are added per request (handleOvermind): they depend on where the browser is.
     // A member of a stack homed on another host gets that stack on its row here.
-    return { self: config.self, hosts: stampForeign([selfHost, ...peerHosts]) };
+    // `shared` is this server's call (hosts.<name>.shared), whatever a peer says of itself.
+    const shared = new Set(config.sharedHosts ?? []);
+    const hosts = stampForeign([selfHost, ...peerHosts]).map((h) => ({ ...h, shared: shared.has(h.name) }));
+    return { self: config.self, hosts };
   }
 
   // The merged overmind, served stale-while-revalidate so a page load never waits on
@@ -270,7 +316,7 @@ export function createApi({
     const withEditors = (body) => ({ ...body, hosts: body.hosts.map((h) => withSessionEditors(h, ec)) });
     if (url.searchParams.get('local') === '1') {
       // Peers poll this: the local host (2s TTL cache), never the merged snapshot.
-      const selfHost = stampOperator({ ...(await overmind.localHost()), spawnDirs: config.spawnDirs, ...notesInfo(), ...stacksInfo() });
+      const selfHost = stampOperator({ ...(await overmind.localHost()), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
       return { status: 200, body: withEditors({ self: config.self, hosts: [selfHost] }) };
     }
     if (snapshot) return { status: 200, body: withEditors(await snapshot.get()) };
@@ -307,6 +353,8 @@ export function createApi({
       const session = await resolveLocalSession(id);
       const result = await transcripts.messages(session, limit);
       if (!result) throw new HttpError('transcript not found for this session', 404);
+      const onScreen = await screenQuestion(session, result.messages);
+      if (onScreen) result.messages.push(onScreen);
       return {
         status: 200,
         body: {
@@ -317,6 +365,8 @@ export function createApi({
           name: session.name,
           limit,
           messages: result.messages,
+          // The prompts waiting for this run to end (lib/queue.mjs), null when none.
+          queue: (await queue?.peek(session).catch(() => null)) ?? null,
           total: result.total,
           truncated: result.truncated,
           updatedAt: result.updatedAt,
@@ -336,6 +386,28 @@ export function createApi({
       return {
         status: 200,
         body: { ok: true, host: config.self, id: session.session_id, name: session.name ?? null, ...result },
+      };
+    }
+
+    if (action === 'sleep') {
+      // Close, but keep it dormant: `overmind sleep` ends it and records it; restore brings it back.
+      if (typeof cli?.sleep !== 'function') throw new HttpError('sleep is not available on this server', 501);
+      const session = await resolveLocalSession(id);
+      if (!session.session_id || session.session_id.startsWith('pid-')) {
+        throw new HttpError('this session has no session id yet — nothing to resume it from', 409);
+      }
+      let report;
+      try {
+        report = await cli.sleep({ target: session.session_id });
+      } catch (err) {
+        if (err?.missing) throw new HttpError("this host's overmind CLI has no `sleep` command — update overmind there", 501);
+        throw new HttpError(`sleep failed: ${err?.message ?? err}`, err?.timedOut ? 504 : 502);
+      }
+      const terminal = session.backend === 'iterm' && killer?.closeTab ? await killer.closeTab(session) : report.terminal;
+      refreshOvermind();
+      return {
+        status: 200,
+        body: { ...report, ok: true, host: config.self, id: session.session_id, name: session.name ?? null, terminal },
       };
     }
 
@@ -419,6 +491,26 @@ export function createApi({
   }
 
   /**
+   * The AskUserQuestion prompt the terminal shows, as a question message, when the transcript
+   * has none open: Claude Code writes the call there only once it is answered. Null otherwise.
+   */
+  async function screenQuestion(session, messages) {
+    if (session.status !== 'waiting' || (session.harness && session.harness !== 'claude')) return null;
+    const last = messages.findLast((m) => m.kind === 'question');
+    if (last && !last.answers && !last.declined) return null;
+    let screen;
+    try {
+      screen = await backend.peek(session, 80);
+    } catch {
+      return null;
+    }
+    const prompt = parseScreenPrompt(screen);
+    if (!prompt) return null;
+    const { id, questions } = prompt;
+    return { role: 'assistant', kind: 'question', id, questions, text: questionsText(questions), ts: Date.now(), final: true };
+  }
+
+  /**
    * Answer the session's pending AskUserQuestion prompt by typing what a human would. Only the
    * prompt named by `toolUseId`, only while it is unanswered, the session waits, and the
    * terminal shows it untouched — anything else is a 409 and nothing is typed.
@@ -427,6 +519,7 @@ export function createApi({
     const session = await resolveLocalSession(id);
     const toolUseId = typeof body.toolUseId === 'string' ? body.toolUseId : '';
     if (!toolUseId) throw new HttpError('toolUseId is required', 400);
+    if (toolUseId.startsWith('screen:')) return answerScreenQuestion(session, toolUseId, body);
     const result = await transcripts.messages(session, 500);
     const prompt = result?.messages.find((m) => m.kind === 'question' && m.id === toolUseId);
     if (!prompt) throw new HttpError('no such question in this session', 404);
@@ -447,17 +540,112 @@ export function createApi({
     return { status: 200, body: { ok: true } };
   }
 
+  /** The same for a prompt read off the screen: one tab at a time, each its own `screen:` id. */
+  async function answerScreenQuestion(session, toolUseId, body) {
+    if (session.status !== 'waiting') throw new HttpError('the session is not waiting on a question', 409);
+    const prompt = parseScreenPrompt(await backend.peek(session, 80));
+    if (prompt?.id !== toolUseId) throw new HttpError('the terminal is no longer showing this question', 409);
+    const check = validateAnswer(body, prompt.questions);
+    if (!check.ok) throw new HttpError(check.error, 400);
+    if (!prompt.untouched) throw new HttpError('the terminal is not showing this question untouched — answer it there', 409);
+    for (const step of answerSteps(prompt.questions, check.answers)) {
+      if (step.text) await backend.type(session, step.text);
+      else await backend.keys(session, step.key);
+      await sleep(answerKeyGapMs);
+    }
+    refreshOvermind();
+    return { status: 200, body: { ok: true } };
+  }
+
+  /**
+   * `slack` on a spawn: `{ url, minutes, mode?, task?, from? }` — the session starts linked. Checked
+   * before anything opens; only the bridge's own host links its sessions. `from`: the Slack user
+   * whose mention started it (`slack.spawn`) — the prompt is their request, not the owner's.
+   */
+  function spawnSlackRequest(raw, prompt) {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) throw new HttpError('slack must be { url, minutes, mode?, task? }', 400);
+    const bridge = bridgeFor(config.self);
+    if (!(slack && bridge === config.self)) {
+      if (!bridge || bridge === config.self) throw new HttpError('no server runs Slack links (slack.host)', 400);
+      if (!config.peers[bridge]) throw new HttpError(`Slack bridge "${bridge}" is not a peer with a web URL`, 400);
+    }
+    const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+    if (!url) throw new HttpError('slack.url is required: a Slack thread or channel link, or @person', 400);
+    if (!isPersonTarget(url)) {
+      try {
+        parseSlackUrl(url);
+      } catch (err) {
+        throw new HttpError(err.message, 400);
+      }
+    }
+    let minutes;
+    try {
+      minutes = linkMinutes(raw.minutes) ?? 'forever';
+    } catch (err) {
+      throw new HttpError(`slack.${err.message}`, 400);
+    }
+    if (raw.mode != null && !MODES.includes(raw.mode)) throw new HttpError(`slack.mode must be one of: ${MODES.join(', ')}`, 400);
+    if (raw.task != null && (typeof raw.task !== 'string' || raw.task.trim().length > MAX_TASK)) throw new HttpError(`slack.task must be a string of at most ${MAX_TASK} chars`, 400);
+    if (prompt.trim().length > MAX_FIRST) throw new HttpError(`the prompt is too long for a session linked to Slack (max ${MAX_FIRST} chars)`, 400);
+    if (raw.from != null && (typeof raw.from !== 'string' || !/^[UW][A-Z0-9]+$/.test(raw.from))) throw new HttpError('slack.from must be a Slack user id (U…)', 400);
+    return { url, minutes, mode: raw.mode ?? undefined, task: raw.task?.trim() || undefined, ...(raw.from ? { firstFrom: raw.from } : {}) };
+  }
+
+  /** Link a session of this host: by the bridge here, else through the bridge's host (`slack.host`). */
+  async function slackLink(body) {
+    const bridge = bridgeFor(config.self);
+    if (slack && bridge === config.self) return slack.link({ ...body, host: config.self });
+    const peerUrl = bridge && bridge !== config.self ? config.peers[bridge] : null;
+    if (!peerUrl) throw new SlackError(`Slack bridge "${bridge}" is not a peer with a web URL`, 502);
+    const r = await proxyToPeer(peerUrl, {
+      method: 'POST',
+      pathname: '/api/slack/link',
+      body: JSON.stringify({ ...body, host: config.self }),
+      timeoutMs: peerProxyTimeoutMs,
+    });
+    if (r.status !== 200) throw new SlackError(r.body?.error ?? `HTTP ${r.status} from ${bridge}`, r.status);
+    return r.body;
+  }
+
+  /** Link a just-spawned session once it has a session id; its prompt goes in with the intro. */
+  async function linkSpawned(tmuxSession, link, first) {
+    const deadline = Date.now() + spawnLinkWaitMs;
+    for (;;) {
+      try {
+        return await slackLink({ ...link, tmuxSession, first });
+      } catch (err) {
+        // 404: not listed yet, 409: no session id yet.
+        if (!(err instanceof SlackError) || ![404, 409].includes(err.status) || Date.now() >= deadline) throw err;
+      }
+      await sleep(1000);
+    }
+  }
+
   async function localSpawn(req) {
     const body = await readJsonBody(req);
-    const roots = config.spawnDirs.map((d) => d.path);
-    const check = validateSpawnRequest(body, { spawnDirs: roots });
+    // `~/…`: this host's home — a caller on another host (a Slack mention's bridge) does not know it.
+    if (typeof body?.dir === 'string' && /^~(\/|$)/.test(body.dir.trim())) body.dir = path.join(os.homedir(), body.dir.trim().slice(1));
+    const roots = spawnRoots(config); // hidden spawn dirs are allowed too
+    const check = validateSpawnRequest(body, { spawnDirs: config.spawnDirs.map((d) => d.path) });
     if (!check.ok) throw new HttpError(check.error, 400);
+    const link = spawnSlackRequest(body?.slack, check.prompt);
     try {
       check.dir = await resolveAllowedDir(check.dir, roots);
       // No name typed → let Claude derive one and the auto-namer replace it (when it runs).
       const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
-      const result = await spawner.spawn({ ...check, nameGiven });
+      // Linked: it starts with no prompt, so nothing runs before it knows it is in Slack — the
+      // prompt goes in with the link's intro, as its first prompt.
+      const result = await spawner.spawn({ ...check, ...(link ? { prompt: '' } : {}), nameGiven });
       refreshOvermind();
+      if (link) {
+        try {
+          result.slack = await linkSpawned(result.tmuxSession, link, check.prompt);
+        } catch (err) {
+          const why = err?.message ?? String(err);
+          throw new HttpError(`${result.name} started, but linking it to Slack failed: ${why} — its prompt was not sent`, err?.status === 400 ? 400 : 502);
+        }
+      }
       // Name it as soon as it has answered, not at the next periodic pass. Codex titles its
       // own threads and pi keeps the first prompt; the namer drives Claude's `/rename`.
       if (!nameGiven && check.prompt.trim() && spawnNamer && check.harness === 'claude') {
@@ -571,6 +759,183 @@ export function createApi({
     });
     if (action !== 'get' || r.status === 200) return { status: r.status, body: r.body };
     return off(r.body?.error ?? `HTTP ${r.status} from ${host}`);
+  }
+
+  /**
+   * Slack links (lib/slack.mjs), on the `slack.host` server; the others proxy there. GET status
+   * → `{ enabled, host, socket, bot, links, ended }`; POST link `{ host, session | pane, url,
+   * minutes, task? }`; POST reply `{ link, text, thread?, pane? }`; POST links/:id/unlink;
+   * POST links/:id/relink `{ minutes? }`.
+   */
+  /** Where a reply comes from: a proxying server stamps its own name; a direct call is this host's. */
+  function replyHost(body) {
+    return typeof body?.host === 'string' && body.host ? body.host : config.self;
+  }
+
+  /** The bridge that links `host`'s sessions: `slack.bridges[host]` (a host with its own Slack app), else `slack.host`. */
+  function bridgeFor(host) {
+    return config.slack?.bridges?.[host] ?? config.slack?.host ?? null;
+  }
+
+  /** Every bridge this server knows: `slack.host` first, then the others of `slack.bridges`. */
+  function allBridges() {
+    return [...new Set([config.slack?.host, ...Object.values(config.slack?.bridges ?? {})].filter(Boolean))];
+  }
+
+  /** The bridge here (`slack`): one action → its answer; errors as HttpError. */
+  async function slackHere(action, id, body) {
+    try {
+      if (action === 'status') return { host: config.self, ...(await slack.status()) };
+      if (action === 'unlink') return await slack.unlink(id);
+      if (action === 'relink') {
+        const link = await slack.relink(id, { minutes: body?.minutes ?? undefined });
+        refreshOvermind();
+        return link;
+      }
+      if (action === 'reply') return await slack.reply({ ...(body ?? {}), host: replyHost(body) });
+      if (SLACK_READS.has(action)) return await slack[action]({ ...(body ?? {}), host: replyHost(body) });
+      // Any host's session: the bridge lists and types into it through that host's web server.
+      const target = typeof body?.host === 'string' && body.host ? body.host : config.self;
+      if (target !== config.self && !config.peers[target]) throw new HttpError(`unknown host: ${target} (not a peer with a web url)`, 400);
+      const link = await slack.link({ ...body, host: target });
+      refreshOvermind();
+      return link;
+    } catch (err) {
+      if (err instanceof SlackError) throw new HttpError(err.message, err.status);
+      throw err;
+    }
+  }
+
+  /** One action on bridge `bridge`: here, or proxied once to that peer → `{ status, body }`. */
+  async function atBridge(bridge, action, id, body, pathname) {
+    if (bridge === config.self) {
+      if (!slack) return { status: 409, body: { error: 'Slack links are off on this server (OVERMIND_WEB_SLACK)' } };
+      try {
+        return { status: 200, body: await slackHere(action, id, body) };
+      } catch (err) {
+        if (err instanceof HttpError) return { status: err.status, body: { error: err.message } };
+        throw err;
+      }
+    }
+    const peerUrl = config.peers[bridge];
+    if (!peerUrl) return { status: 409, body: { error: `Slack bridge "${bridge}" is not a peer with a web URL` } };
+    return proxyToPeer(peerUrl, {
+      method: action === 'status' ? 'GET' : 'POST',
+      pathname,
+      ...(body == null ? {} : { body: JSON.stringify(body) }),
+      // A file comes back whole (base64): up to MAX_FILE_BYTES from Slack, then over here.
+      timeoutMs: action === 'file' ? Math.max(peerProxyTimeoutMs, 90000) : peerProxyTimeoutMs,
+    });
+  }
+
+  /**
+   * GET /api/slack: `slack.host`'s bridge, with the links of the other bridges (`slack.bridges`)
+   * added, so every link shows wherever you look; `bridges` lists each one's state.
+   */
+  async function slackStatus(local) {
+    const host = config.slack?.host ?? null;
+    const off = (error) => ({ enabled: false, host, ...(error ? { error } : {}), links: [], ended: [] });
+    const one = async (b) => {
+      if (b === config.self && !slack) return off('Slack links are off on this server (OVERMIND_WEB_SLACK)');
+      if (b !== config.self && local) return off(null); // never chain
+      const r = await atBridge(b, 'status', null, null, '/api/slack');
+      return r.status === 200 ? r.body : off(r.body?.error ?? `HTTP ${r.status} from ${b}`);
+    };
+    const names = local ? (slack ? [config.self] : []) : allBridges();
+    const all = await Promise.all(names.map(async (b) => [b, await one(b)]));
+    const primary = all.find(([b]) => b === host)?.[1] ?? all[0]?.[1] ?? off(null);
+    if (all.length < 2) return { status: 200, body: primary };
+    const rest = all.filter(([, s]) => s !== primary).map(([, s]) => s);
+    const ended = [primary, ...rest].flatMap((s) => s.ended ?? []).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+    return {
+      status: 200,
+      body: {
+        ...primary,
+        enabled: all.some(([, s]) => s.enabled),
+        links: [primary, ...rest].flatMap((s) => s.links ?? []),
+        ended,
+        bridges: all.map(([b, s]) => ({ host: b, enabled: !!s.enabled, ...(s.error ? { error: s.error } : {}), socket: s.socket ?? null, bot: s.bot ?? null, spawn: s.spawn ?? null })),
+      },
+    };
+  }
+
+  /**
+   * PUT /api/slack/spawn `{ bridge?, spawn: { … } | null }` → that bridge's status: sets its
+   * `slack.spawn` (a mention opens a session; null = off) in its config and live at once. Served
+   * by the bridge (`bridge`, default `slack.host`); the others proxy there once.
+   */
+  async function handleSlackSpawn(req, url) {
+    const body = await readJsonBody(req);
+    const bridge = typeof body?.bridge === 'string' && body.bridge ? body.bridge : config.slack?.host ?? null;
+    if (!bridge) return { status: 409, body: { error: 'no server runs Slack links (slack.host)' } };
+    if (bridge !== config.self) {
+      if (url.searchParams.get('local') === '1') throw new HttpError(`this server is not the Slack bridge ${bridge}`, 400); // never chain
+      if (!allBridges().includes(bridge)) throw new HttpError(`unknown Slack bridge: ${bridge}`, 404);
+      const peerUrl = config.peers[bridge];
+      if (!peerUrl) return { status: 409, body: { error: `Slack bridge "${bridge}" is not a peer with a web URL` } };
+      return proxyToPeer(peerUrl, { method: 'PUT', pathname: '/api/slack/spawn', body: JSON.stringify(body), timeoutMs: peerProxyTimeoutMs });
+    }
+    if (!slack) return { status: 409, body: { error: 'Slack links are off on this server (OVERMIND_WEB_SLACK)' } };
+    if (!body || !('spawn' in body)) throw new HttpError('spawn is required: { host, dir, model, minutes, from } or null', 400);
+    let spawn;
+    try {
+      spawn = slackSpawn(body.spawn);
+    } catch (err) {
+      throw new HttpError(err.message.replace(/^config\./, ''), 400);
+    }
+    if (spawn) {
+      try {
+        linkMinutes(spawn.minutes);
+      } catch (err) {
+        throw new HttpError(`spawn.${err.message}`, 400);
+      }
+      if (spawn.mode && !MODES.includes(spawn.mode)) throw new HttpError(`spawn.mode must be one of: ${MODES.join(', ')}`, 400);
+      if (spawn.host && spawn.host !== config.self && !config.peers[spawn.host]) throw new HttpError(`spawn.host: ${spawn.host} is not this host or a peer with a web URL`, 400);
+    }
+    if (typeof cli?.configSet !== 'function') throw new HttpError('config writes are not available on this server', 501);
+    // Only what is set goes in the file; the rest keeps its default.
+    const value = spawn ? Object.fromEntries(Object.entries(spawn).filter(([, v]) => v != null)) : null;
+    try {
+      await cli.configSet({ key: 'slack.spawn', value, configFile: config.configFile ?? null });
+    } catch (err) {
+      throw new HttpError(`could not save slack.spawn: ${err?.message ?? err}`, 502);
+    }
+    // The bridge reads `config.slack` (its settings) on every mention: live from now on.
+    config.slack.spawn = spawn;
+    return { status: 200, body: { host: config.self, ...(await slack.status()) } };
+  }
+
+  async function handleSlack(req, url, action, id = null) {
+    const local = url.searchParams.get('local') === '1';
+    if (action === 'status') return slackStatus(local);
+    const body = await readJsonBody(req);
+    const none = { status: 409, body: { error: 'no server runs Slack links (slack.host)' } };
+    if (action === 'unlink' || action === 'relink') {
+      if (!validLinkId(id)) throw new HttpError('link must look like sl-xxxxxx', 400);
+      // A link lives on one bridge: the first that knows it answers.
+      const names = local ? (slack ? [config.self] : []) : allBridges();
+      if (!names.length) return none;
+      let r = null;
+      for (const b of names) {
+        r = await atBridge(b, action, id, body, url.pathname);
+        if (r.status !== 404) break;
+      }
+      return r;
+    }
+    // link / reply / a read: the bridge of the session's host. A reply or read from a session here
+    // says so, so the bridge checks the pane on this host.
+    const fromSession = action === 'reply' || SLACK_READS.has(action);
+    const target = fromSession ? replyHost(body) : (typeof body?.host === 'string' && body.host ? body.host : config.self);
+    const bridge = bridgeFor(target);
+    if (!bridge) return none;
+    if (bridge !== config.self && local) {
+      // Proxied here by a server that routes differently: refuse rather than link one session twice.
+      return slack
+        ? { status: 400, body: { error: `sessions on ${target} are linked by the bridge on ${bridge} (slack.bridges) — set slack.bridges.${target} on the server you linked from` } }
+        : none;
+    }
+    const sent = fromSession ? { ...(body ?? {}), host: target } : body;
+    return atBridge(bridge, action, null, sent, url.pathname);
   }
 
   /** POST /api/groups/edit — rename a group / move a session, on the grouping host. */
@@ -803,6 +1168,27 @@ export function createApi({
       return handleInbox(req, url, 'settings');
     }
 
+    if (url.pathname === '/api/slack/spawn') {
+      if (req.method !== 'PUT') throw new HttpError('method not allowed', 405);
+      return handleSlackSpawn(req, url);
+    }
+
+    if (url.pathname === '/api/slack') {
+      if (req.method !== 'GET') throw new HttpError('method not allowed', 405);
+      return handleSlack(req, url, 'status');
+    }
+
+    if (SLACK_ACTIONS.has(url.pathname)) {
+      if (req.method !== 'POST') throw new HttpError('method not allowed', 405);
+      return handleSlack(req, url, url.pathname.slice('/api/slack/'.length));
+    }
+
+    const su = SLACK_LINK_ACTION_ROUTE.exec(url.pathname);
+    if (su) {
+      if (req.method !== 'POST') throw new HttpError('method not allowed', 405);
+      return handleSlack(req, url, su[2], decodeURIComponent(su[1]));
+    }
+
     if (url.pathname === '/api/groups/edit') {
       if (req.method !== 'POST') throw new HttpError('method not allowed', 405);
       return handleGroupEdit(req, url);
@@ -830,7 +1216,9 @@ export function createApi({
     const s = SPAWN_ROUTE.exec(url.pathname);
     if (s) {
       if (req.method !== 'POST') throw new HttpError('method not allowed', 405);
-      return forHost({ req, url, host: decodeURIComponent(s[1]), local: () => localSpawn(req) });
+      // A spawn linked to Slack waits for the session to register before it answers.
+      const timeoutMs = Math.max(peerProxyTimeoutMs, spawnLinkWaitMs + 30 * 1000);
+      return forHost({ req, url, host: decodeURIComponent(s[1]), local: () => localSpawn(req), timeoutMs });
     }
 
     const a = AUTONAME_ROUTE.exec(url.pathname);
@@ -918,6 +1306,12 @@ export function createApi({
       return forHost({ req, url, host, timeoutMs: FOCUS_PROXY_MS, local: () => localFocus(req) });
     }
 
+    const hd = HARNESS_DEFAULTS_ROUTE.exec(url.pathname);
+    if (hd) {
+      if (req.method !== 'PUT') throw new HttpError('method not allowed', 405);
+      return forHost({ req, url, host: decodeURIComponent(hd[1]), local: () => localHarnessDefaults(req) });
+    }
+
     const hr = HARNESSES_ROUTE.exec(url.pathname);
     if (hr) {
       if (req.method !== 'GET') throw new HttpError('method not allowed', 405);
@@ -930,6 +1324,26 @@ export function createApi({
       return forHost({ req, url, host: decodeURIComponent(us[1]), local: () => localUsage(url) });
     }
 
+    const prr = PR_REVIEW_ROUTE.exec(url.pathname);
+    if (prr) {
+      const [, rawHost, rawOwner, rawRepo, rawNum, what, rawNote, post] = prr;
+      const ref = { owner: decodeURIComponent(rawOwner), repo: decodeURIComponent(rawRepo), number: Number(rawNum) };
+      const note = rawNote == null ? null : decodeURIComponent(rawNote);
+      const op =
+        what === 'diff' ? 'diff' : what === 'ask' ? 'ask' : note == null ? (req.method === 'GET' ? 'list' : 'create') : note === 'handoff' ? 'handoff' : post ? 'post' : req.method === 'DELETE' ? 'remove' : 'update';
+      const method = { diff: 'GET', ask: 'POST', list: 'GET', create: 'POST', handoff: 'POST', post: 'POST', remove: 'DELETE', update: 'PUT' }[op];
+      if (req.method !== method || ((what === 'diff' || what === 'ask') && note != null)) throw new HttpError('method not allowed', 405);
+      if (note != null && op !== 'handoff' && !validNoteId(note)) throw new HttpError('invalid note id', 400);
+      return forHost({
+        req,
+        url,
+        host: decodeURIComponent(rawHost),
+        timeoutMs: PR_CHECKOUT_PROXY_MS,
+        bodyLimit: REVIEW_BODY_LIMIT,
+        local: () => localPrReview(req, url, ref, op, note),
+      });
+    }
+
     const pr = PRS_ROUTE.exec(url.pathname);
     if (pr) {
       const action = pr[2] ?? null;
@@ -939,6 +1353,19 @@ export function createApi({
         ? await forHost({ req, url, host, timeoutMs: PR_CHECKOUT_PROXY_MS, local: () => localPrAction(req, action) })
         : await forHost({ req, url, host, timeoutMs: PRS_PROXY_MS, local: () => localPrs(url) });
       return withPrEditors(r, editorViewer(config, req), host);
+    }
+
+    const sc = SCHEDULE_ROUTE.exec(url.pathname);
+    if (sc) {
+      const [, rawHost, id, action] = sc;
+      if (!(action ? ['POST'] : ['GET', 'POST']).includes(req.method)) throw new HttpError('method not allowed', 405);
+      return forHost({
+        req,
+        url,
+        host: decodeURIComponent(rawHost),
+        timeoutMs: TASKS_PROXY_MS,
+        local: () => (action ? localScheduleCancel(id) : req.method === 'POST' ? localScheduleAdd(req) : localSchedule()),
+      });
     }
 
     const tk = TASKS_ROUTE.exec(url.pathname);
@@ -1069,6 +1496,101 @@ export function createApi({
                       : op === 'remove'
                         ? await reviews.remove(session, tid)
                         : await reviews.update(session, tid, body);
+            return { status: 200, body: { host: config.self, id: session.session_id, ...r } };
+          } catch (err) {
+            if (err?.status) throw new HttpError(err.message, err.status);
+            throw err;
+          }
+        },
+      });
+    }
+
+    const am = ASK_ROUTE.exec(url.pathname);
+    if (am) {
+      if (req.method !== 'POST') throw new HttpError('method not allowed', 405);
+      const id = decodeURIComponent(am[2]);
+      return forHost({
+        req,
+        url,
+        host: decodeURIComponent(am[1]),
+        bodyLimit: REVIEW_BODY_LIMIT,
+        local: async () => {
+          if (!asks) throw new HttpError('side questions are not available on this server', 501);
+          const body = await readJsonBody(req, REVIEW_BODY_LIMIT);
+          const session = await resolveLocalSession(id);
+          if (session.harness && session.harness !== 'claude') throw new HttpError('side questions need a Claude session', 409);
+          if (!session.session_id || !SESSION_ID_RE.test(session.session_id)) throw new HttpError('this session has no session id yet', 409);
+          const cwd = typeof session.cwd === 'string' && session.cwd ? session.cwd : null;
+          if (!cwd) throw new HttpError('this session has no working directory', 409);
+          try {
+            const root = typeof body?.root === 'string' && path.isAbsolute(body.root) ? body.root : null;
+            const file = typeof body?.path === 'string' ? body.path : null;
+            const prompt = askPrompt({ ...body, path: file, display: file ? displayPath(root, file, cwd) : null });
+            const label = file && Number.isInteger(body.start) ? `${file}:${body.start}${body.end !== body.start ? `–${body.end}` : ''}` : null;
+            const ask = asks.start({ cwd, resume: session.session_id, prompt, question: String(body.question).trim(), label });
+            return { status: 200, body: { host: config.self, id: session.session_id, ask } };
+          } catch (err) {
+            if (err?.status) throw new HttpError(err.message, err.status);
+            throw err;
+          }
+        },
+      });
+    }
+
+    const aim = ASK_ID_ROUTE.exec(url.pathname);
+    if (aim) {
+      if (req.method !== 'GET' && req.method !== 'DELETE') throw new HttpError('method not allowed', 405);
+      const askId = decodeURIComponent(aim[2]);
+      if (!validAskId(askId)) throw new HttpError('invalid side question id', 400);
+      return forHost({
+        req,
+        url,
+        host: decodeURIComponent(aim[1]),
+        local: async () => {
+          if (!asks) throw new HttpError('side questions are not available on this server', 501);
+          try {
+            if (req.method === 'DELETE') return { status: 200, body: { host: config.self, ...asks.cancel(askId) } };
+            return { status: 200, body: { host: config.self, ask: asks.get(askId) } };
+          } catch (err) {
+            if (err?.status) throw new HttpError(err.message, err.status);
+            throw err;
+          }
+        },
+      });
+    }
+
+    const qm = QUEUE_ROUTE.exec(url.pathname);
+    if (qm) {
+      const [, rawHost, rawId, pause, rawItem, sub] = qm;
+      const itemId = rawItem == null ? null : decodeURIComponent(rawItem);
+      const op = pause ? 'pause' : itemId == null ? (req.method === 'GET' ? 'get' : 'add') : sub ?? (req.method === 'DELETE' ? 'remove' : 'edit');
+      const method = { get: 'GET', add: 'POST', pause: 'POST', send: 'POST', move: 'POST', remove: 'DELETE', edit: 'PUT' }[op];
+      if (req.method !== method) throw new HttpError('method not allowed', 405);
+      if (itemId != null && !validItemId(itemId)) throw new HttpError('invalid queue item id', 400);
+      const id = decodeURIComponent(rawId);
+      return forHost({
+        req,
+        url,
+        host: decodeURIComponent(rawHost),
+        local: async () => {
+          if (!queue) throw new HttpError('the prompt queue is not available on this server', 501);
+          const body = method === 'POST' || method === 'PUT' ? await readJsonBody(req) : null;
+          const session = await resolveLocalSession(id);
+          try {
+            const r =
+              op === 'get'
+                ? await queue.get(session)
+                : op === 'add'
+                  ? await queue.add(session, body)
+                  : op === 'pause'
+                    ? await queue.pause(session, body)
+                    : op === 'send'
+                      ? await queue.sendNow(session, itemId)
+                      : op === 'move'
+                        ? await queue.move(session, itemId, body)
+                        : op === 'remove'
+                          ? await queue.remove(session, itemId)
+                          : await queue.edit(session, itemId, body);
             return { status: 200, body: { host: config.self, id: session.session_id, ...r } };
           } catch (err) {
             if (err?.status) throw new HttpError(err.message, err.status);
@@ -1220,7 +1742,7 @@ export function createApi({
   async function localHarnesses(url) {
     const refresh = url.searchParams.get('refresh') === '1';
     if (!refresh && harnessCache && Date.now() - harnessCache.at < HARNESSES_TTL_MS) {
-      return { status: 200, body: { host: config.self, harnesses: harnessCache.rows } };
+      return { status: 200, body: { host: config.self, harnesses: withDefaults(harnessCache.rows), ghIdentities: config.ghIdentities ?? [] } };
     }
     let rows;
     try {
@@ -1232,7 +1754,42 @@ export function createApi({
     // Claude's picker is the configured one (`web.models`), like before harnesses.
     rows = rows.map((r) => (r.id === 'claude' ? { ...r, models: config.models ?? DEFAULT_MODELS } : r));
     harnessCache = { at: Date.now(), rows };
-    return { status: 200, body: { host: config.self, harnesses: rows } };
+    return { status: 200, body: { host: config.self, harnesses: withDefaults(rows), ghIdentities: config.ghIdentities ?? [] } };
+  }
+
+  // The defaults come from the live config (a PUT changes them at once), the rest from the cache.
+  function withDefaults(rows) {
+    return rows.map((r) => {
+      const d = config.harnessDefaults?.[r.id] ?? {};
+      return { ...r, efforts: Array.isArray(r.efforts) ? r.efforts : (DEFAULT_EFFORTS[r.id] ?? []), defaultModel: d.model ?? null, defaultEffort: d.effort ?? null };
+    });
+  }
+
+  /**
+   * PUT harness-defaults `{ harness, model, effort }` → `{ host, harness, model, effort }`: what a
+   * spawn of `harness` on this host uses when it picks none (`harnesses.<id>.model` / `.effort`,
+   * written through the CLI like spawn dirs). `null` / `""` clears one (the harness's own default).
+   */
+  async function localHarnessDefaults(req) {
+    if (typeof cli?.configSet !== 'function') throw new HttpError('editing defaults is not available on this server', 501);
+    const body = await readJsonBody(req);
+    const harness = body?.harness;
+    if (!HARNESS_IDS.includes(harness)) throw new HttpError(`harness must be one of ${HARNESS_IDS.join(', ')}`, 400);
+    const norm = (v) => (v == null ? null : typeof v === 'string' ? v.trim() || null : undefined);
+    const model = norm(body?.model);
+    const effort = norm(body?.effort);
+    if (model === undefined || (model && !/^[A-Za-z0-9._[\]/:-]{1,100}$/.test(model))) {
+      throw new HttpError('model must be 1-100 chars of letters, digits, . _ [ ] / : or -', 400);
+    }
+    if (effort === undefined || (effort && !/^[a-z]{1,20}$/.test(effort))) throw new HttpError('effort must be a lowercase level like "high"', 400);
+    try {
+      await cli.configSet({ key: `harnesses.${harness}.model`, value: model });
+      await cli.configSet({ key: `harnesses.${harness}.effort`, value: effort });
+    } catch (err) {
+      throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
+    }
+    config.harnessDefaults = { ...(config.harnessDefaults ?? {}), [harness]: { model, effort } };
+    return { status: 200, body: { host: config.self, harness, model, effort } };
   }
 
   /**
@@ -1262,14 +1819,107 @@ export function createApi({
     }
   }
 
+  /** The PR as this host's `overmind prs` knows it (its clone under the repos roots), or an HttpError. */
+  async function findPr({ owner, repo, number }) {
+    if (typeof cli?.prs !== 'function') throw new HttpError('pull requests are not available on this server', 501);
+    let list;
+    try {
+      list = await cli.prs({ refresh: false });
+    } catch (err) {
+      if (err?.missing) throw new HttpError('this host’s overmind CLI has no `prs` command — update it', 501);
+      throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
+    }
+    const lc = (x) => String(x ?? '').toLowerCase();
+    const pr = (list?.prs ?? []).find((p) => lc(p.owner) === lc(owner) && lc(p.repo) === lc(repo) && p.number === number);
+    if (!pr) throw new HttpError(`${owner}/${repo}#${number} is not in this host’s pull requests`, 404);
+    return pr;
+  }
+
+  /**
+   * The diff reviewer over a PR, with no session and no worktree: the diff from this host's
+   * clone (refs fetched into refs/overmind/pr/<n>/…), review notes kept in Overmind (each can be
+   * posted to GitHub), side questions in a fresh read-only `claude -p` in the clone, and
+   * `handoff`: the notes as the first prompt of a session on the PR's worktree.
+   */
+  async function localPrReview(req, url, ref, op, noteId) {
+    const pr = await findPr(ref);
+    const prRef = `${pr.owner}/${pr.repo}#${pr.number}`;
+    const repoPath = typeof pr.local?.repoPath === 'string' && path.isAbsolute(pr.local.repoPath) ? pr.local.repoPath : null;
+    const fail = (err) => {
+      if (err?.status) throw new HttpError(err.message, err.status);
+      throw err;
+    };
+    const info = { owner: pr.owner, repo: pr.repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author, headBranch: pr.headBranch, baseBranch: pr.baseBranch, headOid: pr.headOid ?? null, draft: pr.draft };
+    if (op === 'diff') {
+      if (!differ?.prDiff) throw new HttpError('the diff reviewer is not available on this server', 501);
+      if (!repoPath) throw new HttpError(`no local clone of ${pr.owner}/${pr.repo} on this host — clone it under the overmind repos roots`, 409);
+      try {
+        const d = await differ.prDiff(repoPath, { number: pr.number, baseBranch: pr.baseBranch, headBranch: pr.headBranch, since: url.searchParams.get('since'), refetch: url.searchParams.get('refetch') === '1' });
+        const { unchanged, fingerprint, ...repoDiff } = d;
+        const body = { host: config.self, id: null, cwd: repoPath, pr: info, fingerprint, unchanged };
+        if (!unchanged) body.repos = [{ ...repoDiff, fingerprint, label: `${pr.owner}/${pr.repo}` }];
+        return { status: 200, body };
+      } catch (err) {
+        return fail(err);
+      }
+    }
+    if (op === 'ask') {
+      if (!asks) throw new HttpError('side questions are not available on this server', 501);
+      if (!repoPath) throw new HttpError(`no local clone of ${pr.owner}/${pr.repo} on this host`, 409);
+      const body = await readJsonBody(req, REVIEW_BODY_LIMIT);
+      const head = typeof body?.head === 'string' && SHA_RE.test(body.head) ? body.head : null;
+      const base = typeof body?.base === 'string' && SHA_RE.test(body.base) ? body.base : null;
+      const context = [
+        `This is pull request ${prRef} by ${pr.author}: "${pr.title}" (${pr.url}).`,
+        head
+          ? `The working tree of this clone is NOT the PR. The PR's code is commit ${head}${base ? `, diffed against ${base} (its merge-base with ${pr.baseBranch})` : ''}: read a file with \`git show ${head}:<path>\`, the change with \`git diff ${base ?? pr.baseBranch}...${head} -- <path>\`.`
+          : `The working tree of this clone is NOT the PR; its head is refs/overmind/pr/${pr.number}/head (read files with \`git show refs/overmind/pr/${pr.number}/head:<path>\`).`,
+      ].join(' ');
+      try {
+        const file = typeof body?.path === 'string' ? body.path : null;
+        const prompt = askPrompt({ ...body, path: file, display: file, context, readGit: true });
+        const label = file && Number.isInteger(body.start) ? `${file}:${body.start}${body.end !== body.start ? `–${body.end}` : ''}` : null;
+        const ask = asks.start({ cwd: repoPath, resume: null, prompt, question: String(body.question).trim(), label, tools: PR_ASK_TOOLS });
+        return { status: 200, body: { host: config.self, ask } };
+      } catch (err) {
+        return fail(err);
+      }
+    }
+    if (!prNotes) throw new HttpError('PR review notes are not available on this server', 501);
+    const key = { owner: pr.owner, repo: pr.repo, number: pr.number };
+    if (op === 'handoff') {
+      const body = await readJsonBody(req, REVIEW_BODY_LIMIT);
+      const notes = await prNotes.pending(key).catch(fail);
+      if (!notes.length) throw new HttpError('no notes to hand over', 409);
+      const prompt = notesPrompt(notes, { summary: typeof body?.summary === 'string' ? body.summary : '' });
+      return localPrAction(req, 'spawn', { ...body, pr: prRef, prompt });
+    }
+    try {
+      const body = op === 'create' || op === 'update' || op === 'post' ? await readJsonBody(req, REVIEW_BODY_LIMIT) : null;
+      const r =
+        op === 'list'
+          ? await prNotes.list(key)
+          : op === 'create'
+            ? await prNotes.create(key, body)
+            : op === 'update'
+              ? await prNotes.update(key, noteId, body)
+              : op === 'remove'
+                ? await prNotes.remove(key, noteId)
+                : await prNotes.post(key, noteId, { headOid: body?.headOid });
+      return { status: 200, body: { host: config.self, pr: info, ...r } };
+    } catch (err) {
+      return fail(err);
+    }
+  }
+
   /**
    * POST prs/checkout `{ pr }` → `{ host, worktree }`; POST prs/spawn `{ pr, prompt?, name?,
    * model?, harness? }` → `{ host, worktree, spawn }`: the PR's worktree (made when missing),
    * then a new session there whose first prompt is the PR's context line + `prompt`.
    */
-  async function localPrAction(req, action) {
+  async function localPrAction(req, action, given = null) {
     if (typeof cli?.prCheckout !== 'function') throw new HttpError('pull requests are not available on this server', 501);
-    const body = await readJsonBody(req);
+    const body = given ?? (await readJsonBody(req));
     const ref = typeof body?.pr === 'string' ? body.pr.trim() : '';
     if (!PR_REF_RE.test(ref)) throw new HttpError('pr must look like owner/repo#123', 400);
     if (action === 'seen') return localPrSeen(ref);
@@ -1296,7 +1946,7 @@ export function createApi({
     const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
     let result;
     try {
-      result = await spawner.spawn({ name: check.name, title: check.title, dir: worktree.path, prompt, nameGiven, model: check.model, harness: check.harness });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir: worktree.path, prompt, nameGiven, model: check.model, harness: check.harness, ghIdentity: check.ghIdentity });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -1357,8 +2007,8 @@ export function createApi({
       }
     }
 
-    const roots = config.spawnDirs.map((d) => d.path);
-    const check = validateSpawnRequest(body, { spawnDirs: roots });
+    const roots = spawnRoots(config); // hidden spawn dirs are allowed too
+    const check = validateSpawnRequest(body, { spawnDirs: config.spawnDirs.map((d) => d.path) });
     if (!check.ok) throw new HttpError(check.error, 400);
     let task;
     try {
@@ -1375,7 +2025,7 @@ export function createApi({
     let result;
     try {
       const dir = await resolveAllowedDir(check.dir, roots);
-      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness, ghIdentity: check.ghIdentity });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -1383,6 +2033,73 @@ export function createApi({
     refreshOvermind();
     if (!nameGiven && spawnNamer && check.harness === 'claude') spawnNamer.schedule(result.tmuxSession).catch(() => {});
     return { status: 200, body: { host: config.self, task, spawn: { ok: true, host: config.self, ...result } } };
+  }
+
+  function scheduleError(err) {
+    if (err?.missing) return new HttpError('this host’s overmind CLI has no `schedule` command — update it', 501);
+    return new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
+  }
+
+  /** GET schedule → `{ host, entries }` (pending and recent finished; docs/cli.md → Scheduled sessions). */
+  async function localSchedule() {
+    if (typeof cli?.schedule !== 'function') throw new HttpError('scheduled sessions are not available on this server', 501);
+    try {
+      return { status: 200, body: { ...(await cli.schedule()), host: config.self } };
+    } catch (err) {
+      throw scheduleError(err);
+    }
+  }
+
+  /**
+   * POST schedule `{ at | task (+ time), dir, prompt?, name?, model?, harness?, ghIdentity? }` →
+   * `{ host, entry }`: a session started later in `dir` (a spawn dir, like a plain spawn) — at `at`,
+   * or on the task's start date at `time`.
+   */
+  async function localScheduleAdd(req) {
+    if (typeof cli?.scheduleAdd !== 'function') throw new HttpError('scheduled sessions are not available on this server', 501);
+    const body = await readJsonBody(req);
+    const at = typeof body?.at === 'string' ? body.at.trim() : '';
+    const task = body?.task != null && body.task !== '' ? taskId(body.task) : null;
+    const time = typeof body?.time === 'string' ? body.time.trim() : '';
+    if (body?.task != null && body.task !== '' && !task) throw new HttpError('task must be a Productive task id or link', 400);
+    if (!at === !task) throw new HttpError('say when: at (a time) or task (its start date), not both', 400);
+    if (at && !SCHEDULE_AT_RE.test(at)) throw new HttpError('at must be like 2026-10-29T07:30, tomorrow 09:00 or in 2h', 400);
+    if (time && (!task || !SCHEDULE_TIME_RE.test(time))) throw new HttpError('time (HH:MM) goes with a task', 400);
+    const check = validateSpawnRequest(body, { spawnDirs: config.spawnDirs.map((d) => d.path) });
+    if (!check.ok) throw new HttpError(check.error, 400);
+    let dir;
+    try {
+      dir = await resolveAllowedDir(check.dir, spawnRoots(config));
+    } catch (err) {
+      if (err?.status) throw new HttpError(err.message, err.status);
+      throw err;
+    }
+    try {
+      const entry = await cli.scheduleAdd({
+        at: at || null,
+        task,
+        time: time || null,
+        dir,
+        prompt: check.prompt.trim(),
+        name: check.nameGiven ? check.name : null,
+        model: check.model || null,
+        harness: check.harness,
+        ghIdentity: check.ghIdentity,
+      });
+      return { status: 200, body: { host: config.self, entry } };
+    } catch (err) {
+      throw scheduleError(err);
+    }
+  }
+
+  /** POST schedule/:id/cancel → `{ host, id, output }`. */
+  async function localScheduleCancel(id) {
+    if (typeof cli?.scheduleCancel !== 'function') throw new HttpError('scheduled sessions are not available on this server', 501);
+    try {
+      return { status: 200, body: { host: config.self, id, output: await cli.scheduleCancel(id) } };
+    } catch (err) {
+      throw scheduleError(err);
+    }
   }
 
   /** A task id from `123` or its Productive link; null when it is neither. */
@@ -1534,8 +2251,9 @@ export function createApi({
   async function localStackSpawn({ req, sessionId = null, stackId = null }) {
     if (!stacks) throw new HttpError('session stacks are not available on this server', 501);
     const body = await readJsonBody(req);
-    const roots = config.spawnDirs.map((d) => d.path);
-    const check = validateSpawnRequest(body, { spawnDirs: roots.length ? roots : ['/'] });
+    const roots = spawnRoots(config);
+    const offered = config.spawnDirs.map((d) => d.path);
+    const check = validateSpawnRequest(body, { spawnDirs: offered.length ? offered : ['/'] });
     if (!check.ok) throw new HttpError(check.error, 400);
     const requested = typeof body.dir === 'string' && body.dir.trim() ? check.dir : null;
     const label = validateStackLabel(body.label);
@@ -1587,6 +2305,7 @@ export function createApi({
           ...(check.title ? { title: check.title } : {}),
           ...(check.model ? { model: check.model } : {}),
           harness: check.harness,
+          ...(check.ghIdentity ? { ghIdentity: check.ghIdentity } : {}),
         }),
         timeoutMs: peerProxyTimeoutMs,
       });
@@ -1604,7 +2323,7 @@ export function createApi({
     const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
     let result;
     try {
-      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness, ghIdentity: check.ghIdentity });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -1657,6 +2376,7 @@ export function createApi({
     const cwd = typeof session.cwd === 'string' && session.cwd ? session.cwd : null;
     if (action === 'stat') return { status: 200, body: { host: config.self, id: session.session_id, ...(await files.stat(body.paths, cwd, { session })) } };
     if (action === 'open') return { status: 200, body: { host: config.self, ...(await files.open(body.path, cwd, { session })) } };
+    if (action === 'plain') return { status: 200, body: { host: config.self, ...(await files.plainModules(body.path, cwd, { session })) } };
     const download = ['1', 'true'].includes(url.searchParams.get('download') ?? '');
     return files.raw(url.searchParams.get('path'), cwd, { download, session });
   }

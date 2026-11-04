@@ -69,7 +69,7 @@ local machine.
 - otherwise → `ssh <hosts.<name>.ssh> overmind <same args>`.
 
 The remote runs `overmind --local <args>` (so it never hops again), found as `hosts.<name>.overmindBin`,
-then `~/.local/bin/overmind`, then `PATH` (with `OVERMIND_CMD`/`OVERMIND_DEBUG`/`OVERMIND_DRY_RUN` exported, never
+then `~/.local/bin/overmind`, then `PATH` (with `OVERMIND_CMD`/`OVERMIND_JOB_RUN`/`OVERMIND_GH_IDENTITY`/`OVERMIND_DEBUG`/`OVERMIND_DRY_RUN` exported, never
 `OVERMIND_CONFIG`) — install it with `overmind install --host <name>`. ssh is
 invoked with a connect timeout (`OVERMIND_CONNECT_TIMEOUT`, default 5 s), keepalives and ControlMaster
 multiplexing (off with `OVERMIND_MUX=0`); a tty (`-t`) is requested when both stdin and stdout are
@@ -125,6 +125,10 @@ server. Path: `$OVERMIND_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/overmind/c
 | `defaultHost` | target for tmux-session commands when no `-H` is given |
 | `hosts.<name>.ssh` | ssh destination (an `~/.ssh/config` alias or `user@host`); `null` for `self` |
 | `hosts.<name>.web` | that host's web server URL; hosts without one are not web peers |
+| `hosts.<name>.webProxy` | HTTP proxy the web server reaches that host's `web` url through, for a peer on another network than this machine's tailnet (e.g. a second, userspace `tailscaled` with `--outbound-http-proxy-listen`); needs Node >= 24.5; default direct. The CLI goes over `ssh` and ignores it |
+| `hosts.<name>.webConnect` | `host` or `host:port` the web server dials for that host's `web` url instead of the url's own name (directly, or through `webProxy`), while TLS (SNI, the certificate check) and `Host` keep the url's name; for a name the proxy cannot resolve, e.g. a coordination server's extra DNS records behind a userspace `tailscaled`. Default: the url's own address. The CLI goes over `ssh` and ignores it |
+| `hosts.<name>.shared` | `true`: a shared shed (other people's sessions run there too), not one of the user's own hosts. The web UI shows it in its own group of the top bar's host rail and leaves it out of the default view ("Mine"), the Inbox and the waiting count; `/api/overmind` stamps each host with `shared` from the serving host's config; `overmind list --mine` / `--shared` split on it. Default `false` |
+| `hosts.<name>.editorSsh` | ssh destination the browser's machine uses for that host in "Open in editor" links, when it differs from `ssh` or `ssh` is unset (a web-only peer); default `ssh` |
 | `web.port` / `web.bind` | web server listen address; with no config at all it binds `127.0.0.1` only |
 | `web.dir` | where the web app lives (repo checkout or install dir), detected by `init` |
 | `web.node` | `node` binary that runs the web app; `null` → `/opt/homebrew/bin/node`, `/usr/local/bin/node`, then `PATH` |
@@ -148,20 +152,22 @@ server. Path: `$OVERMIND_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/overmind/c
 | `hosts.<name>.overmindBin` | path to `overmind` on that host; `null` → `~/.local/bin/overmind`, then `PATH` |
 | `overmindBin` | this machine's `overmind` binary (used by the web server) |
 | `claude` | command that launches Claude Code in spawned sessions (default `claude`) |
-| `harnesses` | `{ codex: { command }, pi: { command } }`: how the [other harnesses](#other-harnesses) launch (default the bare name); read leniently |
-| `spawnDirs` | directories offered for new sessions, per host (`paths.<host>`); also edited from the web UI (Settings → Start directories, which writes it through `overmind config set`) |
+| `harnesses` | `{ codex: { command }, pi: { command } }`: how the [other harnesses](#other-harnesses) launch (default the bare name); plus, for `claude` / `codex` / `pi`, `model` and `effort`: the defaults a spawn uses when it picks none ([cli.md](cli.md#harnesses)). Read leniently |
+| `spawnDirs` | directories offered for new sessions, per host (`paths.<host>`); also edited from the web UI (Settings → Start directories, which writes it through `overmind config set`). They are also the spawn allow-list. An entry with `"hidden": true` stays on the allow-list (e.g. a dir only an app's [embedded panel](#embed-view) spawns in) but is not offered in the New session menu; when a host has only hidden entries it offers Home, and the hidden dirs stay allowed. `overmind config show --resolved` lists them with `"hidden": true` |
 | `tui` | dashboard preferences: `rows` (`"1"`, `"2"`, `"auto"`), `mouse` |
 | `naming` | generated names: `enabled`, `model` (default `haiku`), `syncTmux` (tmux name follows the title, default on), `autoTitle` |
 | `stacks` | [session stacks](#session-stacks): `enabled` (default `true` — `false` = never call the model; a new stack gets the skeleton StackBrief), `model` (default `sonnet`) |
 | `restore` | [session recovery](#session-recovery): `onBoot` (default `false`) — when `true`, this host's web server runs `overmind --local restore --all` once at start if there are dormant sessions, at most once per boot (it remembers the boot id in `${XDG_STATE_HOME:-~/.local/state}/overmind/web-restored-boot`); the result is logged. For an always-on machine. Recently closed sessions are never part of it. `keepClosedDays` (default `7`, a number ≥ 0; `0` turns the [recently closed](#recently-closed) list off) — how long a session closed within a boot stays restorable; at most the newest 50 are kept |
-| `bots` | [`overmind bots`](cli.md#bots), per machine: `{ "<name>": { schedule, dir, prompt \| promptFile, command, harness, model, enabled, keep } }` — agent sessions this host starts from a recipe. Read leniently: a bad bot is a warning and is skipped |
+| `bots` | [`overmind bots`](cli.md#bots), per machine: `{ "<name>": { schedule \| on, dir, prompt \| promptFile, command, harness, model, ghIdentity, enabled, keep, sessionName } }` — agent sessions this host starts from a recipe; `on: { github: { repo, branch, every, backfill } }` starts one per new branch instead of on a schedule ([GitHub triggers](cli.md#github-triggers)). Read leniently: a bad bot is a warning and is skipped |
+| `ghIdentities` | [GitHub identities](cli.md#github-identities), per machine: `{ "<name>": { command, login, prompt } }` — GitHub Apps a spawned session can act as. Read leniently: an entry without `command` (or with a bad name) is skipped |
 | `jobs` | the old name of `bots`, still read; a name in both is the `bots` one |
-| `repos` | [`overmind repos`](cli.md#repos), per machine: `roots` (default `["~/Code"]`; every directory directly under a root with a `.git` is a repo), `every` (default `"24h"`; `30m` / `12h` / `7d`), `overrides` (`{ "<dir name or ~/path>": "30m" }`), `exclude` (dir names or `~/` paths). Read leniently: a bad value is a warning and falls back to its default |
+| `repos` | [`overmind repos`](cli.md#repos), per machine: `roots` (default `["~/Code"]`; every directory directly under a root with a `.git` is a repo; a root with its own `.git` is that one repo), `every` (default `"24h"`; `30m` / `12h` / `7d`), `overrides` (`{ "<dir name or ~/path>": "30m" }`), `exclude` (dir names or `~/` paths). Read leniently: a bad value is a warning and falls back to its default |
 | `prs` | [`overmind prs`](cli.md#pull-requests), per machine: `orgs` (search only these orgs), `repos` (`owner/name`s; with `orgs`, any of them), `refresh` (default `"5m"`, at least `1m`: how old the cache may get), `worktrees` (default `"~/Code/worktrees"`: where `overmind pr checkout` puts new worktrees). None of `orgs`/`repos` = all of GitHub. Read leniently |
 | `tasks` | [`overmind tasks`](cli.md#productive-tasks), per machine: `organization` (an id; may be left out when the token belongs to one organization), `projects` (ids: only tasks in these), `refresh` (default `"5m"`, at least `1m`), `token` (the Productive API token; `$OVERMIND_PRODUCTIVE_TOKEN` wins over it), `keychain` (else: the service name of a macOS keychain item holding it, read with `security find-generic-password -s <service> -w` — keeps the token out of the file; `$PRODUCTIVE_API_TOKEN` is the last fallback). Read leniently |
 | `gh` | `gh` binary for `overmind prs`; `null` → `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin` |
 | `grouping` | smart grouping: `enabled` (default `true` — `false` = repository fallback only), `model` (default `haiku`), `host` (the one host whose web server runs it; peers proxy `/api/groups` there), `consolidateMinutes` (default 60) |
 | `inbox` | the [inbox](#inbox): `host` (the one host whose web server runs it; peers proxy `/api/inbox` there — unset = no inbox), `scanMinutes` (60), `workHours` (`[8, 18]`), `workDays` (`[0,1,2,3,4,5,6]`, 0 = Sunday; the three are also set from Settings → Inbox), `model` (`haiku`, the Slack + mail scan), `briefModel` (`haiku`), `briefMinutes` (45), `language` (`"English"`, the brief's), `comms` (`true`; `false` = no Slack + mail scan). `OVERMIND_WEB_INBOX=0` turns it off on a server |
+| `slack` | [Slack links](#slack-links): `host` (the host whose web server runs the bridge; peers proxy `/api/slack` there — unset = off), `owner` (your Slack user id `U…`: your messages in a linked thread are marked as the owner's), `owners` (a list of such ids, for a machine several people own, e.g. a shared shed: each is marked as an owner, may start sessions with a mention when `spawn.from` is unset, and `owner` is added first), `bridges` (`{ "<host>": "<bridge host>" }`: that host's sessions are linked by another bridge, one with its own Slack app; set it on every server you link from), `spawn` (read by the bridge's server: a mention of its app [opens a session](#slack-links) — `{ host (default: this one), dir (a spawn dir there; `~/…` = that host's home; none = its first), model, harness, ghIdentity, minutes (`1d`), mode, task, from }`, `from`: `"anyone"` in a channel the app is in, or a list of user ids; default the owners only). `OVERMIND_WEB_SLACK=0` turns it off on a server |
 
 Rules: `~` is expanded at use time; unknown keys are preserved when the CLI rewrites the file
 (writes go through the raw JSON, never the typed view); a missing file is fine — this machine is
@@ -183,6 +189,19 @@ That is the source of truth; `overmind` enriches each entry:
    (`tmux` / `iterm` / `unknown`) and the **handle** used to control it (tmux pane id like `%87`,
    or the iTerm session id).
 3. **titles** from the naming cache (never generated by `list` itself).
+4. **subagents and background shells** (`core::background`). The registry says `busy` while *any*
+   agent of the session generates, background subagents included, and `shell` while only
+   background shells run — though the main prompt is free and takes input at once. So for a
+   `busy` / `shell` entry overmind reads the main transcript: a turn ends with `system` /
+   `turn_duration`; an `Agent` result with `toolUseResult.status: "async_launched"` starts a
+   background agent, a Bash result with `backgroundTaskId` a background shell, and a
+   `<task-notification>` (in a user entry or a queue operation) ends either (`SendMessage` starts a
+   finished agent again; `TaskStop` / `KillShell` stop one; what started before the process did is
+   not running). When the main turn has ended and something runs beside it (or the registry says
+   `shell`), the session is reported `idle` — `updated_at` then is when the turn ended — with
+   `background`. An `Agent` call not answered yet in a turn in progress is a foreground agent
+   (`background: false`). None of this is a stable Claude Code API: what is not recognised leaves
+   the registry status as it is.
 
 Headless runs (`claude -p`, SDK and CI entrypoints) register too and are filtered out.
 
@@ -205,6 +224,8 @@ Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) w
 later-started processes first, the newest transcript in the process's cwd created after it
 started (3 s slack), then the newest written to since it started. A Codex session before its first
 prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`.
+
+Codex runs a session's shell commands through a shared app-server daemon, so in them `$TMUX_PANE` is the pane that started the daemon (or unset); `$CODEX_THREAD_ID` is the session's `session_id`, and `overmind done` / `overmind slack link|reply` find their own session by it (`core::done::own_pane`).
 
 Status from the transcript tail (512 KiB): Codex is `busy` from `task_started` until
 `task_complete` / `turn_aborted`, `waiting` on an `*_approval_request` (until anything else
@@ -267,9 +288,11 @@ by — with no config, `local`):
 | `name` | string \| null | Claude session name |
 | `name_source` | string \| null | `"derived"` = Claude's cwd+hash fallback |
 | `cwd` | string \| null | working directory |
-| `status` | string | `busy` \| `idle` \| `waiting` \| `unknown` |
+| `status` | string | `busy` \| `idle` \| `waiting` \| `unknown` — `idle` = the main prompt is free, subagents may still run (`background`) |
 | `waiting_for` | string \| null | what a `waiting` session is blocked on |
 | `updated_at` | number \| null | last status change, ms since epoch |
+| `background` | object \| null | what runs beside the main thread: `{ agents: [{ id, description, type, model, background, started_at, last_activity_at, activity }], shells }` (`background: false` = a foreground agent; `activity` = its last tool call, like `Bash: run the tests`); `null` = none or unknown |
+| `prompted_at` | number \| null | last human prompt (transcript `origin.kind: "human"`), ms since epoch; `null` when unknown (none yet, Codex / pi). The web list sorts by it |
 | `tty` | string \| null | |
 | `backend` | string | `tmux` \| `iterm` \| `unknown` |
 | `handle` | string \| null | tmux pane id or iTerm session id |
@@ -284,6 +307,8 @@ by — with no config, `local`):
 | `model` | string \| null | the model it runs, when known (Claude: the context entry's) |
 | `transcript` | string \| null | absolute transcript path (Codex / pi only) |
 | `origin` | object \| null | `{ job, run }` of the [job](cli.md#bots) run that started the session (its tmux pane option `@overmind_job_run`); `null` when none |
+| `embed` | string \| null | the app whose [embedded panel](#embed-view) started the session (its tmux pane option `@overmind_embed`); `null` when none |
+| `git` | object \| null | the git checkout its cwd is in, read from the `.git` files: `{ branch, root, linked, repo }` — `branch` (`null` = detached), `root` (absolute), `linked` (`true` = a linked worktree, `false` = the main checkout), `repo` (GitHub `owner/name` of `origin`, `null` when none). `null` outside a checkout. The web UI links a session to a pull request by `repo` + `branch` (a linked worktree only), on any host |
 | `host` | string | which machine the row came from |
 
 `list --all-hosts --json` is the same array across every configured host.
@@ -312,11 +337,12 @@ back to a scan of the project dirs when the session's cwd changed):
 ### Subscription usage
 
 `overmind usage --json` (and the web's `GET /api/hosts/:host/usage`, which adds `host`) reports the
-Claude subscription limits of the account logged in to Claude Code on that machine, from
-`core::usage`:
+Claude subscription limits of the account logged in to Claude Code on that machine, and under
+`openai` the ChatGPT plan Codex is logged in with, from `core::usage`:
 
 ```json
 {
+  "provider": "claude",
   "account": { "uuid": "…", "email": "…", "organization": "…", "plan": "max", "tier": "default_claude_max_5x", "plan_label": "Max 5x" },
   "limits": [
     { "kind": "session", "group": "session", "label": "Current session", "model": null, "percent": 18.0, "severity": "normal", "resets_at": "2026-09-29T22:20:00+00:00", "active": false },
@@ -326,10 +352,30 @@ Claude subscription limits of the account logged in to Claude Code on that machi
   "extra_usage": { "enabled": false, "used": 0.0, "limit": null, "currency": "USD", "percent": 0.0 },
   "fetched_at": "2026-09-29T20:00:00+00:00",
   "stale": false,
-  "error": null
+  "error": null,
+  "openai": {
+    "provider": "openai",
+    "account": { "uuid": "…", "email": "…", "organization": null, "plan": "plus", "tier": null, "plan_label": "ChatGPT Plus" },
+    "limits": [
+      { "kind": "session", "group": "session", "label": "Current session", "model": null, "percent": 3.0, "severity": "normal", "resets_at": "…", "active": false },
+      { "kind": "weekly_all", "group": "weekly", "label": "Weekly", "model": null, "percent": 2.0, "severity": "normal", "resets_at": "…", "active": false }
+    ],
+    "extra_usage": { "enabled": false, "used": null, "limit": null, "currency": null, "percent": null, "balance": 0.0 },
+    "fetched_at": "…", "stale": false, "error": null
+  }
 }
 ```
 
+- **`openai`** (since the field was added; absent when `$CODEX_HOME/auth.json` holds no ChatGPT
+  login): the same shape, from the endpoint Codex's `/status` calls (`GET
+  https://chatgpt.com/backend-api/wham/usage`) with Codex's access token and `ChatGPT-Account-Id`.
+  Its `primary_window` / `secondary_window` become the session and weekly limits; a
+  `code_review_rate_limit` or `additional_rate_limits` add scoped ones (`Weekly · Code review`);
+  `credits` becomes `extra_usage` with `balance`. Codex and pi share the plan; pi's own login is
+  another OAuth app the endpoint refuses, so only Codex's is read. Cached in
+  `$CODEX_HOME/overmind-usage.json` like the Claude read. When one provider fails with nothing
+  cached and the other has a read, the command still succeeds: the failed one comes back with
+  empty `limits` and `error` (the Claude one at the top level, with `account: null`).
 - **Source**: the plan-usage endpoint Claude Code's `/usage` calls (`GET
   https://api.anthropic.com/api/oauth/usage`), authenticated with Claude Code's OAuth access
   token — the macOS keychain item `Claude Code-credentials`, else `~/.claude/.credentials.json`.
@@ -389,19 +435,20 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | --- | --- | --- |
 | GET | `/api/health` | name, version, apiVersion, self, uptime, autoName (`lastRun`) |
 | GET | `/api/settings` | apiVersion, self, host names, quick replies, `transcribe: { enabled }` (this server has a transcription key), `speak: { enabled, voice }` (it can read replies aloud), `operator: { enabled, hosts }` (the [voice operator](#voice-operator) and where it runs), `focus: { host }` (`web.focus.host`, null when unset) |
-| GET | `/api/overmind[?local=1]` | `{ self, hosts: [{ name, ok, error?, sessions, spawnDirs, notes?, stacks? }], snapshotAt }` — `stacks`: that host's [session stacks](#session-stacks), compact (`{ id, label, host, members: [{ session, host, live }] }`), from which the merged view stamps `stack: { id, label, host }` on the rows of members running on *other* hosts; sessions are `list --json` objects + `host` (a Codex session with no transcript yet gets `session_id: "pid-<pid>"` until it has one) (`title` capped at 300 chars) + `editorUrl` (the "Open in editor" link for its cwd, built by the server that answered — see [Session briefs](#session-briefs)); the merged view is a warm background-refreshed snapshot |
+| GET | `/api/overmind[?local=1]` | `{ self, hosts: [{ name, ok, error?, sessions, spawnDirs, hiddenSpawnDirs?, home?, notes?, stacks? }], snapshotAt }` — `spawnDirs` (`[{ label, path }]`): what that host offers in New session, without its hidden entries (Home when it offers none); `hiddenSpawnDirs` (same shape, present only when it has any; older servers omit it): its `hidden: true` entries, allowed for spawns (the embed view checks `dir` against both) but not offered — `home`: that host's home directory (for `~/…` paths, e.g. the [embed view](#embed-view)'s `dir`); older servers omit it — `stacks`: that host's [session stacks](#session-stacks), compact (`{ id, label, host, members: [{ session, host, live }] }`), from which the merged view stamps `stack: { id, label, host }` on the rows of members running on *other* hosts; sessions are `list --json` objects + `host` (a Codex session with no transcript yet gets `session_id: "pid-<pid>"` until it has one) (`title` capped at 300 chars) + `editorUrl` (the "Open in editor" link for its cwd, built by the server that answered — see [Session briefs](#session-briefs)); the merged view is a warm background-refreshed snapshot |
 | GET | `/api/hosts/:host/sessions/:id/peek?lines=N` | plain-text screen |
 | GET | `/api/hosts/:host/sessions/:id/screen` | the live terminal: the pane's visible rows with colours + size, cursor and input modes (tmux only, 409 otherwise) — see web/ARCHITECTURE.md |
 | POST | `/api/hosts/:host/sessions/:id/input` | `{ data }` → raw terminal input written to the pane as is (`send-keys -H`): keys, escape sequences, mouse reports. Types into the agent like `send`; one key / mouse event per request (two escape sequences in one write reach Claude Code as Esc, which cancels a prompt) |
-| GET | `/api/hosts/:host/sessions/:id/messages?limit=N` | conversation (no tool calls) from the transcript; an AskUserQuestion call is a message of `kind: "question"` with `id` (the tool use id), `questions` (`[{ question, header, multiSelect, options: [{ label, description }] }]`), `text` (a markdown rendering) and, once it has a result, `answers` (per question, the answer string) or `declined: true`; a prompt typed while Claude works and still in its queue is a `kind: "user"` message with `queued: true`, always last (prompts it took mid-turn show where it took them) |
+| GET | `/api/hosts/:host/sessions/:id/messages?limit=N` | conversation (no tool calls) from the transcript; an AskUserQuestion call is a message of `kind: "question"` with `id` (the tool use id), `questions` (`[{ question, header, multiSelect, options: [{ label, description }] }]`), `text` (a markdown rendering) and, once it has a result, `answers` (per question, the answer string) or `declined: true`. Claude Code (2.1.310+) writes the call to the transcript only once it is answered, so while the session waits on one the terminal is read instead: the prompt's current tab (or its "Review your answers" screen, a question with `noOther: true`) is appended as a question message with `id: "screen:<hash>"`, one question per tab; a prompt typed while Claude works and still in its queue is a `kind: "user"` message with `queued: true`, always last (prompts it took mid-turn show where it took them) |
 | POST | `/api/hosts/:host/sessions/:id/branch` | `{ ref, harness?, model?, prompt?, name?, title? }` (`title` as in `/spawn`) → a **new session** whose history is the conversation up to and including the message `ref` (each `…/messages` message carries `ref`: a Claude entry `uuid`, a Codex `c-<hash of its rollout line>`); the source is untouched. Claude Code and Codex sessions only (409 otherwise). Same agent (default): the transcript is copied under a new session id — Claude: the `parentUuid` chain root → message, `sessionId` rewritten, titles dropped, a trailing tool call stripped; Codex: the rollout through the message's turn, `session_meta.id` rewritten, a `session_index.jsonl` entry for the name — and resumed in a new tmux session in the source's cwd (`claude --resume <id>` / `codex resume <id>`). Other agent: the prompts and replies (no tool calls) go to a markdown file under the prompt dir and the new agent's first prompt tells it to read it. From a **prompt** (user message) the cut is just before it and it is sent again as the first prompt (`prompt` replaces it); from a **reply**, `prompt` is an optional first message → `{ host, source: { id, harness, transcript }, ref, harness, sessionId (null for another agent), transcript, handoff, spawn }`. 400 bad request / not a prompt or reply, 404 unknown message or transcript, 409 tmux name taken. Starts an agent |
 | POST | `/api/hosts/:host/sessions/:id/send` | `{ text }` → typed + Enter |
 | POST | `/api/hosts/:host/sessions/:id/keys` | `{ key }` (Enter, Escape, …) |
-| POST | `/api/hosts/:host/sessions/:id/answer` | `{ toolUseId, answers: [{ options: [index…], text? }] }` (one per question) → types the arrows/Enter/text a human would into the pending AskUserQuestion prompt. 400 bad answer (single-select: one option or text; multi-select: at least one), 404 unknown question, **409** (nothing typed) when it is already answered, the session isn't waiting, or the terminal isn't showing that prompt untouched (first question, cursor on option 1) |
+| POST | `/api/hosts/:host/sessions/:id/answer` | `{ toolUseId, answers: [{ options: [index…], text? }] }` (one per question) → types the arrows/Enter/text a human would into the pending AskUserQuestion prompt. 400 bad answer (single-select: one option or text; multi-select: at least one), 404 unknown question, **409** (nothing typed) when it is already answered, the session isn't waiting, or the terminal isn't showing that prompt untouched (first question, cursor on option 1). A `screen:` id answers just that tab, and only while the terminal still shows it |
 | POST | `/api/hosts/:host/sessions/:id/rename` | `{ title }` (1–64 chars, one line) → `overmind rename <session_id> <title> --json`; 200 with the report, **409** when held (waiting on a prompt, or a busy Codex / pi session; nothing typed), 400 bad title, 502 CLI failure |
 | POST | `/api/hosts/:host/sessions/:id/autoname` | regenerate one session's name → `overmind name <session_id> --apply --refresh`; 200 `{ ok, host, id, name }` (`name` null: unchanged), **409** when held (waiting on a prompt; nothing typed), 502 CLI failure |
-| POST | `/api/hosts/:host/spawn` | `{ name?, title?, dir?, prompt?, model?, harness? }` → new tmux session running that [harness](#other-harnesses) (`claude` default, `codex`, `pi`; its launcher is config `claude` / `harnesses.<id>.command`; `-n <title or name>` for Claude and pi only); `title` (1–64 chars, one line) is the name as typed — the agent's display name, the tmux session a slug of it (unless `name` is given; a title with no ASCII letters or digits gets a generated tmux name), and no auto-naming; `dir` must resolve inside one of the host's `spawnDirs` (else 400); a prompt too long to type (the launch line over ~900 bytes) is written to `~/.claude/overmind-prompts/` and passed as `"$(cat <file>)"`; a first-run trust prompt is accepted (Claude: Down + Enter; Codex: Enter on "Trust and continue"); when the agent never starts (the pane is still just a shell after ~10s) the tmux session is killed and the answer is 502 with the pane's last lines |
-| GET | `/api/hosts/:host/harnesses[?refresh=1]` | `{ host, harnesses: [{ id, label, command, installed, models }] }` — `overmind --local harness list --json`, cached 10 min; Claude's `models` are `web.models`. An older CLI answers Claude alone |
+| POST | `/api/hosts/:host/spawn` | `{ name?, title?, dir?, prompt?, model?, harness?, ghIdentity?, embed?, slack? }` → new tmux session running that [harness](#other-harnesses) (`claude` default, `codex`, `pi`; its launcher is config `claude` / `harnesses.<id>.command`; `-n <name>` for Claude and pi only); `title` (1–64 chars, one line) is the name as typed — the agent's display name, the tmux session a slug of it (unless `name` is given; a title with no ASCII letters or digits gets a generated tmux name), and no auto-naming; `dir` must resolve inside one of the host's `spawnDirs`, hidden ones included (else 400; no `dir` = its first offered one); a prompt too long to type (the launch line over ~900 bytes) is written to `~/.claude/overmind-prompts/` and passed as `"$(cat <file>)"`; a first-run trust prompt is accepted (Claude: Down + Enter; Codex: Enter on "Trust and continue"); when the agent never starts (the pane is still just a shell after ~10s) the tmux session is killed and the answer is 502 with the pane's last lines. `ghIdentity` (Claude only; one of the host's `ghIdentities`, else 400): the session acts on GitHub as that [GitHub identity](cli.md#github-identities) — its launcher comes from `overmind --local gh-identity launcher`, and the pane gets `@overmind_gh_identity`. `prs/spawn`, `tasks/spawn` and the stack spawns take it too. `embed` (`[A-Za-z0-9_-]{1,40}`): the app whose [embedded panel](#embed-view) starts it — the pane gets `@overmind_embed`, `list` reports it as `embed`. `slack` (`{ url, minutes, mode?, task? }`, as `/api/slack/link`; on any host whose server reaches `slack.host`, else 400 before anything opens): the session starts with no prompt, is linked as soon as it registers (≤ ~45 s), and `prompt` (max 4000 chars) ends the link's intro as the owner's first request — or, with `slack.from` (a Slack user id: whose mention started it, `slack.spawn`), as that person's, a colleague's unless it is the owner; `dir` may start with `~/` (this host's home); the answer carries the Link as `slack`. A link that fails after the spawn: 502 (400 for a link the bridge refuses), the session stays idle, its prompt unsent |
+| GET | `/api/hosts/:host/harnesses[?refresh=1]` | `{ host, harnesses: [{ id, label, command, installed, models, efforts, defaultModel, defaultEffort }], ghIdentities: [{ name, login }] }` — `overmind --local harness list --json`, cached 10 min (the defaults always fresh from the config); Claude's `models` are `web.models`. An older CLI answers Claude alone; one without `efforts` gets a fixed list |
+| PUT | `/api/hosts/:host/harness-defaults` | `{ harness, model, effort }` → the same, with `host`: the default model / effort a spawn of `harness` uses on that host (`harnesses.<id>.model` / `.effort`, written through `overmind --local config set`, live at once). `null` or `""` clears one. Settings → Models sends it to every host |
 | GET | `/api/hosts/:host/usage[?refresh=1]` | that host's Claude subscription limits: `overmind usage --json` + `host` (see [Subscription usage](#subscription-usage)); 502 with the CLI's reason (no login, endpoint down with nothing cached) |
 | POST | `/api/hosts/:host/prs/checkout` | `{ pr: "owner/repo#123" }` → `{ host, worktree }`: `overmind pr checkout --json` on that host |
 | POST | `/api/hosts/:host/prs/seen` | `{ pr: "owner/repo#123" }` → `{ host, pr, seenAt }`: `overmind pr seen --json` on that host — its @mentions of you so far are seen |
@@ -411,17 +458,30 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | POST | `/api/hosts/:host/tasks/status` | `{ task, status }` → `{ host, task }`: `overmind task status --json` on that host — moves the task (for everyone) |
 | POST | `/api/hosts/:host/tasks/spawn` | `{ task, dir, prompt?, name?, model?, harness? }` → `{ host, task, spawn }`: a new session in `dir` (validated like `/spawn`) whose first prompt is the task's `contextLine` (`overmind task show --json`) + `prompt`. Starts an agent |
 | GET/POST | `/api/hosts/:host/focus` | that host's `focus status`: `{ host, active, remainingMs, endsAt, apps, stale }`; POST `{ on, minutes? }` runs `focus start [minutes]` / `focus stop` (a no-op when already so) and answers the new status. 501 when that host has no `focus` CLI, 502 with its message when it fails |
-| GET | `/api/hosts/:host/spawn-dirs` | that host's stored `spawnDirs` (canonical `{ label, paths }`), whether each of its own paths is a directory there, and what it offers now |
-| PUT | `/api/hosts/:host/spawn-dirs` | `{ spawnDirs, dryRun? }` → validated on that host (its own paths must exist), written with `overmind --local config set spawnDirs`, used at once (no restart); 400 with per-entry `errors`. As powerful as spawn (it widens the spawn allow-list); no auth, like spawn |
+| GET | `/api/hosts/:host/spawn-dirs` | that host's stored `spawnDirs` (canonical `{ label, paths, hidden? }`, `hidden` only when true, keys it does not know kept), whether each of its own paths is a directory there, what it offers now (`offered`) and its hidden dirs now (`hiddenSpawnDirs: [{ label, path }]`) |
+| PUT | `/api/hosts/:host/spawn-dirs` | `{ spawnDirs, dryRun? }` → validated on that host (its own paths must exist; `hidden` must be a boolean, stored only when true; other keys on an entry are kept), written with `overmind --local config set spawnDirs`, used at once (no restart); 400 with per-entry `errors`. As powerful as spawn (it widens the spawn allow-list); no auth, like spawn |
 | GET/PUT | `/api/hosts/:host/repos` | Settings → Git repos: that host's `repos` settings, every repo (`overmind --local repos --json --all`) and its sync timer; PUT writes `repos` with `overmind --local config set` |
 | GET | `/api/hosts/:host/jobs` | `{ host, jobs }`: that host's [bots](cli.md#bots) (the API keeps their old name, jobs), `overmind --local jobs --json` (each with its latest run and live sessions, see [cli.md](cli.md#bots)); a prompt file also gets `prompt.abs` — `~` expanded on that host — `prompt.root` — its git checkout, else its directory — and editor links built like the notes': `prompt.editorUrl` opens the file (at line 1, so a remote path opens as a file), `prompt.rootEditorUrl` its root; null without an editor or ssh alias); 501 when that host's CLI predates `overmind jobs` |
 | GET | `/api/hosts/:host/jobs/:name` | one job with every kept run, newest first, each run's sessions with `parent`: `overmind --local jobs show <name> --json` + `host`; 404 no such job. Names: `[A-Za-z0-9_-]{1,40}` (else 400) |
 | POST | `/api/hosts/:host/jobs/:name/run` | `{ force? }` → `{ host, name, output }`: `overmind --local jobs run [--force] <name>`. Starts an agent (spawn's trust level); 409 `{ error, busy: true }` while a session of the job is working, unless `force` |
 | POST | `/api/hosts/:host/jobs/:name/enabled` | `{ enabled: boolean }` → `{ host, name, enabled, output, job }`: `overmind --local jobs enable\|disable <name>`, then the job as `show` reports it |
+| GET | `/api/hosts/:host/schedule` | `{ host, entries }`: `overmind --local schedule --json` — pending and recent scheduled sessions ([CLI](cli.md#scheduled-sessions)) |
+| POST | `/api/hosts/:host/schedule` | `{ at \| task (+ time), dir, prompt?, name?, model?, harness?, ghIdentity? }` → `{ host, entry }`: `overmind --local schedule add`. `dir` must be in the host's spawn dirs, like a spawn; starts an agent later |
+| POST | `/api/hosts/:host/schedule/:id/cancel` | → `{ host, id, output }`: `overmind --local schedule cancel <id>` |
 | POST | `/api/hosts/:host/repos/sync` · `/repos/service` | `{ names? }` → `overmind --local repos sync --json` (409 while one runs); `{ install }` → `overmind --local repos install-service [--uninstall]` |
+| POST | `/api/hosts/:host/sessions/:id/sleep` | `{}` → `overmind --local sleep <id> --json` (ends it, keeps it dormant), then closes its iTerm tab if it had one |
 | POST | `/api/hosts/:host/sessions/:id/kill` | `{}` → SIGTERM (then SIGKILL) Claude, then kill its tmux session (or just its window when the session has others) / close its iTerm tab |
 | GET | `/api/groups` | the Board view's groups: `{ enabled, host, intervalMinutes, running, updatedAt, lastRun, groups: [{ id, label, description, source, members: [{ host, id, dormant? }] }] }` (`dormant: true` only on a member that is dormant on its host; never set from stored groups, so the UI also cross-references `GET …/dormant`); served by the grouping host, proxied by every other server (`enabled: false` when nobody runs it) |
 | GET | `/api/inbox` | the [inbox](#inbox): `{ enabled, host, error?, updatedAt, brief: { text, at, model } \| null, sources: { github?, productive?, sessions?, comms? : { at, ok, error, count, nextAt?, running? } }, items: [{ id, source, kind, section, title, ask, url, href, from, at, firstSeen, effort, meta }] }` — served by `inbox.host`, proxied by every other server (`enabled: false` when none is set) |
+| GET | `/api/slack` | [Slack links](#slack-links): `{ enabled, host, error?, socket: { connected, error }, bot: { userId, team, url }, owner, links: [Link], ended: [Link], bridges? }` (with `slack.bridges`: `links` / `ended` of every bridge, `bridges: [{ host, enabled, error?, socket, bot }]`; `host`, `socket`, `bot` stay `slack.host`'s) — Link = `{ id, host, session, sessionName, channel, threadTs \| null, permalink, task, mode, createdAt, until \| null, minutes \| null, pending, delivered, replies, endedAt, endReason, startedBy, blocked }` (`blocked`: `{ at, what }` while its session waits on the owner and the thread was told, else null; `until: null`: no end, it lasts until unlinked; `minutes`: the duration it was linked for, null = no end; `startedBy`: `{ user, name, owner }` when a mention started its session, else null); `spawn`: this bridge's `slack.spawn` (`{ host, dir, model, harness, ghIdentity, mode, task, minutes, from }`, `host` resolved) when it opens sessions on a mention, else null; `bot.name`: the app's bot user name; with `slack.bridges` each of `bridges` carries its own `spawn`; served by `slack.host`, proxied by the others (`enabled: false` when none is set) |
+| POST | `/api/slack/link` | `{ host, session \| pane \| tmuxSession, url \| user, minutes (1–10080, or like `2h`, `2d`, `1w`, or `forever`: no end), task?, mode?: mention \| proactive, first? }` (`user`, or a `url` that is not `http…`: a person — `@name` / name / `U…` — and the link is the app's DM with them; the Link then has `dm: { user, name }`) → Link (`renewed: true` when that session already followed that thread). 400: a bad link or duration, a session on another host, a conversation the app cannot see; 404: no such session |
+| PUT | `/api/slack/spawn` | `{ bridge? (default `slack.host`), spawn: { host?, dir?, model?, harness?, ghIdentity?, minutes?, mode?, task?, from? } \| null }` → that bridge's `/api/slack` status: sets its `slack.spawn` (`overmind config set`, only the fields given) and applies it at once, no restart; `null` turns it off (Settings → Slack). Served by the bridge, proxied there once. 400: a bad duration / mode / `from`, a `host` that is neither the bridge nor a peer; 404: an unknown bridge |
+| POST | `/api/slack/links/:id/unlink` | end the link now → Link |
+| POST | `/api/slack/links/:id/relink` | `{ minutes? }` → Link: link that link's session to the same thread / conversation / DM again, with the same instructions and mode (an ended link, from `ended`; an active one is renewed). No `minutes` = the duration it had. 404: no such link or the session is gone |
+| POST | `/api/slack/reply` | `{ link, text, thread?, pane? \| session? }` → `{ ok, link, channel, ts, threadTs, permalink }`: post in the linked thread (`ts`: the new message's own; `permalink`: null when Slack would not give one). 403: `pane`/`session` is not the linked session; 410: the link has ended |
+| POST | `/api/slack/history` | `{ link, cursor?, limit? (1–200, 50), oldest?, latest?, pane? \| session? }` → `{ link, channel, threadTs, order: "newest first" \| "oldest first", messages: [Message], nextCursor \| null }`: the linked conversation (`conversations.history`; a thread link: `conversations.replies` of its thread). Message = `{ ts, threadTs, user, name, owner, you, session, bot, subtype, text (plain), replies, latestReply, files: [{ id, name, mimetype, size }] }`. `session`: the name of another session that posted it through the same app (then `you` is false), else null. 403 / 410 as `reply`; 429: Slack's rate limit |
+| POST | `/api/slack/thread` | `{ link, ts, cursor?, limit?, pane? \| session? }` → the same shape, oldest first (Slack: the first message, then the latest replies; `nextCursor` pages back to earlier ones): one thread of the linked conversation (a thread link: its own only, else 403) |
+| POST | `/api/slack/file` | `{ link, file, pane? \| session? }` → `{ link, id, name, mimetype, size, data (base64) }`: a file shared in the linked conversation (its `files.info` shares; a thread link: in its thread, else 403), at most 20 MB (413). Needs `files:read` |
 | POST | `/api/inbox/refresh` | Scan now: start a Slack + mail scan (also outside work hours; its brief skips the `briefMinutes` wait) and re-read every other source; answers the GET shape |
 | POST | `/api/inbox/dismiss` | `{ id }` → the item is done: off the list until its source drops it — a Slack / mail item, a session or a PR mention comes back on newer activity; answers the GET shape (404: no such item) |
 | PUT | `/api/inbox/settings` | `{ scanMinutes?, workHours?, workDays? }` (15–1440 min; `[from, to)` hours; weekdays 0–6) → `overmind config set inbox.<key>` on the inbox host, live at once; answers the GET shape, whose `settings` carries the three |
@@ -441,13 +501,26 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | GET | `/api/hosts/:host/sessions/:id/files/raw?path=…[&download=1]` | the file itself, streamed (also through a peer); text/markdown over 5 MB only as a download |
 | GET | `/api/hosts/:host/sessions/:id/complete?kind=skills\|files\|brain` | composer autocomplete, listed on the session's host (cached ~10 s): `skills` → `{ skills: [{ name, description, source: builtin\|user\|project\|plugin, argumentHint? }] }` (Claude Code's built-in commands, `~/.claude/skills` + `commands`, the cwd's and its ancestors' `.claude/skills` + `commands`, enabled plugins as `plugin:name`); `files` → `{ files, truncated }` (the `.md` / `.plain` files under the cwd: `git ls-files`, else a walk); `brain` → `{ available, notes: [{ ref, path, title? }] }` (the markdown under `brain_root:` in `~/.brainrc`; `ref` = file name, or path when two share it). 400 bad kind |
 | POST | `/api/hosts/:host/sessions/:id/files/open` | `{ path }` → opens it with its default app **on that host** (`open` / `xdg-open`; runnable files are revealed in their folder instead) |
-| GET | `/api/hosts/:host/sessions/:id/diff[?base=<ref>&since=<fingerprint>]` | the diff reviewer: the session's worktree (tracked edits + untracked files) against the merge-base of HEAD with `base` (default branch by default) → `{ host, id, root, branch, base: { ref, sha }, tree, fingerprint, unchanged, files: [{ path, oldPath, status, additions, deletions, hunks: [{ …, lines: [{ t, o, n, text }] }] }], stats, truncated }`; with `since` equal to the current `fingerprint` → `unchanged: true` and no `files` (cheap polling). 409 outside git |
+| POST | `/api/hosts/:host/sessions/:id/files/plain` | `{ path }` of a servable `.plain` file → `{ root, files: [abs], truncated }`: every PlainLang module of its git checkout (tracked + untracked, not ignored; else its directory's), at most 2000 — the UI looks a term up in the modules it imports / requires, then in the rest |
+| GET | `/api/hosts/:host/sessions/:id/diff[?base=<ref>&since=<fingerprint>]` | the diff reviewer: the session's worktree (tracked edits + untracked files) against the merge-base of HEAD with `base` (default branch by default) → `{ host, id, root, branch, base: { ref, sha }, tree, fingerprint, unchanged, files: [{ path, oldPath, status, additions, deletions, hunks: [{ …, lines: [{ t, o, n, text }] }], plain? }], stats, truncated }` — a `.plain` (PlainLang) file also carries `plain: { old, new }`, its whole text at the base and now (null when absent or over 512 KB), for the reviewer's Spec view; with `since` equal to the current `fingerprint` → `unchanged: true` and no `files` (cheap polling). 409 outside git |
 | GET | `/api/hosts/:host/sessions/:id/diffs[?since=<fingerprint>]` | the diff reviewer over **every checkout the session works in**: its cwd's, then the checkouts holding the files it worked on (tool inputs from its transcript, most recent first, at most 12, never `$HOME`) — a session in a meta repo editing several worktrees sees them all → `{ host, id, cwd, fingerprint, unchanged, repos: [{ root, label (relative to the cwd when inside it, else `~/…`), branch, head, base, tree, fingerprint, files, stats, truncated } \| { root, label, error }] }`; `since` = the combined fingerprint → `unchanged: true` without `repos` |
 | GET | `/api/hosts/:host/sessions/:id/review` | the diff reviewer's comment threads → `{ host, id, threads: [{ id: "c-…", path, side: new\|old, start, end, code, status: draft\|sent, resolved, reviewId, entries: [{ body, sentAt, state: draft\|sent\|queued\|working\|done, replies: [{ text, ts, final }] }] }], reviews, drafts }`; every comment / reply was typed into the session with its marker `[review c-…]`, and the replies are read back from the transcript (the assistant messages after the marked prompt, up to the next prompt) and kept in `<state>/overmind/reviews/<session_id>.json` on the session's host |
 | POST | `/api/hosts/:host/sessions/:id/review/threads` | `{ path, side, start, end, code: [lines], body, draft }` (+ `root`: the checkout, absolute — the prompt names the file relative to the session cwd, `display`) → a thread; `draft: false` types the comment (the lines quoted, fenced) into the session now, `draft: true` keeps it for submit → `{ …, thread }`. Types into the agent like `send` |
 | POST | `/api/hosts/:host/sessions/:id/review/threads/:thread/reply` | `{ body }` → a follow-up typed into the session with the thread's marker; 409 on a draft |
 | PUT / DELETE | `/api/hosts/:host/sessions/:id/review/threads/:thread` | `{ body?, resolved? }` (body: drafts only, else 409) / remove the thread from the review (what was sent stays in the conversation) |
 | POST | `/api/hosts/:host/sessions/:id/review/submit` | `{ body? }` → every draft in one prompt (the overall note, then each comment with its marker and lines); 409 without drafts |
+| POST | `/api/hosts/:host/sessions/:id/ask` | `{ question, root?, path?, side?, start?, end?, code? }` → `{ host, id, ask: { id: "q-…", status: running\|done\|error\|cancelled, question, label, text, activity, error, costUsd, forked, startedAt, endedAt } }`: a side question about lines of the diff, answered by `claude -p --resume <id> --fork-session --no-session-persistence` in the session's cwd with read-only tools (Read, Grep, Glob) — it knows the conversation, but nothing is typed into the session and no transcript is written. Kept in memory on the session's host only (30 min after it ends); at most 3 running per host (429). Claude sessions only (409) |
+| GET / DELETE | `/api/hosts/:host/asks/:ask` | poll a side question (`text` grows while `status: running`; the final answer once `done`) / stop and forget it; 404 once forgotten |
+| GET | `/api/hosts/:host/prs/:owner/:repo/:n/diff[?since=<fingerprint>&refetch=1]` | the diff reviewer over a PR **without a session or worktree**, from this host's clone (`local.repoPath` of `overmind prs`): `git fetch origin +refs/pull/<n>/head:refs/overmind/pr/<n>/head +refs/heads/<base>:refs/overmind/pr/<n>/base` (at most once a minute; `refetch=1` now), diffed from their merge-base — the checkout, index and branches stay untouched → `{ host, id: null, cwd, pr: { owner, repo, number, title, url, author, headBranch, baseBranch, headOid, draft }, fingerprint, unchanged, repos: [one checkout, as in …/diffs] }`; 404 when the PR is not in this host's list, 409 without a clone |
+| GET / POST | `/api/hosts/:host/prs/:owner/:repo/:n/notes` | review notes on the PR, kept in Overmind (`<state>/overmind/pr-notes/<owner>__<repo>__<n>.json`) in the thread shape of …/review (`status: draft`, one entry, `posted: { url, at } \| null`) → `{ host, pr, threads, reviews: [], drafts }` (drafts: not on GitHub); POST `{ path, side, start, end, code, root?, base?, body }` → `{ …, thread }` |
+| PUT / DELETE | `/api/hosts/:host/prs/:owner/:repo/:n/notes/:note` | `{ body?, resolved? }` (body: 409 once posted) / remove it (GitHub keeps a posted comment) |
+| POST | `/api/hosts/:host/prs/:owner/:repo/:n/notes/:note/post` | `{ headOid }` → the note as a GitHub review comment on its lines (`gh api …/pulls/<n>/comments`, RIGHT = new side, LEFT = old; a range sets `start_line`), as this host's `gh` login; 502 with GitHub's reason when refused |
+| POST | `/api/hosts/:host/prs/:owner/:repo/:n/notes/handoff` | `{ summary? }` → like `prs/spawn`: the PR's worktree (made when missing) and a session there whose first prompt is the PR's context line + every unresolved note with its lines; 409 without notes |
+| POST | `/api/hosts/:host/prs/:owner/:repo/:n/ask` | `{ question, path?, side?, start?, end?, code?, head?, base? }` → a side question (as …/ask) in a fresh `claude -p` in the clone (no session to fork), told the PR and to read its files with `git show <head>:<path>`; read-only tools plus `git show / diff / log / blame` |
+| GET / POST | `/api/hosts/:host/sessions/:id/queue` | the prompt queue → `{ host, id, items: [{ id: "q-…", text, createdAt }], paused, held }` / `{ text }` → adds one (`{ …, item }`; 409 past 20). Queued prompts go in one per run, only once the session is `idle` and its `updated_at` has moved past the last delivery (never while `waiting`); kept in `<state>/overmind/prompt-queue.json` on the session's host. The `messages` response carries the same `queue` (null when empty) |
+| POST | `/api/hosts/:host/sessions/:id/queue/pause` | `{ paused }`: a pause holds the queue for the run under way; when that run ends it clears itself and the queue is `held` until the next run ends. `paused: false` resumes at once (the next idle sends) |
+| PUT / DELETE | `/api/hosts/:host/sessions/:id/queue/:item` | `{ text }` edit / remove one |
+| POST | `/api/hosts/:host/sessions/:id/queue/:item/send` · `…/:item/move` | type it in now, whatever the session is doing / `{ to }` new index |
 | GET | `/api/hosts/:host/sessions/:id/brief` | the session's [brief](#session-briefs): `{ host, id, exists, markdown, parsed: { summary, resources, todos, plan }, updated, editedAt, generatedAt, generatedThrough, generating, enabled, continuePrompt, absCwd, gitRoot, worktrees, editor, editorUrl }` — an empty skeleton (`exists: false`) before there is one; a gone session's brief is still served by its full id. `parsed.plan` is a **deprecated** alias of `parsed.todos` (the section was called Plan), kept for one release |
 | GET | `/api/hosts/:host/notes/{tree,search,file,raw}` | the notes explorer (`web.notes`): the file list, `?q=` search with snippets + match ranges, `?path=` one note (frontmatter split, encrypted blocks withheld), `?path=` an image; 501 when the host has no `web.notes.root` |
 | PUT | `/api/hosts/:host/sessions/:id/brief` | `{ markdown }` → a human edit (sets `editedAt`) → the same shape |
@@ -472,6 +545,42 @@ the `/stacks/:id` routes a stack id (or anything `overmind stack` resolves). The
 full contract (status codes, limits, timeouts) lives with the server: [web/README.md](../web/README.md),
 [web/ARCHITECTURE.md](../web/ARCHITECTURE.md).
 
+## Embed view
+
+`#/embed?host=<host>&dir=<dir>[&theme=dark|light][&app=<name>]` is Overmind's session chat for one directory,
+made for another app to frame (an `<iframe>` panel: Fin's assistant, later Brain) instead of
+each app writing its own chat UI. It is a separate tree in the web UI (`screens/EmbedScreen.tsx`,
+`lib/embed.ts`): no sidebar, no Overmind navigation, no scratchpad, stacks or diff reviewer.
+
+- **List**: the live sessions on `host` whose cwd is `dir` or beneath it (worktrees inside the
+  repo), latest first, and **New session**: the New session form with host and directory fixed
+  (agent, model, first prompt, attachments, voice as usual) → `POST /api/hosts/:host/spawn`.
+- **Session**: the mobile session screen (`#/s/:host/:id`, chat / terminal, composer, AskUserQuestion
+  answers, attachments, voice, the details drawer with Close) with Back to the list. Sessions on
+  other hosts are not opened.
+- **`dir`**: absolute or `~/…` (expanded with the host's `home`, now part of each `/api/overmind`
+  host; an older server matches a spawn dir with the same tail). It must be one of that host's
+  `spawnDirs` (offered or `hiddenSpawnDirs`) or beneath one, else the view shows an error and offers no spawn — the same rule
+  the server applies to `/spawn`.
+- **`app`**: the framing app's label (`[A-Za-z0-9_-]{1,40}`, default the dir's last folder).
+  Sessions spawned from the view carry it (`embed` on their `list` row): Overmind's own list sets
+  them aside like bot sessions — out of every status filter but **Apps** (and their app chip on
+  rows / cards), except while one waits on you. A session restored after a reboot loses it.
+- **`theme`**: the framing app's mode; without it the OS preference. It never changes the
+  viewer's Overmind theme setting.
+- **URL form**: the hash router moves a route's query into the page's query string, so the
+  canonical URL is `https://<overmind>/?host=…&dir=…[&theme=…]#/embed` (`#/embed?…` works and is
+  rewritten to it). The query stays while the frame moves to `#/s/…`, which is how a reload
+  inside the frame stays in the embed view. Every move inside the view replaces the history
+  entry, so the framing page's Back button stays its own.
+- **Framing**: the server sends no `X-Frame-Options` / `frame-ancestors`, so any page that can
+  reach it can frame it — like the rest of the API it relies on a private network (no auth).
+  The frame talks to its own origin only (same-origin API calls; no cookies), so nothing
+  cross-origin is needed. Voice needs the frame to allow it: `allow="microphone"`. There is no
+  `postMessage` contract.
+- **Desktop shell**: a profile app frames it only with the Overmind origin in its
+  `frameOrigins` ([desktop.md](desktop.md#other-apps-profiles)).
+
 ## Voice operator
 
 `#/operator` (web UI): talk to the overmind. The operator is a Claude session the web server starts
@@ -487,7 +596,17 @@ on request (POST `/api/operator`) in tmux session `operator`, in its own workspa
 
 The screen records with `POST /api/transcribe`, sends the text with the ordinary `send` route,
 polls `messages`, and reads each new final reply aloud with `POST /api/speak` — or, without a
-speech key (or after it fails), the device's own voice (Web Speech API). Sessions that start
+speech key (or after it fails), the device's own voice (Web Speech API). A reply is read as soon
+as its final message is in the transcript (Claude writes a message only once it is complete), not
+when the status turns idle, and it is voiced in pieces (`speechChunks`): a short first piece of one
+or two sentences, then pieces of up to ~500 characters, all requested at once and played in
+order — the voice starts in about a second instead of after the whole reply is synthesized
+(roughly 1 s per 90 characters). The brief points the operator at `./api GET /overmind` (the server's
+snapshot of every host, instant; an unreachable host is `ok: false`) rather than
+`overmind list --all-hosts` (ssh to each host, which waits out the connect timeout on a machine that
+is asleep, and sees only hosts with an ssh destination), gives one-command recipes for the common
+questions, and keeps replies under ~400 characters. Measurements, and what running it on Codex or pi would take:
+[operator.md](operator.md). Sessions that start
 waiting on you are announced while the screen is open (from the overmind poll, no model call).
 The operator is found by its cwd. Its row in `/api/overmind` carries `operator: true` and the UI
 keeps it out of session lists (the CLI still shows it). `web.operator.hosts` picks one operator
@@ -582,6 +701,86 @@ day. A failing source keeps its last list and reports the error; a failed scan w
 slot. State (`<overmind state>/inbox.json`): the scan's items and time, the brief, when each item was
 first seen (the UI's "new" dot).
 
+## Slack links
+
+A session, for a while, talks with the people in one Slack thread / channel / DM (`web/lib/slack.mjs`,
+[CLI](cli.md#slack-links), Details → Slack in the web UI). One host's server runs the bridge
+(`slack.host`, best the always-on one); the others proxy `/api/slack` there. A host with its own
+Slack app runs its own bridge: `slack.bridges.<host> = <host>` on the other servers sends a link or
+reply for that host's sessions there (a bridge refuses one proxied to it for a host it does not
+serve, so a session is never linked by two apps); unlink / relink go to the bridge that has the
+link, and the status lists every bridge's links. Sessions on any host
+can be linked: the bridge lists a link's host's sessions (`GET /api/overmind?local=1` on that peer)
+and types into them through it (`POST …/sessions/:id/send`); a proxied reply carries the proxying
+server's name as `host`, and the reply's pane is checked on that host.
+
+- **Slack App, Socket Mode.** The bridge opens a WebSocket to Slack (`apps.connections.open` with
+  the app-level token `SLACK_APP_TOKEN`, `xapp-…`, scope `connections:write`), acks every envelope
+  and reconnects when Slack asks. No public URL, so it works behind Tailscale. The Web API calls use
+  the bot token `SLACK_BOT_TOKEN` (`xoxb-…`; scopes `channels:history`, `groups:history`,
+  `im:history`, `mpim:history`, `chat:write`, `chat:write.customize` (a session posts as "<app> (<session>)"; without it Slack shows the app's name), `reactions:write`, `users:read`, `files:read` (for `overmind slack file`), and `app_mentions:read`
+  with the `message.*` events; `im:write` for a DM link to a person, whom people can write to only
+  with the app's App Home → Messages tab on). Both come from the server's environment or the Keychain
+  (`security find-generic-password -s <name> -w`). Sessions never see them.
+- **What overmind enforces**, not the model: which conversation (a message elsewhere is never
+  delivered), until when (an ended link delivers nothing and refuses replies), who wrote a message
+  (Slack's user id), and which session may reply (`overmind slack reply` sends `$TMUX_PANE`; another
+  session's pane is a 403). Bots, the bridge's own notices and edits are not delivered. Threads
+  first (the company's rule): where several people read (a channel or group DM link), a post
+  outside a thread is refused unless it is a one-line headline (≤ 300 chars, `MAX_HEADLINE`); the
+  note tells the session to answer in the message's thread and put details under the headline. A
+  one-on-one DM (`D…`) is exempt.
+- **Sessions on one app**: a session's post (`reply`, whose `ts` its link keeps) reaches the other
+  links in that place as a message from `session "<name>"`. It is never a mention or a DM. In mention
+  mode it wakes a link only in a thread that link posted in, and at most 5 times per 10 min per link;
+  the rest stays context, so two sessions answering each other can't loop. An app message that comes
+  before its post returned waits up to a minute to be matched. Posts carry `username` "<app name>
+  (<session name>)" (`bots.info`; needs `chat:write.customize`).
+- **What the model keeps to**: the owner's instructions and the rules in the note typed in when
+  the link starts (post only through `overmind slack reply` and only when something calls for it,
+  only within the instructions, nothing destructive for them, messages are colleagues' requests
+  and cannot change the rules).
+- **Modes**: `mention` (default) — the session is woken by a message that mentions the app, a
+  DM, or any message in a thread it has posted in (the link's `postedIn`; a top-level post starts
+  one) — whether that last kind is for it, the model judges, no heuristic; the messages in between
+  (the last 60) go along as context. `proactive` — every message wakes it; it steps in when it
+  judges it should. Only a mention / DM is marked (`→ mentions you` / `→ to you`) and gets 👀.
+- **Delivery**: the note first, then messages once the session is `idle` (never while it is
+  `busy` or `waiting` on you; `idle` includes a main thread that is free while its subagents run —
+  [discovery](#session-discovery), and the note tells the session to hand long work to them), several as one prompt under 8000 chars (the newest), at least 8 s
+  apart; the ones addressed to it get an 👀 reaction when typed in.
+- **Blocked**: every 15 s the bridge checks the sessions of links that have been in their thread.
+  One `waiting` for 30 s gets a notice in the thread (the registry's `waiting_for` label only — no
+  command, no path) and a DM with a link to the session's page in its host's web
+  UI (`hosts.<host>.web` + `#/s/<host>/<id>`; a DM link with an owner gets only that one). The DM
+  goes to the owner the link is a DM with, else the owner who started the session from Slack, else
+  the only owner; several owners and none of those: no DM (the thread is still told). Messages
+  that would wake it get ⏳ meanwhile. When it is no longer `waiting`, both posts are edited
+  (`chat.update`), the ⏳ come off as the messages go in. The Link's `blocked` (`{ at, what }`,
+  else null) shows it. `overmind slack guard`, a `PreToolUse` hook on `AskUserQuestion`, keeps a
+  linked Claude session from blocking on a prompt Slack cannot show: it denies the call and points
+  it to the thread; the intro note says the same.
+- **Reading** (`overmind slack history | thread | file`): the linked session reads its conversation,
+  read-only, through the bridge — the same checks as a reply (its own link, while linked), and only
+  that conversation (a thread link: only its thread; a file only when shared there).
+- **Starting from Slack** (`slack.spawn` on the bridge's server): a person allowed by `from`
+  mentions the app in a channel thread (or top-level: its own thread) that no active link follows
+  — a mention in a followed thread goes to that session as before; DMs never start one. The bridge
+  reacts 👀 and spawns on `slack.spawn.host` (`POST /api/hosts/:host/spawn` with `slack: { url,
+  minutes, mode, task, from }`), the message without the mention as the prompt. The intro says who
+  asked; a colleague's request stays a colleague's (the rules above hold). A failed spawn is said
+  in the thread. One spawn per thread at a time; an event Slack sends twice opens one session.
+  The session runs as the host's user — with `from: "anyone"`, everyone in those channels can make
+  it act on that host. The app needs the `message.channels` (and, for private channels,
+  `message.groups`) events. Settings → Slack (`PUT /api/slack/spawn`) turns it on or off per bridge
+  and applies at once; so does a change to the file (`overmind config set`, a hand edit), within a few seconds; `null` turns it off.
+- **Live settings**: `slack.owner`, `slack.owners` and `slack.spawn` are re-read when the config file changes (the
+  server checks every 5 s); a link marks whoever is the owner now. `slack.host` and `slack.bridges`
+  are read at start: changing them needs a web server restart (`overmind config set` says so).
+  A link's `sessionName` follows the session's name (`/rename`) whenever the bridge lists it.
+- **State** (`<overmind state>/slack-links.json`, 0600): the active links with their undelivered
+  messages and the last 20 ended ones.
+
 ## Session briefs
 
 A brief is a small markdown doc per session: 1–3 sentences on exactly what the session is doing,
@@ -616,6 +815,7 @@ git: Git: `fix-login` · worktree `~/Code/project-wt`
 Fixing the login redirect loop in ~/Code/project on branch fix-login; the fix is in review.
 
 ## Resources
+- Origin: [Task 42: login loop](https://app.example.dev/tasks/42)
 - Git: `fix-login` · worktree `~/Code/project-wt`
 - PR: [owner/repo#12](https://github.com/owner/repo/pull/12)
 - File: `src/login.ts`
@@ -645,8 +845,9 @@ Fixing the login redirect loop in ~/Code/project on branch fix-login; the fix is
   `[X]`. A `## Plan` section (the name before Todos) is read as `## Todos` and written back as
   `## Todos` on the next write.
 - Resources: one bullet per item, `- <Kind>: <value>`, value a markdown link `[label](url)` or a
-  code span `` `path` ``. Kinds: `PR`, `Issue`, `Artifact`, `Spec`, `File`, `Git`, `Link` (and the
-  legacy `Branch`, `Worktree`). Any other bullet (no kind, free text) is a hand-written line and
+  code span `` `path` ``. Kinds: `Origin` (where the work came from: a task, a Slack thread, an
+  issue), `PR`, `Issue`, `Artifact`, `Spec`, `File`, `Git`, `Link` (and the legacy `Branch`,
+  `Worktree`). Any other bullet (no kind, free text) is a hand-written line and
   kept as is. An item's **key** is its URL (fragment and trailing `/` dropped), else its path
   (`branch:<name>` / `worktree:<path>` for the legacy kinds); every `Git` line has the key `git`.
   Paths are relative to the session's cwd when inside it, else `~/…`, else absolute.
@@ -662,7 +863,9 @@ Fixing the login redirect loop in ~/Code/project on branch fix-login; the fix is
 - Todos: `- [ ] todo` / `- [x] todo` lines; other lines in the section are kept.
 
 **Merge rules** (every writer): never drop a line a human wrote; new auto items are appended
-unless their key is already present or in `dismissed` (the Git line: replaced in place, above); a
+unless their key is already present or in `dismissed` (the Git line: replaced in place, above; an
+`Origin` item whose link is already there as an auto `Link:` / `Issue:` line turns that line into
+`Origin:`); a
 human edit (PUT) that removes a resource line adds its key to `dismissed`; the machine keys
 (`generatedThrough`, `generatedAt`, `todos`, `dismissed`, `git`) are the writer's, not taken from
 an edited body.
@@ -673,7 +876,10 @@ an edited body.
    (Edit / Write / MultiEdit / NotebookEdit targets, shell redirects and `tee`; temp dirs skipped;
    `SPEC.md`, `FINAL.md` and files under `specs/` are `Spec`), PR/issue URLs printed by
    `gh pr|issue create`, artifact URLs returned by an Artifact publish, PR/issue/artifact/other
-   links in the assistant's text, PR/issue/artifact links in the user's prompts; the Git line
+   links in the assistant's text, PR/issue/artifact links in the user's prompts; `Origin` = the
+   other links (issue, task, Slack thread, …) of the session's **first** prompt, plus the `Origin:`
+   list of a brief that prompt hands over (so the origin carries down a chain of continued
+   sessions — as do the handed brief's PR links); the Git line
    (branch, checkout root, linked worktree or not) from one `git rev-parse` in the cwd. Links to this machine or the private network (IP
    literals, dotless or `.local`/`.ts.net` hosts), schema hosts, templated or `…`-truncated URLs are
    dropped. Read-only tool output (a file that lists PRs) never counts.
@@ -688,6 +894,34 @@ an edited body.
    authoritative and to update, not rewrite. The answer must be a `## Summary` (≤ 1200 chars) and
    optionally a `## Todos` of checkboxes (`## Plan` is accepted too); anything else keeps the old brief. An edit that lands
    while the model runs wins (the answer is discarded).
+
+**Continue prompt** (`continuePrompt` in `web/lib/brief-format.mjs`, `continue_prompt` in
+`core::brief`; byte-identical, pinned by `testdata/briefs/sample.continue.txt`) — the first prompt
+of a new session that picks the work up. It carries only what the next session needs to find the
+work, not the session's detail:
+
+```text
+Continue the work of session <id> on <host> in <cwd>. Its brief:
+
+<Summary>
+
+Origin:
+- [Task 42: login loop](https://app.example.dev/tasks/42)
+
+PRs:
+- [owner/repo#12](https://github.com/owner/repo/pull/12)
+
+Worktree: `~/Code/project-wt` (branch `fix-login`)
+
+---
+```
+
+`Origin:` / `PRs:` / `Worktree:` (a linked worktree only) are left out when empty; files,
+artifacts, links and todos are never included. The **task** for the new session goes below the
+`---` line (the UI puts the caret there; `overmind spawn --from <s> "<task>"` appends it); sent with
+nothing below it, the task is `Pick up where it left off. Check the current state (git status, the
+PRs above) before changing anything, and tell me briefly what you found first.` Extraction treats
+the text below the separator as the user's own prompt and the part above it as the handed brief.
 
 **Budget** — model calls are what costs, so every automatic one has to pass all of:
 
@@ -922,6 +1156,15 @@ set of this machine's dormant session ids; for another host, `overmind -H <host>
 the `sessionId`s under `dormant[].sessions`. A dormant session counts as *present*, not gone:
 grouping keeps its assignment and flags the member `dormant: true` ([Smart
 grouping](#smart-grouping)); stack sync doesn't close it and StackView members carry `dormant`.
+
+### Slept sessions
+
+`overmind sleep` (Deactivate in the app, whose dormant list is called Inactive; `core::sleep`) is a Close that keeps the session dormant. It
+records the snapshot, ends the agent and its tmux window/session, records again (the session now
+lingers as just ended) and `snapshot::put_to_sleep` moves that entry — the whole tmux session when
+it went with it, else the lone Claude session — into `dormant`, `since` = now, `slept: true`. From
+there it is like any dormant entry (restore, `enter`, forget, groups, stacks), except that
+`restore --all` (and so `restore.onBoot`) skips it.
 
 ### Recently closed
 

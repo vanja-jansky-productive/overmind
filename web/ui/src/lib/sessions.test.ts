@@ -5,9 +5,14 @@ import {
   clusterByStack,
   stackRuns,
   findSession,
+  sessionDone,
   findSpawned,
-  hiddenAsScheduled,
+  setAside,
+  isSlackSession,
+  slackLinked,
+  isEmbedSession,
   isJobSession,
+  keepOrder,
   listView,
   matchesSearch,
   sessionHref,
@@ -16,7 +21,9 @@ import {
   statusMeta,
   statusSummary,
   visibleStatusFilters,
+  withoutClosed,
   withoutSession,
+  closedKey,
 } from './sessions'
 
 const s = (over: Partial<Session>): Session => ({ host: 'laptop', session_id: 'id', status: 'idle', ...over })
@@ -46,6 +53,9 @@ test('statusMeta / statusLabel', () => {
   expect(statusMeta('weird').key).toBe('unknown')
   expect(statusMeta(null).label).toBe('unknown')
   expect(statusLabel({ status: 'waiting', waiting_for: ' permission ' })).toBe('needs you · permission')
+  const agent = { id: 'a1', description: 'x', type: null, model: null, background: true, started_at: 1, last_activity_at: null, activity: null }
+  expect(statusLabel({ status: 'idle', background: { agents: [agent, agent], shells: 1 } })).toBe('idle · 2 agents, 1 shell')
+  expect(statusLabel({ status: 'idle', background: { agents: [], shells: 0 } })).toBe('idle')
   expect(statusLabel({ status: 'waiting', waiting_for: null })).toBe('needs you')
   expect(statusLabel({ status: 'busy', waiting_for: 'x' })).toBe('working')
 })
@@ -53,12 +63,38 @@ test('statusMeta / statusLabel', () => {
 test('listView: flat, sorted by last activity, counts per status', () => {
   const v = listView(overmind, {})
   expect(v.sessions.map((x) => x.session_id)).toEqual(['b', 'c', 'a'])
-  expect(v.counts).toEqual({ all: 3, waiting: 1, busy: 1, idle: 1, scheduled: 0 })
+  expect(v.counts).toEqual({ all: 3, waiting: 1, busy: 1, idle: 1, scheduled: 0, slack: 0, embedded: 0 })
+})
+
+test('listView: a prompt moves a session, a turn ending does not', () => {
+  const f: OvermindResponse = {
+    self: 'laptop',
+    hosts: [
+      {
+        name: 'laptop',
+        ok: true,
+        sessions: [
+          // Just finished a turn prompted long ago.
+          s({ session_id: 'done', updated_at: 900, prompted_at: 100 }),
+          s({ session_id: 'asked', status: 'busy', updated_at: 500, prompted_at: 500 }),
+          // No prompt known (Codex / pi, or none yet): its activity stands in.
+          s({ session_id: 'codex', updated_at: 300 }),
+        ],
+      },
+    ],
+  }
+  expect(listView(f, {}).sessions.map((x) => x.session_id)).toEqual(['asked', 'codex', 'done'])
+})
+
+test('keepOrder: the frozen order holds, new sessions go on top, gone ones drop', () => {
+  const now = ['c', 'a', 'new', 'b'].map((id) => s({ session_id: id }))
+  const frozen = ['laptop/a', 'laptop/b', 'laptop/gone', 'laptop/c']
+  expect(keepOrder(now, frozen).map((x) => x.session_id)).toEqual(['new', 'a', 'b', 'c'])
 })
 
 test('listView: host + status + search filters', () => {
-  expect(listView(overmind, { host: 'workstation' }).sessions.map((x) => x.session_id)).toEqual(['c'])
-  expect(listView(overmind, { host: 'workstation' }).counts.all).toBe(1)
+  expect(listView(overmind, { hosts: new Set(['workstation']) }).sessions.map((x) => x.session_id)).toEqual(['c'])
+  expect(listView(overmind, { hosts: new Set(['workstation']) }).counts.all).toBe(1)
   expect(listView(overmind, { status: 'waiting' }).sessions.map((x) => x.session_id)).toEqual(['b'])
   // counts ignore the status filter (the chips show every status)
   expect(listView(overmind, { status: 'waiting' }).counts.all).toBe(3)
@@ -117,6 +153,17 @@ test('withoutSession drops only that session', () => {
   const out = withoutSession(overmind, 'a', '1')
   expect(out.hosts[0].sessions.map((s) => s.session_id)).toEqual(['2'])
   expect(out.hosts[1].sessions).toHaveLength(1)
+})
+
+test('withoutClosed hides recently closed sessions until their deadline', () => {
+  const overmind = {
+    self: 'a',
+    hosts: [{ name: 'a', ok: true, sessions: [{ host: 'a', session_id: '1' }, { host: 'a', session_id: '2' }] }],
+  }
+  const closed = new Map([[closedKey('a', '1'), 1000]])
+  expect(withoutClosed(overmind, closed, 999).hosts[0].sessions.map((s) => s.session_id)).toEqual(['2'])
+  expect(withoutClosed(overmind, closed, 1000)).toBe(overmind)
+  expect(withoutClosed(overmind, new Map([[closedKey('b', '1'), 1000]]), 0)).toBe(overmind)
 })
 
 test('clusterByStack: a stack moves up to its first member, everything else keeps its place', () => {
@@ -178,11 +225,11 @@ test('listView: job sessions only under Scheduled, except waiting ones', () => {
   }
   expect(isJobSession(s({ origin }))).toBe(true)
   expect(isJobSession(s({ origin: null }))).toBe(false)
-  expect(hiddenAsScheduled(s({ origin, status: 'waiting' }))).toBe(false)
+  expect(setAside(s({ origin, status: 'waiting' }))).toBe(false)
 
   const all = listView(f, {})
   expect(all.sessions.map((x) => x.session_id)).toEqual(['job-wait', 'mine'])
-  expect(all.counts).toEqual({ all: 2, waiting: 1, busy: 1, idle: 0, scheduled: 3 })
+  expect(all.counts).toEqual({ all: 2, waiting: 1, busy: 1, idle: 0, scheduled: 3, slack: 0, embedded: 0 })
 
   // "Scheduled" shows only job sessions, waiting ones included.
   const sched = listView(f, { status: 'scheduled' })
@@ -199,10 +246,75 @@ test('listView: job sessions only under Scheduled, except waiting ones', () => {
   expect(visibleStatusFilters({ ...all.counts, scheduled: 0 }, 'scheduled').map((x) => x.id)).toContain('scheduled')
 })
 
+test('embed sessions: set aside like bot sessions, in their own Apps filter', () => {
+  const f: OvermindResponse = {
+    self: 'laptop',
+    hosts: [
+      {
+        name: 'laptop',
+        ok: true,
+        sessions: [
+          s({ session_id: 'mine', status: 'busy', updated_at: 100 }),
+          s({ session_id: 'app-idle', status: 'idle', updated_at: 200, embed: 'fin' }),
+          s({ session_id: 'app-wait', status: 'waiting', updated_at: 300, embed: 'fin' }),
+        ],
+      },
+    ],
+  }
+  expect(isEmbedSession(s({ embed: 'fin' }))).toBe(true)
+  expect(isEmbedSession(s({ embed: null }))).toBe(false)
+  const all = listView(f, {})
+  expect(all.sessions.map((x) => x.session_id)).toEqual(['app-wait', 'mine'])
+  expect(all.counts.embedded).toBe(2)
+  expect(listView(f, { status: 'embedded' }).sessions.map((x) => x.session_id)).toEqual(['app-wait', 'app-idle'])
+  expect(visibleStatusFilters(all.counts, 'all').map((x) => x.id)).toEqual(['all', 'waiting', 'busy', 'idle', 'embedded'])
+})
+
+test('Slack-linked sessions: set aside like bot sessions, in their own Slack filter', () => {
+  const f: OvermindResponse = {
+    self: 'laptop',
+    hosts: [
+      {
+        name: 'workstation',
+        ok: true,
+        sessions: [
+          s({ host: 'workstation', session_id: 'mine', status: 'busy', updated_at: 100 }),
+          s({ host: 'workstation', session_id: 'linked-idle', status: 'idle', updated_at: 200 }),
+          s({ host: 'workstation', session_id: 'linked-wait', status: 'waiting', updated_at: 300 }),
+        ],
+      },
+    ],
+  }
+  const slack = slackLinked([
+    { host: 'workstation', session: 'linked-idle' },
+    { host: 'workstation', session: 'linked-wait' },
+    { host: 'laptop', session: 'mine' },
+  ])
+  expect(isSlackSession(s({ host: 'workstation', session_id: 'linked-idle' }), slack)).toBe(true)
+  expect(isSlackSession(s({ host: 'workstation', session_id: 'mine' }), slack)).toBe(false)
+  // Without the links (Slack off, not loaded yet) nothing is set aside.
+  expect(listView(f, {}).sessions.map((x) => x.session_id)).toEqual(['linked-wait', 'linked-idle', 'mine'])
+  const all = listView(f, { slack })
+  expect(all.sessions.map((x) => x.session_id)).toEqual(['linked-wait', 'mine'])
+  expect(all.counts.slack).toBe(2)
+  expect(listView(f, { status: 'slack', slack }).sessions.map((x) => x.session_id)).toEqual(['linked-wait', 'linked-idle'])
+  expect(visibleStatusFilters(all.counts, 'all').map((x) => x.id)).toEqual(['all', 'waiting', 'busy', 'idle', 'slack'])
+})
+
 test('stackRuns: 2+ adjacent members of one stack form a group; a lone member stays a row', () => {
   const st = { id: 'st-1', label: 'Login fix' }
   const rows = [s({ session_id: 'a', stack: st }), s({ session_id: 'b', stack: st }), s({ session_id: 'c' }), s({ session_id: 'd', stack: { id: 'st-2', label: 'x' } })]
   const runs = stackRuns(rows)
   expect(runs.map((r) => (r.kind === 'stack' ? r.sessions.map((x) => x.session_id).join('+') : r.session.session_id))).toEqual(['a+b', 'c', 'd'])
   expect(runs[0]).toMatchObject({ kind: 'stack', key: 'laptop/st-1' })
+})
+
+test('sessionDone: the mark counts only while the session sits idle on it', () => {
+  const done = { at: 1, note: 'shipped it' }
+  expect(sessionDone({ status: 'idle', done })).toEqual(done)
+  expect(sessionDone({ status: 'busy', done })).toBeNull()
+  expect(sessionDone({ status: 'waiting', done })).toBeNull()
+  expect(sessionDone({ status: 'idle', done: null })).toBeNull()
+  expect(sessionDone({ status: 'idle' })).toBeNull()
+  expect(sessionDone(null)).toBeNull()
 })

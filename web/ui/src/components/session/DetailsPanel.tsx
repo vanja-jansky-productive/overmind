@@ -1,27 +1,28 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  ArrowRightIcon,
-  CopyIcon,
+  FileDiffIcon,
+  GitForkIcon,
   LayersIcon,
   Link2Icon,
   Loader2Icon,
+  MoonIcon,
   PowerIcon,
   RefreshCwIcon,
   SquareTerminalIcon,
-  XIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api, sessionErrorMessage } from '@/api/client'
 import type { Session } from '@/api/types'
 import { BriefSection, type BriefSectionProps } from '@/components/session/BriefSection'
+import { SlackLinkSection } from '@/components/SlackLink'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { useDormant } from '@/hooks/useDormant'
 import { useSessionTitle } from '@/hooks/useTitles'
 import { canAttachInApp, copyWithToast, sessionAttachCommand, sessionAttachLink } from '@/lib/clipboard'
 import { ctxLevel, ctxSummary, shortCwd } from '@/lib/format'
 import { harnessLabel } from '@/lib/harness'
-import { withHint } from '@/lib/shortcuts'
 import { CTX_TEXT } from '@/lib/styles'
 import { cn } from '@/lib/utils'
 
@@ -35,10 +36,10 @@ export interface DetailsPanelProps {
   onClosed: () => void
   /** The brief at the top of the panel. */
   brief: Omit<BriefSectionProps, 'desktop' | 'cancelEditRef'>
-  /** Desktop panel: the ✕ in the top-right corner. */
-  onClose?: () => void
   /** "New session from here…": the form with Hand off / Sibling (absent: no session row yet). */
   onNewFromHere?: () => void
+  /** "Review changes": the diff reviewer (the action row, desktop column and mobile drawer). */
+  onReview?: () => void
   /** Session stacks: the label and the StackBrief sheet (when in one), and "Link…" (put another live session in it). */
   stack?: { label: string | null; onOpen?: () => void; onLink: () => void } | null
 }
@@ -86,8 +87,9 @@ export function DetailsDrawer(p: DetailsPanelProps) {
 
 /**
  * Details: header (name + regenerate, host · cwd, context), the Brief (summary,
- * todos, resources), New session from here…, Session (attach, ids, close). `drawer` = inside the mobile drawer; `panel` = the desktop
- * details column (click-to-confirm wording, ✕ to close, no drawer chrome).
+ * todos, resources), Session (stack, ids). `drawer` = inside the mobile drawer; `panel` = the desktop
+ * details column (click-to-confirm wording, no drawer chrome). Close (⏻) sits top right; the
+ * actions (Review, New from here, Link, Attach) sit above the brief.
  */
 export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel'; cancelEditRef?: React.RefObject<(() => void) | null> }) {
   const panel = p.variant === 'panel'
@@ -107,7 +109,8 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
     }
   }
 
-  // Close: two taps. The first arms (for 5s), the second kills Claude + its terminal.
+  // Close: two taps. The first arms (for 5s) and offers Deactivate beside Close; Close kills
+  // Claude + its terminal, Deactivate does the same but keeps it under Inactive to resume.
   const [armed, setArmed] = useState(false)
   const [closing, setClosing] = useState(false)
   const armTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -121,7 +124,7 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
   }
 
   const closeSession = async () => {
-    if (closing) return
+    if (closing || sleeping) return
     if (!armed) {
       setArmed(true)
       clearTimeout(armTimer.current)
@@ -138,6 +141,25 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
     } catch (err) {
       toast.error('Close failed', { description: sessionErrorMessage(err) })
       setClosing(false)
+      setArmed(false)
+    }
+  }
+
+  const dormant = useDormant()
+  const [sleeping, setSleeping] = useState(false)
+  const deactivateSession = async () => {
+    if (sleeping || closing) return
+    clearTimeout(armTimer.current)
+    setSleeping(true)
+    try {
+      const res = await api.sleep(p.host, p.id)
+      toast.success(`Deactivated ${res.name || res.title || p.id.slice(0, 8)}`, { description: 'Resume it from Inactive' })
+      dormant.refresh()
+      onOpenChange(false)
+      p.onClosed()
+    } catch (err) {
+      toast.error('Deactivate failed', { description: sessionErrorMessage(err) })
+      setSleeping(false)
       setArmed(false)
     }
   }
@@ -178,62 +200,90 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
                 </p>
               ) : null}
             </div>
-            {panel && p.onClose ? (
-              <Button variant="ghost" size="icon" aria-label="Close details" title={withHint('Close', 'inspector')} onClick={p.onClose} className="-mr-2 size-10 shrink-0 rounded-xl">
-                <XIcon className="size-[1.125rem]" />
+            <div className="flex shrink-0 items-center gap-1.5">
+              {armed || sleeping ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Deactivate session"
+                  title={`Deactivate: ends ${harnessLabel(s?.harness)} and its ${s?.backend === 'iterm' ? 'iTerm tab' : 'tmux window'}, keeps it under Inactive to resume later`}
+                  disabled={closing || sleeping}
+                  onClick={() => void deactivateSession()}
+                  className="h-8 rounded-lg px-2.5"
+                >
+                  {sleeping ? <Loader2Icon className="animate-spin" /> : <MoonIcon />}
+                  Deactivate
+                </Button>
+              ) : null}
+              <Button
+                variant="destructive"
+                size={armed ? 'sm' : 'icon'}
+                aria-label={armed ? 'Confirm close session' : 'Close session'}
+                title={`Close session: ends ${harnessLabel(s?.harness)} and its ${s?.backend === 'iterm' ? 'iTerm tab' : 'tmux window'}${armed ? '' : ` (${panel ? 'click' : 'tap'} twice; or Deactivate to keep it)`}`}
+                disabled={closing || sleeping}
+                onClick={closeSession}
+                className={cn(
+                  'h-8 shrink-0 rounded-lg',
+                  armed ? 'bg-destructive px-2.5 text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90' : 'w-8',
+                )}
+              >
+                {closing ? <Loader2Icon className="animate-spin" /> : <PowerIcon />}
+                {armed ? 'Close' : null}
               </Button>
-            ) : null}
+            </div>
           </Header>
+
+          {/* Actions first: Review, New (from here), Link (to a stack), Attach. Standard small outline buttons, left-aligned; they wrap when the pane is narrow. */}
+          {p.onReview || p.onNewFromHere || p.stack || attachCmd ? (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1 pb-2">
+              {p.onReview ? (
+                <Button variant="outline" size={panel ? 'xs' : 'sm'} aria-label="Review changes" title="Review changes (diff)" onClick={p.onReview}>
+                  <FileDiffIcon />
+                  Review
+                </Button>
+              ) : null}
+              {p.onNewFromHere ? (
+                <Button variant="outline" size={panel ? 'xs' : 'sm'} aria-label="New session from here" title="New session from here… (hand off / sibling)" onClick={p.onNewFromHere}>
+                  <GitForkIcon />
+                  New
+                </Button>
+              ) : null}
+              {p.stack ? (
+                <Button variant="outline" size={panel ? 'xs' : 'sm'} aria-label="Link to a stack" title="Link to a stack: put another live session in this stack (or start one)" onClick={p.stack.onLink}>
+                  <Link2Icon />
+                  Link
+                </Button>
+              ) : null}
+              {attachLink ? (
+                <Button asChild variant="outline" size={panel ? 'xs' : 'sm'}>
+                  <a href={attachLink} aria-label="Attach in iTerm" title={`Attach in iTerm: ${attachCmd}`}>
+                    <SquareTerminalIcon />
+                    Attach
+                  </a>
+                </Button>
+              ) : attachCmd ? (
+                <Button variant="outline" size={panel ? 'xs' : 'sm'} aria-label="Copy attach command" title={`Copy attach command: ${attachCmd}`} onClick={() => void copyWithToast(attachCmd)}>
+                  <SquareTerminalIcon />
+                  Attach
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
 
           <BriefSection {...p.brief} desktop={panel} cancelEditRef={p.cancelEditRef} />
 
-          {p.onNewFromHere ? (
-            <Button variant="outline" className="mt-1 h-10 w-full rounded-xl" onClick={p.onNewFromHere}>
-              New session from here…
-              <ArrowRightIcon />
-            </Button>
-          ) : null}
+          <SlackLinkSection host={p.host} session={s} />
 
           <Section title="Session">
             {p.stack ? (
               <Row label="Session stack" hint={p.stack.label ?? 'Not in a stack'}>
                 {p.stack.onOpen ? (
-                  <Button variant="outline" className="h-9 px-3" onClick={p.stack.onOpen}>
+                  <Button variant="outline" size="lg" onClick={p.stack.onOpen}>
                     <LayersIcon />
                     StackBrief
                   </Button>
                 ) : null}
-                <Button variant="outline" className="h-9 px-3" title="Put another live session in this stack (or start one)" onClick={p.stack.onLink}>
-                  <Link2Icon />
-                  Link…
-                </Button>
               </Row>
-            ) : null}
-            {s ? (
-              <div className="py-1.5">
-                <Row
-                  label={attachLink ? 'Attach' : 'Attach command'}
-                  hint={attachCmd ? (attachLink ? 'Opens an iTerm tab attached to its tmux session' : 'Run in a terminal on any overmind host') : 'Only for tmux sessions — this one is an iTerm tab'}
-                >
-                  <div className="flex gap-1.5">
-                    <Button variant={attachLink ? 'ghost' : 'outline'} className="h-9 px-3" disabled={!attachCmd} aria-label="Copy attach command" title="Copy attach command" onClick={() => attachCmd && void copyWithToast(attachCmd)}>
-                      <CopyIcon />
-                      Copy
-                    </Button>
-                    {attachLink ? (
-                      <Button asChild className="h-9 px-3">
-                        <a href={attachLink} title={attachCmd ?? undefined}>
-                          <SquareTerminalIcon />
-                          Attach
-                        </a>
-                      </Button>
-                    ) : null}
-                  </div>
-                </Row>
-                {attachCmd ? (
-                  <code className="block rounded-md bg-muted px-2.5 py-2 font-mono text-xs break-all text-muted-foreground select-all">{attachCmd}</code>
-                ) : null}
-              </div>
             ) : null}
             {s ? (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 py-3 text-xs">
@@ -256,21 +306,8 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
                   ))}
               </div>
             ) : null}
-            <div className="py-3">
-              <Button
-                variant="destructive"
-                className={cn('h-11 w-full text-sm', armed && 'bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90')}
-                disabled={closing}
-                onClick={closeSession}
-              >
-                {closing ? <Loader2Icon className="animate-spin" /> : <PowerIcon />}
-                {closing ? 'Closing…' : armed ? (panel ? 'Click again to close' : 'Tap again to close') : 'Close session…'}
-              </Button>
-              <p className="pt-1.5 text-center text-xs text-dimmer">
-                Ends {harnessLabel(s?.harness)} and its {s?.backend === 'iterm' ? 'iTerm tab' : 'tmux window'}.
-              </p>
-            </div>
           </Section>
         </div>
   )
 }
+

@@ -3,7 +3,6 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { ApiError, api, isAbortError } from '@/api/client'
 import type { PrsResponse, PullRequest } from '@/api/types'
 import { useOvermind } from '@/hooks/useOvermind'
-import { usePersistentState } from '@/hooks/usePersistentState'
 import { usePoller } from '@/hooks/usePoller'
 import { PrsContext, type PrsState } from '@/hooks/usePrs'
 import { linkSessions, prRef } from '@/lib/prs'
@@ -14,14 +13,13 @@ const POLL_MS = 60_000
 
 /**
  * The PRs that need you, as one host's `gh` sees them (its login, its checkouts for
- * `local`), polled app-wide so session rows can show the PR they work on. Default host: the
- * one this UI is served from; the choice is remembered.
+ * `local`), polled app-wide so session rows can show the PR they work on. The host: the one
+ * this UI is served from (every host is the same you on GitHub).
  */
 export function PrsProvider({ children }: { children: ReactNode }) {
   const { overmind } = useOvermind()
   const hosts = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [overmind])
-  const [picked, setHost] = usePersistentState<string>('overmind.prsHost', '')
-  const host = hosts.includes(picked) ? picked : (overmind?.self ?? hosts[0] ?? null)
+  const host = overmind?.self && hosts.includes(overmind.self) ? overmind.self : (hosts[0] ?? null)
 
   // Last answer and failure per host (switching back paints at once; null error = ok).
   const [answers, setAnswers] = useState<Record<string, PrsResponse>>({})
@@ -72,8 +70,8 @@ export function PrsProvider({ children }: { children: ReactNode }) {
 
   const links = useMemo(() => linkSessions(data?.prs ?? [], data ? host : null, allSessions(overmind)), [data, host, overmind])
   const value = useMemo<PrsState>(
-    () => ({ hosts, host, setHost, data, error, loading, refresh, refreshing, reload, markSeen, links }),
-    [hosts, host, setHost, data, error, loading, refresh, refreshing, reload, markSeen, links],
+    () => ({ host, data, error, loading, refresh, refreshing, reload, markSeen, links }),
+    [host, data, error, loading, refresh, refreshing, reload, markSeen, links],
   )
   return <PrsContext.Provider value={value}>{children}</PrsContext.Provider>
 }

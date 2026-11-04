@@ -16,12 +16,12 @@ const iso = (ms) => new Date(ms).toISOString()
 // ---------------------------------------------------------------- sessions
 const S = (o) => ({ backend: 'tmux', harness: 'claude', name_source: 'generated', stack: null, origin: null, tty: '/dev/ttys004', ...o })
 const SESSIONS = () => [
-  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000001', pid: 41201, display_title: 'Invoice rounding fix', gen_title: 'Invoice rounding fix', cwd: `${H}/Code/acme-api/.worktrees/fix-invoice-rounding`, status: 'busy', updated_at: now() - 4_000, handle: '%12', tmux_session: 'invoice-rounding-fix', model: 'claude-opus-5-5', context: { used: 92_000, window: 200_000, pct: 46, model: 'claude-opus-5-5' }, title: 'Invoices with 3+ line items are off by a cent vs. the PDF…' }),
+  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000001', pid: 41201, display_title: 'Invoice rounding fix', gen_title: 'Invoice rounding fix', cwd: `${H}/Code/acme-api/.worktrees/fix-invoice-rounding`, status: 'busy', updated_at: now() - 4_000, handle: '%12', tmux_session: 'invoice-rounding-fix', model: 'claude-opus-5-5', background: { agents: [{ id: 'ag-1', description: 'Check the credit-note fixtures', type: 'Explore', model: 'claude-haiku-5-5', background: true, started_at: now() - 95_000, last_activity_at: now() - 4_000, activity: 'Grep: creditNote' }], shells: 1 }, context: { used: 92_000, window: 200_000, pct: 46, model: 'claude-opus-5-5' }, title: 'Invoices with 3+ line items are off by a cent vs. the PDF…' }),
   S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000002', pid: 41388, display_title: 'Checkout e2e flake', cwd: `${H}/Code/acme-web`, status: 'waiting', waiting_for: 'permission: Bash(npm run test:e2e -- checkout)', updated_at: now() - 95_000, handle: '%15', tmux_session: 'checkout-e2e-flake', model: 'claude-sonnet-5-5', context: { used: 122_000, window: 200_000, pct: 61 } }),
   S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000003', pid: 41420, display_title: 'Rate limits spec', cwd: `${H}/Code/acme-api`, status: 'waiting', waiting_for: 'question: Which limit model should v1 use?', updated_at: now() - 40_000, handle: '%17', tmux_session: 'rate-limits-spec', model: 'claude-opus-5-5', context: { used: 38_000, window: 200_000, pct: 19 } }),
-  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000004', pid: 41502, display_title: 'Dependency audit', cwd: `${H}/Code/acme-web`, status: 'idle', updated_at: now() - 26 * M, handle: '%21', tmux_session: 'job-dependency-audit', origin: { job: 'dependency-audit', run: '20261015-0700' }, model: 'claude-sonnet-5-5', context: { used: 54_000, window: 200_000, pct: 27 } }),
+  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000004', pid: 41502, display_title: 'Dependency audit', cwd: `${H}/Code/acme-web`, status: 'idle', updated_at: now() - 26 * M, handle: '%21', tmux_session: 'job-dependency-audit', gh_identity: 'acme-bot', origin: { job: 'dependency-audit', run: '20261015-0700' }, model: 'claude-sonnet-5-5', context: { used: 54_000, window: 200_000, pct: 27 } }),
   S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000005', pid: 41630, display_title: 'Search index migration', harness: 'codex', cwd: `${H}/Code/search-indexer`, status: 'busy', updated_at: now() - 9_000, handle: '%24', tmux_session: 'search-index-migration', model: 'gpt-5.5-codex', context: null }),
-  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000006', pid: 41702, display_title: 'Review acme-web#1310', cwd: `${H}/Code/acme-web/.worktrees/pr-1310`, status: 'idle', updated_at: now() - 12 * M, handle: '%26', tmux_session: 'review-acme-web-1310', model: 'claude-opus-5-5', context: { used: 71_000, window: 200_000, pct: 36 } }),
+  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000006', pid: 41702, display_title: 'Review acme-web#1310', cwd: `${H}/Code/acme-web/.worktrees/pr-1310`, status: 'idle', updated_at: now() - 12 * M, handle: '%26', tmux_session: 'review-acme-web-1310', done: { at: now() - 12 * M, note: 'Reviewed acme-web#1310: 2 blocking comments (retry loop, missing index), approved the rest' }, model: 'claude-opus-5-5', context: { used: 71_000, window: 200_000, pct: 36 } }),
   S({ host: 'devbox', session_id: 'b2c3d4e5-2222-4000-8000-000000000001', pid: 9120, display_title: 'Onboarding flow redesign', cwd: `${H}/Code/acme-web`, status: 'busy', updated_at: now() - 2_000, handle: '%3', tmux_session: 'onboarding-flow', model: 'claude-opus-5-5', stack: { id: 'onboarding-redesign', label: 'Onboarding redesign', host: 'devbox' }, context: { used: 148_000, window: 200_000, pct: 74 } }),
   S({ host: 'devbox', session_id: 'b2c3d4e5-2222-4000-8000-000000000002', pid: 9188, display_title: 'Onboarding copy & emails', cwd: `${H}/Code/acme-web`, status: 'idle', updated_at: now() - 7 * M, handle: '%5', tmux_session: 'onboarding-copy', model: 'claude-sonnet-5-5', stack: { id: 'onboarding-redesign', label: 'Onboarding redesign', host: 'devbox' }, context: { used: 30_000, window: 200_000, pct: 15 } }),
   S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000007', pid: 41790, display_title: 'Onboarding API endpoints', cwd: `${H}/Code/acme-api`, status: 'busy', updated_at: now() - 15_000, handle: '%28', tmux_session: 'onboarding-api', model: 'claude-sonnet-5-5', stack: { id: 'onboarding-redesign', label: 'Onboarding redesign', host: 'devbox' }, context: { used: 66_000, window: 200_000, pct: 33 } }),
@@ -29,6 +29,7 @@ const SESSIONS = () => [
   S({ host: 'devbox', session_id: 'b2c3d4e5-2222-4000-8000-000000000004', pid: 9355, display_title: 'October release notes', cwd: `${H}/Code/docs`, status: 'waiting', waiting_for: 'Ready for your review', updated_at: now() - 3 * M, handle: '%9', tmux_session: 'release-notes-oct', model: 'claude-sonnet-5-5', context: { used: 44_000, window: 200_000, pct: 22 } }),
   S({ host: 'laptop', session_id: 'c3d4e5f6-3333-4000-8000-000000000001', pid: 77120, display_title: 'Docs site search', backend: 'iterm', handle: 'w0t2p0', tab: 'docs', cwd: `${H}/Code/docs`, status: 'idle', updated_at: now() - 2 * HR, model: 'claude-sonnet-5-5', context: { used: 18_000, window: 200_000, pct: 9 } }),
   S({ host: 'laptop', session_id: 'c3d4e5f6-3333-4000-8000-000000000002', pid: 77333, display_title: 'Billing webhook retries', cwd: `${H}/Code/billing-service`, status: 'busy', updated_at: now() - 6_000, handle: '%2', tmux_session: 'billing-webhooks', model: 'claude-opus-5-5', context: { used: 410_000, window: 1_000_000, pct: 41 } }),
+  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000008', pid: 41850, display_title: 'Billing questions (#billing)', cwd: `${H}/Code/acme-api`, status: 'idle', updated_at: now() - 14 * M, handle: '%32', tmux_session: 'billing-slack', model: 'claude-sonnet-5-5', context: { used: 26_000, window: 200_000, pct: 13 } }),
   S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-0000000000ff', pid: 41999, display_title: 'Operator', cwd: `${H}/.local/state/overmind/operator`, status: 'idle', updated_at: now() - 60_000, handle: '%30', tmux_session: 'operator', operator: true, model: 'claude-sonnet-5-5' }),
 ].map((s) => ({ ...s, name: s.display_title, editorUrl: `vscode://vscode-remote/ssh-remote+${s.host}${s.cwd}` }))
 
@@ -42,7 +43,7 @@ function overmind() {
   const all = SESSIONS()
   return {
     self: 'laptop', snapshotAt: now(),
-    hosts: HOSTS.map((h) => ({ name: h, ok: true, fetchedAt: now() - 1500, spawnDirs: SPAWN_DIRS[h], ...(h === 'devbox' ? { notes: { name: 'Team notes' } } : {}), sessions: all.filter((s) => s.host === h) })),
+    hosts: HOSTS.map((h) => ({ name: h, ok: true, fetchedAt: now() - 1500, spawnDirs: SPAWN_DIRS[h], ...(h === 'devbox' ? { shared: true, notes: { name: 'Team notes' } } : {}), sessions: all.filter((s) => s.host === h) })),
   }
 }
 const find = (host, id) => SESSIONS().find((s) => s.host === host && s.session_id === id)
@@ -58,13 +59,25 @@ function chat(id) {
     { role: 'user', kind: 'user', ts: t - 38 * M, text: `Invoices with 3+ line items are off by a cent vs. the PDF. Find where rounding happens and fix it so the totals match.\n${PASTE}` },
     { role: 'assistant', kind: 'assistant', final: false, ts: t - 37 * M, text: 'Looking at how line totals and the invoice total are computed.' },
     { role: 'assistant', kind: 'assistant', final: false, ts: t - 35 * M, text: 'The API rounds every line before summing, the PDF renderer sums first and rounds once.' },
-    { role: 'assistant', kind: 'assistant', final: true, ts: t - 33 * M, text: `## Root cause\n\n\`src/billing/invoice_total.ts\` rounds **each line** to 2 decimals and then sums them. The PDF (\`src/pdf/totals.ts\`) sums the exact amounts and rounds once, so with 3+ lines the two can drift by a cent.\n\n| invoice | lines | API | PDF |\n|---|---|---|---|\n| INV-2026-0912 | 3 | 1250.00 | 1249.99 |\n| INV-2026-0927 | 4 | 88.40 | 88.41 |\n\n**Fix:** keep amounts in integer cents, sum exactly, round once at the end (banker's rounding, same as the PDF). I added a regression test in \`test/billing/invoice_total.test.ts\` with both invoices.\n\nThe plan is written up in \`docs/billing/rounding.md\`. Should I open the PR?` },
+    { role: 'assistant', kind: 'assistant', final: true, ts: t - 33 * M, text: `## Root cause\n\n\`src/billing/invoice_total.ts\` rounds **each line** to 2 decimals and then sums them. The PDF (\`src/pdf/totals.ts\`) sums the exact amounts and rounds once, so with 3+ lines the two can drift by a cent.\n\n| invoice | lines | API | PDF |\n|---|---|---|---|\n| INV-2026-0912 | 3 | 1250.00 | 1249.99 |\n| INV-2026-0927 | 4 | 88.40 | 88.41 |\n\n**Fix:** keep amounts in integer cents, sum exactly, round once at the end (banker's rounding, same as the PDF). I added a regression test in \`test/billing/invoice_total.test.ts\` with both invoices.\n\nThe plan is written up in \`docs/billing/rounding.md\`, the spec change in \`docs/specs/invoices.plain\`. Should I open the PR?` },
     { role: 'user', kind: 'user', ts: t - 20 * M, text: 'Yes — open the PR, link issue #1777 and ask Marta for review.' },
     { role: 'user', kind: 'command', name: '!', args: 'npm test -- billing', ts: t - 19 * M, text: '! npm test -- billing' },
     { role: 'assistant', kind: 'assistant', final: false, ts: t - 18 * M, text: 'All 214 billing tests pass. Pushing the branch and opening the PR.' },
     { role: 'assistant', kind: 'assistant', final: true, ts: t - 16 * M, text: `Opened **[acme/acme-api#482](https://github.com/acme/acme-api/pull/482)** — *Fix invoice total rounding (sum in cents, round once)*.\n\n- Closes #1777\n- Review requested from @marta\n- CI is running; I'll watch it and fix anything that fails.` },
     { role: 'user', kind: 'command', name: '/code-review', args: 'focus on currency edge cases (JPY, 3-decimal currencies)', ts: t - 2 * M, text: '/code-review focus on currency edge cases' },
     { role: 'assistant', kind: 'assistant', final: false, ts: t - 60_000, text: 'Checking how `Currency.minorUnits` is used across billing…' },
+  ]
+  if (id.endsWith('0008') && id.startsWith('a1')) return [
+    { role: 'user', kind: 'user', ts: t - 2 * HR, text: 'You are linked to a Slack thread in #billing until 18:00 (sl-3c9e1a). Task: answer questions about the invoice rounding fix and when the affected invoices can be re-issued. Do not promise dates. Post only with `overmind slack reply`.' },
+    { role: 'assistant', kind: 'assistant', final: true, ts: t - 2 * HR + 30_000, text: 'Linked. I read the thread so far and will answer when someone asks me.' },
+    { role: 'user', kind: 'user', ts: t - 25 * M, text: 'Slack #billing · Marta (U04MARTA) → mentions you: can we re-issue INV-2026-0912 today?' },
+    { role: 'assistant', kind: 'assistant', final: false, ts: t - 24 * M, text: 'Checking the state of acme/acme-api#482.' },
+    { role: 'assistant', kind: 'assistant', final: true, ts: t - 23 * M, text: 'Replied in the thread: the fix is in review (#482, CI running); the invoice can be re-issued once it is merged and deployed. I did not give a date.' },
+  ]
+  if (id.endsWith('0006') && id.startsWith('a1')) return [
+    { role: 'user', kind: 'user', ts: t - 25 * M, text: 'Review acme-web#1310 and leave the comments on GitHub.' },
+    { role: 'assistant', kind: 'assistant', final: false, ts: t - 20 * M, text: 'Reading the diff: 14 files, the sync worker and a migration.' },
+    { role: 'assistant', kind: 'assistant', final: true, ts: t - 12 * M, text: `Reviewed **[acme/acme-web#1310](https://github.com/acme/acme-web/pull/1310)** and left the comments on GitHub.\n\n- **Blocking:** the retry loop in \`sync/worker.ts\` never backs off\n- **Blocking:** the migration adds \`orders.customer_id\` without an index\n- Approved the rest; two nits on naming\n\nWorth checking: whether you want the index in this PR or a follow-up.` },
   ]
   if (id.endsWith('0003') && id.startsWith('a1')) return [
     { role: 'user', kind: 'user', ts: t - 12 * M, text: 'Write a spec for per-organization API rate limits. Look at how the gateway counts requests today first.' },
@@ -133,6 +146,8 @@ function brief(host, id) {
     ? [{ done: true, text: 'Find where line totals are rounded' }, { done: true, text: 'Sum in cents, round once' }, { done: true, text: 'Regression test with INV-2026-0912 and -0927' }, { done: false, text: 'Check JPY / KWD (0 and 3 decimals)' }, { done: false, text: 'Address review comments on #482' }]
     : [{ done: true, text: 'Read the current implementation' }, { done: false, text: 'Finish and hand over' }]
   const resources = big ? [
+    { kind: 'Origin', label: 'Invoice totals off by a cent', url: 'https://app.acme.dev/tasks/2041', path: null, text: 'Origin' },
+    { kind: 'Origin', label: 'acme.slack.com/archives/C04BILLING/p1760000000', url: 'https://acme.slack.com/archives/C04BILLING/p1760000000', path: null, text: 'Origin' },
     { kind: 'Git', label: null, url: null, path: '~/Code/acme-api/.worktrees/fix-invoice-rounding', text: 'Git: `fix-invoice-rounding` · worktree', branch: 'fix-invoice-rounding', linked: true },
     { kind: 'PR', label: 'acme/acme-api#482', url: 'https://github.com/acme/acme-api/pull/482', path: null, text: 'PR' },
     { kind: 'Issue', label: 'acme/acme-api#1777', url: 'https://github.com/acme/acme-api/issues/1777', path: null, text: 'Issue' },
@@ -146,7 +161,7 @@ function brief(host, id) {
   return {
     host, id, exists: true, markdown: md, parsed: { summary, resources, todos, plan: todos },
     updated: iso(now() - 3 * M), editedAt: null, generatedAt: iso(now() - 3 * M), generatedThrough: 1000, generating: false, enabled: true,
-    continuePrompt: `Continue this work (handed over from session "${s?.display_title}" on ${host}).\n\n${summary}\n\nOpen todos:\n${todos.filter((t) => !t.done).map((t) => `- ${t.text}`).join('\n')}\n`,
+    continuePrompt: `Continue the work of session ${id} on ${host}. Its brief:\n\n${summary}\n\n---`,
     absCwd: s?.cwd ?? null, gitRoot: s?.cwd ?? null, editor: 'vscode', editorUrl: s?.editorUrl ?? null,
     worktrees: s?.cwd ? [{ path: s.cwd, display: s.cwd.replace(H, '~'), branch: big ? 'fix-invoice-rounding' : 'main', linked: big, editorUrl: s.editorUrl }] : [],
   }
@@ -242,6 +257,11 @@ const usage = (host) => ({
     { kind: 'weekly_scoped', group: 'weekly', label: 'Opus', model: 'Opus', percent: 81, severity: 'warning', resets_at: iso(now() + 3.2 * D), active: true },
   ],
   extra_usage: { enabled: true, used: 12.4, limit: 100, currency: 'USD', percent: 12 }, fetched_at: iso(now() - 40_000), stale: false, error: null,
+  openai: { provider: 'openai', account: { uuid: null, email: 'demo@acme.dev', organization: 'Acme', plan: 'pro', tier: null, plan_label: 'ChatGPT Pro' },
+    limits: [
+      { kind: 'session', group: 'session', label: '5-hour window', model: null, percent: 18, severity: 'normal', resets_at: iso(now() + 3.1 * HR), active: false },
+      { kind: 'weekly_all', group: 'weekly', label: 'Weekly', model: null, percent: 34, severity: 'normal', resets_at: iso(now() + 4.5 * D), active: true },
+    ], extra_usage: null, fetched_at: iso(now() - 50_000), stale: false, error: null },
 })
 
 // ---------------------------------------------------------------- notes
@@ -292,11 +312,11 @@ const SETTINGS = {
   quickReplies: [{ label: 'Continue', text: 'continue' }, { label: 'Yes', text: 'yes' }, { label: 'Run the tests', text: 'run the tests and fix what fails' }, { label: 'Commit & push', text: 'commit and push' }],
   uploads: { maxMB: 50 }, transcribe: { enabled: true }, memos: { enabled: true },
   models: [{ id: '', label: 'Default' }, { id: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }, { id: 'claude-haiku-5-5', label: 'Haiku 5.5' }],
-  notes: { enabled: true, name: 'Team notes' }, stacks: { enabled: true, model: 'claude-sonnet-5-5', generate: true }, speak: { enabled: true, voice: 'alloy' }, operator: { enabled: true, hosts: ['workstation'] },
+  notes: { enabled: true, name: 'Team notes' }, stacks: { enabled: true, model: 'claude-sonnet-5-5', generate: true }, speak: { enabled: true, voice: 'alloy' }, operator: { enabled: true, hosts: ['workstation'] }, focus: { host: 'laptop' },
 }
 const HARN = (host) => ({ host, harnesses: [
-  { id: 'claude', label: 'Claude Code', command: 'claude', installed: true, models: [{ id: '', label: 'Default' }, { id: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }, { id: 'claude-haiku-5-5', label: 'Haiku 5.5' }] },
-  { id: 'codex', label: 'Codex', command: 'codex', installed: true, models: [{ id: '', label: 'Default' }, { id: 'gpt-5.5-codex', label: 'GPT-5.5 Codex' }] },
+  { id: 'claude', label: 'Claude Code', command: 'claude', installed: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: 'claude-opus-5-5', defaultEffort: 'high', models: [{ id: '', label: 'Default' }, { id: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }, { id: 'claude-haiku-5-5', label: 'Haiku 5.5' }] },
+  { id: 'codex', label: 'Codex', command: 'codex', installed: true, efforts: ['low', 'medium', 'high'], defaultModel: 'gpt-5.5-codex', defaultEffort: 'medium', models: [{ id: '', label: 'Default' }, { id: 'gpt-5.5-codex', label: 'GPT-5.5 Codex' }] },
   { id: 'pi', label: 'pi', command: 'pi', installed: host !== 'laptop', models: [{ id: '', label: 'Default' }] },
 ] })
 const ALLDIRS = ['acme-api', 'acme-web', 'billing-service', 'docs', 'scratch']
@@ -315,7 +335,119 @@ const SKILLS = [
   { name: 'simplify', description: 'Review changed code for reuse and simplification', source: 'builtin' },
   { name: 'release-notes', description: 'Draft release notes from merged PRs', source: 'project' },
 ]
+const SPEC_OLD = `---
+description: Invoice totals — how an invoice's lines add up to its total, tax and the PDF.
+import:
+  - money
+requires:
+  - customers
+exported_concepts: [":Invoice:", ":InvoiceTotal:"]
+---
+
+> Root module of billing; the PDF renderer requires it for :InvoiceTotal:.
+
+***definitions***
+
+- :Invoice: is a bill to one :Customer: with lines, a :Currency: and a tax rate.
+
+- :Line: is one row of an :Invoice:: a description, an amount and a quantity.
+  - The amount may carry more decimals than the :Currency: has.
+
+- :InvoiceTotal: is the sum of an :Invoice:'s :Line: amounts × quantities, rounded per line to the :Currency:.
+> code: billing.invoice_total.invoiceTotal
+
+***implementation reqs***
+
+- Money is a JavaScript \`number\`.
+
+***functional specs***
+
+- \`GET /api/invoices/:id\` answers the :Invoice: with its :InvoiceTotal: and tax.
+  - The tax is the :InvoiceTotal: × the tax rate, rounded to the :Currency:.
+
+  ***acceptance tests***
+  - An :Invoice: of 3 lines of 416.665 EUR answers a total of 1250.01.
+
+- The PDF of an :Invoice: shows the same :InvoiceTotal: as the API.
+
+- A draft :Invoice: can be edited; a sent one cannot.
+  - Editing a sent :Invoice: answers 409 \`{"error": "invoice already sent"}\`.
+`
+const SPEC_NEW = `---
+description: Invoice totals — how an invoice's lines add up to its total, tax and the PDF, in minor units.
+import:
+  - money
+requires:
+  - customers
+exported_concepts: [":Invoice:", ":InvoiceTotal:"]
+---
+
+> Root module of billing; the PDF renderer requires it for :InvoiceTotal:.
+
+***definitions***
+
+- :Invoice: is a bill to one :Customer: with lines, a :Currency: and a tax rate.
+
+- :Line: is one row of an :Invoice:: a description, an amount and a quantity.
+  - The amount may carry more decimals than the :Currency: has.
+
+- :MinorUnits: is an amount in the :Currency:'s smallest unit (cents; 3 decimals for KWD and BHD), as a \`bigint\`.
+
+- :InvoiceTotal: is the sum of an :Invoice:'s :Line: amounts × quantities in :MinorUnits:, converted back once.
+> code: billing.invoice_total.invoiceTotal
+
+***implementation reqs***
+
+- Money is summed in :MinorUnits:; it is a \`number\` only at the API and PDF edges.
+
+***functional specs***
+
+- \`GET /api/invoices/:id\` answers the :Invoice: with its :InvoiceTotal: and tax.
+  - The tax is the :InvoiceTotal: × the tax rate, rounded once to the :Currency:.
+
+  ***acceptance tests***
+  - An :Invoice: of 3 lines of 416.665 EUR answers a total of 1249.99.
+  - A KWD :Invoice: keeps 3 decimals.
+
+- The PDF of an :Invoice: shows the same :InvoiceTotal: as the API.
+
+- A monthly :Statement: sums up to 40000 :Line: items exactly.
+
+  ***acceptance tests***
+  - A statement of 40000 lines of 0.005 KWD answers 200.000.
+`
+const SPEC_MONEY = `---
+description: Money — currencies and amounts.
+---
+
+***definitions***
+
+- :Currency: is an ISO 4217 code with its number of decimals: 2 for most, 0 for JPY, 3 for KWD and BHD.
+  - Unknown codes are rejected with 422 \`{"error": "unknown currency"}\`.
+> code: money.currency.Currency
+
+- :Amount: is a :Currency: and a decimal value.
+`
+const SPEC_CUSTOMERS = `---
+description: Customers — who is billed.
+import:
+  - money
+---
+
+***definitions***
+
+- :Customer: is an organization that receives invoices, with a billing :Currency: and a tax ID.
+  - A :Customer: without a tax ID is billed with tax.
+`
+const SPEC_STATEMENTS = `***definitions***
+
+- :Statement: is one :Customer:'s invoices of a calendar month, summed into one document.
+`
 const FILES = {
+  'docs/specs/money.plain': SPEC_MONEY,
+  'docs/specs/customers.plain': SPEC_CUSTOMERS,
+  'docs/specs/statements.plain': SPEC_STATEMENTS,
+  'docs/specs/invoices.plain': SPEC_NEW,
   'src/billing/invoice_total.ts': `import { Currency, toMinor, fromMinor } from './currency'\n\nexport interface Line {\n  description: string\n  amount: number\n  quantity: number\n}\n\n/**\n * The invoice total: every line in minor units (cents), summed exactly,\n * converted back once. Matches the PDF renderer (src/pdf/totals.ts).\n */\nexport function invoiceTotal(lines: Line[], cur: Currency) {\n  const cents = lines.reduce((s, l) => s + toMinor(l.amount * l.quantity, cur), 0n)\n  return fromMinor(cents, cur)\n}\n`,
   'docs/billing/rounding.md': `# Invoice rounding\n\n**Status:** in review · PR [acme/acme-api#482](https://github.com/acme/acme-api/pull/482)\n\n## Problem\nThe API rounds each line to 2 decimals before summing; the PDF sums exact amounts and rounds once. With 3+ lines the totals drift by up to a cent.\n\n## Decision\n- Keep money in **integer minor units** (\`bigint\` cents) end to end.\n- Round **once**, at the end, with banker's rounding.\n- Currencies with 0 or 3 decimals use \`Currency.minorUnits\`.\n\n## Rollout\n1. Ship the fix behind no flag (pure bug fix).\n2. Re-issue the 3 affected invoices (finance).\n3. Add a nightly check comparing API and PDF totals.\n`,
 }
@@ -337,10 +469,25 @@ function dfile(path, status, hunks) {
   const all = hunks.flatMap((h) => h.lines)
   return { path, oldPath: status === 'added' ? null : path, status, binary: false, truncated: false, additions: all.filter((l) => l.t === '+').length, deletions: all.filter((l) => l.t === '-').length, hunks }
 }
+// A whole-file line diff (LCS) as one hunk: for the .plain spec, whose diff carries both texts.
+function lineHunks(a, b) {
+  const A = a.replace(/\n$/, '').split('\n'), B = b.replace(/\n$/, '').split('\n')
+  const T = Array.from({ length: A.length + 1 }, () => new Uint16Array(B.length + 1))
+  for (let i = A.length - 1; i >= 0; i--) for (let j = B.length - 1; j >= 0; j--) T[i][j] = A[i] === B[j] ? T[i + 1][j + 1] + 1 : Math.max(T[i + 1][j], T[i][j + 1])
+  const rows = []
+  let i = 0, j = 0
+  while (i < A.length || j < B.length) {
+    if (i < A.length && j < B.length && A[i] === B[j]) { rows.push([' ', A[i++]]); j++ }
+    else if (j < B.length && (i === A.length || T[i][j + 1] >= T[i + 1][j])) rows.push(['+', B[j++]])
+    else rows.push(['-', A[i++]])
+  }
+  return [hunk(1, 1, rows)]
+}
 const API_WT = `${H}/Code/acme-api/.worktrees/fix-invoice-rounding`
 const WEB_WT = `${H}/Code/acme-web/.worktrees/invoice-pdf-totals`
 const DIFF_FILES = {
   [API_WT]: [
+    { ...dfile('docs/specs/invoices.plain', 'modified', lineHunks(SPEC_OLD, SPEC_NEW)), plain: { old: SPEC_OLD, new: SPEC_NEW } },
     dfile('src/billing/invoice_total.ts', 'modified', [hunk(1, 1, ROWS(`- import { Currency, roundMoney } from './currency'
 + import { Currency, toMinor, fromMinor } from './currency'
   
@@ -397,6 +544,24 @@ const DIFF_FILES = {
   }`), 'import { round } from \'../money\'')]),
   ],
 }
+// The reviewer over a PR without a session (…/prs/:o/:r/:n/diff | notes | ask): the first checkout of the demo diff, two notes.
+function prReview(host, owner, repo, number, what, b) {
+  const pr = { owner, repo, number, title: 'Checkout: retry Stripe confirmation on network errors', url: `https://github.com/${owner}/${repo}/pull/${number}`, author: 'ana', headBranch: 'stripe-retry', baseBranch: 'main', headOid: 'c'.repeat(40), draft: false }
+  if (what === 'ask') return { host, ask: { ...sideAsk(b), forked: false } }
+  if (what === 'diff') {
+    const r = diffs('workstation', SID(1)).repos[0]
+    return { host, id: null, cwd: `${H}/Code/${repo}`, pr, fingerprint: 'pr-fp', unchanged: false, repos: [{ ...r, label: `${owner}/${repo}`, branch: 'stripe-retry', head: 'c'.repeat(40) }] }
+  }
+  const note = (id, path, start, end, body, posted) => ({ id, root: null, path, side: 'new', start, end, code: [], status: 'draft', resolved: false, reviewId: null, createdAt: now() - 30 * M, entries: [{ body, sentAt: null, state: 'draft', replies: [] }], posted })
+  const threads = [note('c-0000a1', 'src/billing/currency.ts', 23, 25, 'Does `Math.round` here still lose a cent for x.xx5 amounts in 3-decimal currencies?', null), note('c-0000a2', 'src/billing/invoice_total.ts', 14, 15, 'Nice — summing in cents fixes #1777.', { url: `https://github.com/${owner}/${repo}/pull/${number}#discussion_r1`, at: now() - 10 * M })]
+  return { host, pr, threads, reviews: [], drafts: 1 }
+}
+
+// A side question (…/ask): answered at once with a canned reply.
+function sideAsk(b, id = 'q-0000000001') {
+  return { id, status: 'done', question: b.question || 'Why sum in BigInt instead of number?', label: b.path ? `${b.path}:${b.start}–${b.end}` : 'src/billing/invoice_total.ts:14–15', text: 'Because `invoiceTotal` also sums **monthly statements**: up to ~40k lines in KWD (3 decimals). In minor units that can pass `2^53`, where `number` stops being exact. BigInt keeps the sum exact; the cost is ~40 ns per line.', activity: null, error: null, costUsd: 0.004, forked: true, startedAt: now() - 9000, endedAt: now() }
+}
+
 function diffs(host, id) {
   if (!(host === 'workstation' && id.endsWith('0001') && id.startsWith('a1'))) return { host, id, cwd: find(host, id)?.cwd ?? null, fingerprint: 'demo', unchanged: false, repos: [] }
   const repo = (root, label, branch, base) => {
@@ -429,6 +594,63 @@ function review(host, id) {
   }
 }
 
+// ---------------------------------------------------------------- inbox, tasks, schedule, slack, focus
+const ymd = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+const SID = (tail) => `a1b2c3d4-1111-4000-8000-00000000000${tail}`
+function inbox() {
+  const t = now()
+  const I = (o) => ({ ask: null, url: null, href: null, from: null, firstSeen: t - HR, effort: null, meta: {}, ...o })
+  const items = [
+    I({ id: `session:workstation/${SID(2)}`, source: 'session', kind: 'session', section: 'quick', title: 'Checkout e2e flake', ask: 'Allow Bash(npm run test:e2e -- checkout)', href: `#/s/workstation/${SID(2)}`, at: t - 95_000, firstSeen: t - 95_000, effort: 'quick', meta: { host: 'workstation', sessionId: SID(2) } }),
+    I({ id: 'pr:https://github.com/acme/docs/pull/96', source: 'github', kind: 'myPr', section: 'quick', title: 'Docs: new API auth guide', ask: 'Approved — merge it', url: 'https://github.com/acme/docs/pull/96', from: 'marta', at: t - 40 * M, effort: 'quick', meta: { repo: 'acme/docs', number: 96, size: 'XS', additions: 60, deletions: 4, checks: 'success' } }),
+    I({ id: 'slack:C04BILLING/1761', source: 'slack', kind: 'message', section: 'quick', title: '#billing: can we re-issue INV-2026-0912 today?', ask: 'Answer Marta: yes once #482 is merged', url: 'https://acme.slack.com/archives/C04BILLING/p1761', from: 'Marta', at: t - 25 * M, firstSeen: t - 20 * M, effort: 'quick' }),
+    I({ id: 'pr:https://github.com/acme/acme-web/pull/1310', source: 'github', kind: 'review', section: 'waiting', title: 'Checkout: retry Stripe confirmation on network errors', ask: 'Review requested', url: 'https://github.com/acme/acme-web/pull/1310', from: 'ana', at: t - 3 * HR, effort: 'medium', meta: { repo: 'acme/acme-web', number: 1310, size: 'M', additions: 340, deletions: 85, checks: 'success' } }),
+    I({ id: 'pr:https://github.com/acme/billing-service/pull/207', source: 'github', kind: 'review', section: 'waiting', title: 'Webhook signature v2', ask: 'Review requested · CI failing', url: 'https://github.com/acme/billing-service/pull/207', from: 'ivo', at: t - 6 * HR, effort: 'deep', meta: { repo: 'acme/billing-service', number: 207, size: 'L', additions: 820, deletions: 240, checks: 'failure' } }),
+    I({ id: 'email:hr-1', source: 'email', kind: 'message', section: 'waiting', title: 'Q4 hiring plan — your numbers by Friday', ask: 'Send the AI team headcount', url: 'https://mail.google.com/', from: 'Petra (People)', at: t - 5 * HR, effort: 'medium' }),
+    I({ id: 'task:2041', source: 'productive', kind: 'task', section: 'mine', title: 'Invoice totals off by a cent', ask: 'Due tomorrow · In progress', url: 'https://app.productive.io/acme/tasks/2041', at: t - 2 * HR, effort: 'medium', meta: { project: 'Billing', due: ymd(now() + D), status: 'In progress' } }),
+    I({ id: 'task:2077', source: 'productive', kind: 'task', section: 'mine', title: 'Rate limits: spec for per-org limits', ask: 'In progress', url: 'https://app.productive.io/acme/tasks/2077', at: t - 26 * HR, effort: 'deep', meta: { project: 'API platform', status: 'In progress' } }),
+  ]
+  return {
+    enabled: true, host: 'workstation', updatedAt: t - 2 * M,
+    brief: { text: '- **Quick wins first:** approve the e2e run in [Checkout e2e flake](#/s/workstation/' + SID(2) + '), merge [the auth guide](https://github.com/acme/docs/pull/96) and answer Marta in [#billing](https://acme.slack.com/archives/C04BILLING/p1761).\n- [Invoice totals off by a cent](https://app.productive.io/acme/tasks/2041) is due tomorrow; its PR is in review.\n- Two reviews wait on you; [Webhook signature v2](https://github.com/acme/billing-service/pull/207) is large and its CI fails, so leave it for a focused block.\n- People wants the Q4 headcount by Friday.', at: t - 6 * M, model: 'claude-haiku-5-5' },
+    settings: { scanMinutes: 60, workHours: [8, 18], workDays: [1, 2, 3, 4, 5] },
+    sources: { github: { at: t - M, ok: true, error: null, count: 3 }, productive: { at: t - 4 * M, ok: true, error: null, count: 2 }, sessions: { at: t - 5_000, ok: true, error: null, count: 1 }, comms: { at: t - 22 * M, ok: true, error: null, count: 2, nextAt: t + 38 * M, running: false } },
+    items,
+  }
+}
+const ST = (id, name, category, position) => ({ id, name, category, position })
+const WF = [ST('s1', 'Backlog', 'notStarted', 1), ST('s2', 'To do', 'notStarted', 2), ST('s3', 'In progress', 'started', 3), ST('s4', 'In review', 'started', 4), ST('s5', 'Done', 'closed', 5)]
+function tasks(host) {
+  const T = (o) => ({ url: `https://app.productive.io/acme/tasks/${o.id}`, taskList: 'Sprint 44', workflowId: 'wf-1', dueDate: null, startDate: null, createdAt: now() - 9 * D, updatedAt: now() - 3 * HR, lastActivityAt: now() - 3 * HR, todos: 0, openTodos: 0, tags: [], description: '', ...o })
+  const list = [
+    T({ id: '2041', number: '412', title: 'Invoice totals off by a cent', column: 'due', project: { id: 'p1', name: 'Billing' }, status: WF[2], dueDate: ymd(now() + D), todos: 4, openTodos: 1, tags: ['bug'], description: 'Finance found three invoices where the PDF total and the API total differ by 0.01. Happens with 3+ line items.' }),
+    T({ id: '2052', number: '418', title: 'October release notes', column: 'due', project: { id: 'p3', name: 'Docs' }, status: WF[3], dueDate: ymd(now()), lastActivityAt: now() - 3 * M }),
+    T({ id: '2077', number: '57', title: 'Rate limits: spec for per-org limits', column: 'inProgress', project: { id: 'p2', name: 'API platform' }, status: WF[2], todos: 6, openTodos: 4, tags: ['spec'], lastActivityAt: now() - 26 * HR }),
+    T({ id: '2063', number: '421', title: 'Webhook retries with exponential backoff', column: 'inProgress', project: { id: 'p1', name: 'Billing' }, status: WF[3], lastActivityAt: now() - 2 * D }),
+    T({ id: '2090', number: '430', title: 'Re-issue the three affected invoices', column: 'toDo', project: { id: 'p1', name: 'Billing' }, status: WF[1], startDate: ymd(now() + 2 * D) }),
+    T({ id: '2091', number: '61', title: 'Search index: drop the v1 schema', column: 'toDo', project: { id: 'p2', name: 'API platform' }, status: WF[1], startDate: ymd(now() + 8 * D), tags: ['cleanup'] }),
+    T({ id: '2095', number: '12', title: 'Onboarding v3: welcome email copy', column: 'toDo', project: { id: 'p4', name: 'Onboarding' }, status: WF[0] }),
+  ]
+  const cols = [['due', 'Due soon'], ['inProgress', 'In progress'], ['toDo', 'To do']]
+  return { host, user: { id: 'u1', name: 'Demo User' }, organization: { id: 'o1', name: 'Acme', slug: 'acme' }, fetchedAt: now() - 4 * M, stale: false, error: null, truncated: false,
+    columns: cols.map(([id, title]) => ({ id, title, count: list.filter((x) => x.column === id).length })), tasks: list, statuses: { 'wf-1': WF } }
+}
+function schedule(host) {
+  if (host !== 'workstation') return { host, entries: [] }
+  const E = (o) => ({ dir: '~/Code/acme-api', name: null, model: null, harness: 'claude', ghIdentity: null, createdAt: now() - HR, state: 'pending', reason: null, firedAt: null, tmuxSession: null, ...o })
+  return { host, entries: [
+    E({ id: 'sc-7f21', at: new Date(new Date().setHours(24 + 7, 30, 0, 0)).getTime(), prompt: 'Check overnight CI on main and fix anything red.', name: 'ci-morning-check' }),
+    E({ id: 'sc-91aa', at: new Date(`${ymd(now() + 2 * D)}T08:00`).getTime(), time: '08:00', task: { id: '2090', number: '430', title: 'Re-issue the three affected invoices', url: 'https://app.productive.io/acme/tasks/2090', startDate: ymd(now() + 2 * D), checkedAt: now() - 20 * M }, prompt: 'Prepare the credit notes and the re-issued invoices for finance.', name: 'task-430' }),
+  ] }
+}
+function slack() {
+  const t = now()
+  return { enabled: true, host: 'workstation', socket: { connected: true, error: null }, ended: [],
+    links: [{ id: 'sl-3c9e1a', host: 'workstation', session: SID(8), sessionName: 'Billing questions (#billing)', channel: 'C04BILLING', threadTs: '1761.0001', permalink: 'https://acme.slack.com/archives/C04BILLING/p1761', dm: null,
+      task: 'Answer questions about the invoice rounding fix and when the affected invoices can be re-issued. Do not promise dates.', mode: 'mention', createdAt: t - 2 * HR, until: t + 6 * HR, minutes: 480, pending: 0, delivered: 5, replies: 3, endedAt: null, endReason: null }] }
+}
+const focusStatus = (host) => ({ host, active: false, remainingMs: 0, endsAt: null, apps: ['Slack', 'Mail'], stale: false })
+
 // ---------------------------------------------------------------- server
 async function body(req) { const b = []; for await (const c of req) b.push(c); try { return JSON.parse(Buffer.concat(b).toString() || '{}') } catch { return {} } }
 function route(method, p, q, b) {
@@ -440,27 +662,36 @@ function route(method, p, q, b) {
   if (p === '/api/operator') return OPERATOR()
   if (p === '/api/memos') return { dir: `${H}/Memos`, memos: MEMOS }
   if ((m = p.match(/^\/api\/memos\/([^/]+)$/))) return memo(decodeURIComponent(m[1]))
+  if (p === '/api/inbox' || p.startsWith('/api/inbox/')) return inbox()
+  if (p === '/api/slack' || p.startsWith('/api/slack/')) return slack()
   if (p === '/api/transcribe') return { text: 'run the e2e suite twenty times and tell me how many fail', model: 'demo' }
   if (!(m = p.match(/^\/api\/hosts\/([^/]+)\/(.*)$/))) return null
   const host = decodeURIComponent(m[1]); const rest = m[2]
   let s
   if ((s = rest.match(/^sessions\/([^/]+)\/(.*)$/))) {
     const id = decodeURIComponent(s[1]); const what = s[2]; const sess = find(host, id)
-    if (what === 'messages') { const msgs = chat(id); return { host, id, status: sess?.status ?? 'idle', backend: 'tmux', name: sess?.display_title, limit: 60, messages: msgs, total: msgs.length, truncated: false, updatedAt: sess?.updated_at, capturedAt: now() } }
+    if (what === 'messages') { const msgs = chat(id); return { host, id, status: sess?.status ?? 'idle', backend: 'tmux', name: sess?.display_title, limit: 60, messages: msgs, total: msgs.length, truncated: false, queue: id === SID(1) ? { items: [{ id: 'q-1', text: 'Then add a KWD case (3 decimals) to the regression test.', createdAt: now() - 40_000 }], paused: false, held: false } : null, updatedAt: sess?.updated_at, capturedAt: now() } }
     if (what === 'peek') return { host, id, backend: 'tmux', lines: 200, text: PEEK, capturedAt: now() }
     if (what === 'brief') return brief(host, id)
     if (what === 'diffs') return diffs(host, id)
     if (what === 'review') return review(host, id)
+    if (what === 'ask') return { host, id, ask: sideAsk(b) }
     if (what === 'complete') { const kind = q.get('kind'); return kind === 'skills' ? { host, id, kind, skills: SKILLS } : kind === 'files' ? { host, id, kind, files: ['README.md', 'docs/billing/rounding.md', 'docs/onboarding/v3.md', 'CHANGELOG.md'] } : { host, id, kind, available: true, notes: [{ ref: 'billing', path: 'projects/billing.md', title: 'Billing' }] } }
+    if (what === 'files/plain') return { host, root: sess?.cwd, files: ['customers', 'invoices', 'money', 'statements'].map((n) => `${sess?.cwd}/docs/specs/${n}.plain`), truncated: false }
     if (what === 'files/stat') return { host, id, cwd: sess?.cwd, home: H, files: (b.paths || []).map((input) => { const rel = input.replace(/:\d+(:\d+)?$/, ''); const ok = /^(src|test|docs)\//.test(rel); return ok ? { input, path: `${sess?.cwd}/${rel}`, rel, exists: true, isFile: true, size: 2048, mtime: now() - 20 * M, kind: kindOf(rel) } : { input, path: input, exists: false } }) }
     if (what === 'stack/spawn') return { host, stack: stack(), created: true, generated: true, spawn: { name: 'x', dir: '~', tmuxSession: 'x', command: 'claude', trusted: true } }
     return { ok: true, host, id, result: 'renamed', title: b.title }
   }
+  if ((s = rest.match(/^asks\/([^/]+)$/))) return { host, ask: sideAsk({}, decodeURIComponent(s[1])) }
+  if ((s = rest.match(/^prs\/([^/]+)\/([^/]+)\/(\d+)\/(diff|ask|notes)(?:\/(.*))?$/))) return prReview(host, decodeURIComponent(s[1]), decodeURIComponent(s[2]), Number(s[3]), s[4], b)
   if (rest === 'harnesses') return HARN(host)
   if (rest === 'spawn-dirs') return spawnDirs(host)
   if (rest === 'jobs') return jobs(host)
   if ((s = rest.match(/^jobs\/([^/]+)$/))) return jobs(host).jobs.find((j) => j.name === decodeURIComponent(s[1]))
   if (rest === 'repos') return repos(host)
+  if (rest === 'tasks') return tasks(host)
+  if (rest === 'schedule') return schedule(host)
+  if (rest === 'focus') return focusStatus(host)
   if (rest === 'usage') return usage(host)
   if (rest === 'prs') return host === 'workstation' || host === 'laptop' ? prs(host) : prs(host)
   if (rest === 'dormant') return dormant(host)

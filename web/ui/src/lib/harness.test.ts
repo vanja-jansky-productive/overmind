@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { HarnessInfo } from '@/api/types'
 
-import { harnessLabel, modelKey, offeredHarnesses, pickHarness, sessionHarness } from './harness'
+import { overmindDefaultLabel, harnessLabel, modelKey, offeredHarnesses, pickHarness, sessionHarness, withOvermindDefault } from './harness'
 
 const claudeModels = [
   { id: '', label: 'Default' },
@@ -35,5 +35,29 @@ describe('pickHarness / labels', () => {
     expect(sessionHarness({})).toBe('claude')
     expect(modelKey('claude')).toBe('overmind.spawnModel')
     expect(modelKey('pi')).toBe('overmind.spawnModel.pi')
+  })
+})
+
+describe('overmind defaults in the picker', () => {
+  const models = [
+    { id: '', label: 'Default' },
+    { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+  ]
+  it('labels the default entry with the host default model and effort', () => {
+    expect(overmindDefaultLabel({ defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }, models)).toBe('Opus 5.5 · high')
+    expect(overmindDefaultLabel({ defaultModel: 'unknown-x', defaultEffort: null }, models)).toBe('unknown-x')
+    expect(overmindDefaultLabel({ defaultModel: null, defaultEffort: 'low' }, models)).toBe('low')
+    expect(overmindDefaultLabel({}, models)).toBeNull()
+    expect(withOvermindDefault(models, { defaultEffort: 'max' })[0]).toEqual({ id: '', label: 'Default · max' })
+    expect(withOvermindDefault(models, {})).toBe(models)
+  })
+  it('offeredHarnesses carries it to every harness, Claude included', () => {
+    const rows = [
+      { id: 'claude', label: 'Claude Code', command: 'claude', installed: true, models: [], defaultModel: 'claude-opus-5-5', defaultEffort: 'high' },
+      { id: 'codex', label: 'Codex', command: 'codex', installed: true, models: [{ id: '', label: 'Default (gpt-6)' }], defaultEffort: 'xhigh' },
+    ]
+    const got = offeredHarnesses(rows, models)
+    expect(got[0].models[0].label).toBe('Default · Opus 5.5 · high')
+    expect(got[1].models[0].label).toBe('Default · xhigh')
   })
 })

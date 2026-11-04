@@ -17,22 +17,24 @@ pub enum Action {
         host: String,
         session: String,
     },
+    /// `overmind://shell?host=<h>`: open an iTerm tab in the host's tmux (`overmind -H <h> new`).
+    Shell {
+        host: String,
+    },
     Deny,
 }
 
-/// The app's own `overmind://` links: only `attach`, with a host and a session.
+/// The app's own `overmind://` links: `attach` (a host and a session) and `shell` (a host).
 fn overmind_link(url: &Url) -> Action {
-    if url.host_str() != Some("attach") {
-        return Action::Deny;
-    }
     let q = |k: &str| {
         url.query_pairs()
             .find(|(n, _)| n == k)
             .map(|(_, v)| v.into_owned())
             .filter(|v| !v.is_empty())
     };
-    match (q("host"), q("session")) {
-        (Some(host), Some(session)) => Action::Attach { host, session },
+    match (url.host_str(), q("host"), q("session")) {
+        (Some("attach"), Some(host), Some(session)) => Action::Attach { host, session },
+        (Some("shell"), Some(host), _) => Action::Shell { host },
         _ => Action::Deny,
     }
 }
@@ -43,13 +45,15 @@ fn same_origin(a: &Url, b: &Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
-/// A navigation of the window (or of a frame in it). The app's own pages and the
-/// Overmind server stay in the window; other web pages open in the browser.
-pub fn navigation(url: &Url, server: &Url) -> Action {
+/// A navigation of the window (or of a frame in it). The app's own pages, the
+/// Overmind server and the profile's frame origins (`frames`) stay in the window; other
+/// web pages open in the browser.
+pub fn navigation(url: &Url, server: &Url, frames: &[Url]) -> Action {
     match url.scheme() {
         "tauri" | "about" | "blob" | "data" => Action::Allow,
         "http" | "https" if url.host_str() == Some("tauri.localhost") => Action::Allow,
         "http" | "https" if same_origin(url, server) => Action::Allow,
+        "http" | "https" if frames.iter().any(|f| same_origin(url, f)) => Action::Allow,
         "http" | "https" => Action::Open,
         s if OS_SCHEMES.contains(&s) => Action::Open,
         "overmind" => overmind_link(url),
@@ -78,33 +82,33 @@ mod tests {
     fn server_origin_stays_in_the_window() {
         let server = u("http://127.0.0.1:7878/");
         assert_eq!(
-            navigation(&u("http://127.0.0.1:7878/#/s/laptop/abc"), &server),
+            navigation(&u("http://127.0.0.1:7878/#/s/laptop/abc"), &server, &[]),
             Action::Allow
         );
         assert_eq!(
-            navigation(&u("http://127.0.0.1:7878/api/x"), &server),
+            navigation(&u("http://127.0.0.1:7878/api/x"), &server, &[]),
             Action::Allow
         );
         assert_eq!(
-            navigation(&u("tauri://localhost/index.html"), &server),
+            navigation(&u("tauri://localhost/index.html"), &server, &[]),
             Action::Allow
         );
-        assert_eq!(navigation(&u("about:blank"), &server), Action::Allow);
+        assert_eq!(navigation(&u("about:blank"), &server, &[]), Action::Allow);
     }
 
     #[test]
     fn other_origins_go_to_the_browser() {
         let server = u("http://127.0.0.1:7878/");
         assert_eq!(
-            navigation(&u("http://127.0.0.1:7778/"), &server),
+            navigation(&u("http://127.0.0.1:7778/"), &server, &[]),
             Action::Open
         );
         assert_eq!(
-            navigation(&u("https://127.0.0.1:7878/"), &server),
+            navigation(&u("https://127.0.0.1:7878/"), &server, &[]),
             Action::Open
         );
         assert_eq!(
-            navigation(&u("https://github.com/owner/repo/pull/1"), &server),
+            navigation(&u("https://github.com/owner/repo/pull/1"), &server, &[]),
             Action::Open
         );
     }
@@ -112,13 +116,47 @@ mod tests {
     #[test]
     fn editor_links_go_to_the_os_and_the_rest_is_dropped() {
         let server = u("http://127.0.0.1:7878/");
-        assert_eq!(navigation(&u("vscode://file/tmp/x"), &server), Action::Open);
-        assert_eq!(navigation(&u("cursor://file/tmp/x"), &server), Action::Open);
-        assert_eq!(navigation(&u("file:///etc/passwd"), &server), Action::Deny);
-        assert_eq!(navigation(&u("javascript:alert(1)"), &server), Action::Deny);
         assert_eq!(
-            navigation(&u("x-apple-systempreferences:foo"), &server),
+            navigation(&u("vscode://file/tmp/x"), &server, &[]),
+            Action::Open
+        );
+        assert_eq!(
+            navigation(&u("cursor://file/tmp/x"), &server, &[]),
+            Action::Open
+        );
+        assert_eq!(
+            navigation(&u("file:///etc/passwd"), &server, &[]),
             Action::Deny
+        );
+        assert_eq!(
+            navigation(&u("javascript:alert(1)"), &server, &[]),
+            Action::Deny
+        );
+        assert_eq!(
+            navigation(&u("x-apple-systempreferences:foo"), &server, &[]),
+            Action::Deny
+        );
+    }
+
+    #[test]
+    fn frame_origins_stay_in_the_window() {
+        let server = u("https://app.example.com:4443/");
+        let frames = [u("https://app.example.com:7443")];
+        assert_eq!(
+            navigation(
+                &u("https://app.example.com:7443/?host=h&dir=x#/embed"),
+                &server,
+                &frames
+            ),
+            Action::Allow
+        );
+        assert_eq!(
+            navigation(&u("https://app.example.com:7444/"), &server, &frames),
+            Action::Open
+        );
+        assert_eq!(
+            navigation(&u("https://app.example.com:7443/"), &server, &[]),
+            Action::Open
         );
     }
 
@@ -136,20 +174,28 @@ mod tests {
         assert_eq!(
             navigation(
                 &u("overmind://attach?host=workstation&session=a%20b"),
-                &server
+                &server,
+                &[]
             ),
             Action::Attach {
                 host: "workstation".into(),
                 session: "a b".into()
             }
         );
+        assert_eq!(
+            navigation(&u("overmind://shell?host=workstation"), &server, &[]),
+            Action::Shell {
+                host: "workstation".into()
+            }
+        );
         let deny = [
+            "overmind://shell?host=",
             "overmind://attach?host=workstation",
             "overmind://attach?host=&session=x",
             "overmind://run?host=h&session=x",
         ];
         for d in deny {
-            assert_eq!(navigation(&u(d), &server), Action::Deny, "{d}");
+            assert_eq!(navigation(&u(d), &server, &[]), Action::Deny, "{d}");
         }
         assert_eq!(
             new_window(&u("overmind://attach?host=h&session=x")),

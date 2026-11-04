@@ -12,7 +12,6 @@ import {
 import { useLocation } from 'wouter'
 
 import type { PullRequest, Session } from '@/api/types'
-import { HostDot } from '@/components/HostBadge'
 import { ChecksIcon, PrSessionLink } from '@/components/PrChip'
 import { PrDialog } from '@/components/PrDialog'
 import { PrMention } from '@/components/PrMention'
@@ -32,13 +31,13 @@ import { cn } from '@/lib/utils'
 /**
  * `#/prs`: the GitHub pull requests that need you (`overmind prs` on one host), by column —
  * unseen @mentions of you, waiting on you, yours in review / ready / drafts, waiting on their author. `pane` = the
- * desktop layout (a board over the whole window, like the notes explorer); `screen` = mobile
+ * desktop layout (a board in the pane beside the session list); `screen` = mobile
  * (the columns stacked, swipe back).
  */
 export function PrsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }) {
   const pane = layout === 'pane'
   const [location, navigate] = useLocation()
-  const { hosts, host, setHost, data, error, loading, refresh, refreshing, reload, links } = usePrs()
+  const { host, data, error, loading, refresh, refreshing, reload, links } = usePrs()
   // `#/prs/<owner>/<repo>/<n>`: that PR's dialog is open (session PR chips link here).
   const sel = parsePrLocation(location)
   const setOpen = (p: PullRequest) => navigate(prHref(p))
@@ -69,29 +68,6 @@ export function PrsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' })
       <RefreshCwIcon className={cn('size-5', refreshing && 'animate-spin')} />
     </Button>
   )
-
-  const hostPicker =
-    hosts.length > 1 ? (
-      <div role="radiogroup" aria-label="Host" title="Whose gh login and checkouts to use" className="no-scrollbar flex gap-1 overflow-x-auto">
-        {hosts.map((h) => (
-          <button
-            key={h}
-            type="button"
-            role="radio"
-            aria-checked={h === host}
-            onClick={() => setHost(h)}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
-              pane ? 'h-7' : 'h-9',
-              h === host ? 'border-primary/40 bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted/60',
-            )}
-          >
-            <HostDot host={h} />
-            {h}
-          </button>
-        ))}
-      </div>
-    ) : null
 
   const filter = (
     <div className="relative w-full">
@@ -175,17 +151,11 @@ export function PrsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' })
       <section aria-label="Pull requests" className="flex h-full min-w-0 flex-1 flex-col bg-background">
         <header
           data-tauri-drag-region="deep"
-          className="titlebar titlebar-lead flex shrink-0 items-center gap-2 border-b py-1.5 pr-2 pl-2 [--titlebar-pad:0.5rem]"
+          className="titlebar titlebar-lead flex shrink-0 items-center gap-2 border-b py-1.5 pr-2 pl-4 [--titlebar-pad:1rem]"
         >
-          <Button asChild variant="ghost" size="sm" className="shrink-0 text-muted-foreground">
-            <a href="#/" title="Back to the sessions (Esc)">
-              <ChevronLeftIcon /> Sessions
-            </a>
-          </Button>
           <h1 className="flex shrink-0 items-center gap-1.5 text-[0.9375rem] font-bold">
             <GitPullRequestIcon className="size-4 text-muted-foreground" /> Pull requests
           </h1>
-          {hostPicker}
           <div className="mx-2 flex max-w-md min-w-0 flex-1">{filter}</div>
           {draftsToggle}
           {refreshButton}
@@ -219,7 +189,6 @@ export function PrsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' })
           {refreshButton}
         </div>
         <div className="mt-2 space-y-2">
-          {hostPicker}
           <div className="flex items-center gap-2">
             {filter}
             {draftsToggle}

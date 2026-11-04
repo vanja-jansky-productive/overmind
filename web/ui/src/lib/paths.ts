@@ -16,7 +16,7 @@ const PATH_CHARS = /^[\p{L}\p{N}_.~/@+%-]+$/u
 const POS_SUFFIX = /(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L?\d+)?)$/
 const EXT = /\.([A-Za-z][A-Za-z0-9_+-]{0,9}|[0-9][A-Za-z][A-Za-z0-9]{0,8})$/
 const DOMAIN = /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|sh|me|gov|edu|so|xyz|info)(?:\/|$)/i
-const LEADING = /^[([{<"'“‘«]+/
+const LEADING = /^[([{<"'“‘«@]+/
 const TRAILING = /[.,;:!?)\]}>"'”’»…]+$/
 
 /** Split a `:line[:col]` / `#L12` suffix off. → { path, line?, col? } */
@@ -99,6 +99,11 @@ export function splitPaths(text: string, isLink: (raw: string) => boolean): ({ t
   }
   if (last < s.length || out.length === 0) out.push({ t: 'text', v: s.slice(last) })
   return out
+}
+
+/** Path candidates in plain text (user prompts, the terminal), in order, unique. */
+export function textPathCandidates(text: string): string[] {
+  return [...new Set(pathTokens(text).map((t) => t.raw))]
 }
 
 function collectInline(nodes: Inline[], out: Set<string>) {

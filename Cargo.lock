@@ -2665,6 +2665,8 @@ name = "overmind-desktop"
 version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
+ "dispatch2",
+ "objc2-app-kit",
  "overmind",
  "serde",
  "serde_json",

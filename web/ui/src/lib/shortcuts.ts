@@ -15,8 +15,6 @@ export type ShortcutAction =
   | 'back'
   | 'blur'
   | 'mode'
-  | 'sidebar'
-  | 'inspector'
   | 'palette'
   | 'help'
   | 'view'
@@ -84,8 +82,6 @@ export const BINDINGS: readonly Binding[] = [
   { action: 'new', combo: ['mod', 'shift', 'O'] },
   { action: 'search', combo: ['mod', 'F'] },
   { action: 'view', combo: ['mod', 'B'] },
-  { action: 'sidebar', combo: ['mod', '\\'] },
-  { action: 'inspector', combo: ['mod', 'I'] },
   { action: 'mode', combo: ['mod', 'J'] },
   { action: 'rename', combo: ['mod', 'E'] },
   { action: 'notes', combo: ['mod', 'shift', 'E'] },
@@ -261,8 +257,6 @@ export const SHORTCUT_HELP: { title: string; items: ShortcutHelp[] }[] = [
     title: 'Layout',
     items: [
       { action: 'view', label: 'Switch List / Board (sessions grouped by work)' },
-      { action: 'sidebar', label: 'Toggle the sidebar' },
-      { action: 'inspector', label: 'Toggle the details panel (brief: summary, todos, resources)' },
       { action: 'notes', label: 'Notes explorer (Esc back to the sessions)' },
       { action: 'scratchpad', label: 'Scratchpad: a floating, autosaved text buffer (again or Esc closes it)' },
       { action: 'help', label: 'This help' },
@@ -333,6 +327,14 @@ export function shortcutEnv(): ShortcutEnv {
 export const APP_COMMAND_EVENT = 'overmind:command'
 /** Actions the app's menu may ask for. */
 export const APP_COMMANDS: readonly ShortcutAction[] = ['new']
+
+/** Overmind.app → the page: a native action failed (opening iTerm, …). `command`: what to copy instead. */
+export const APP_ERROR_EVENT = 'overmind:error'
+export interface AppError {
+  title: string
+  message: string
+  command?: string | null
+}
 
 /** Opens the keyboard shortcuts dialog from anywhere (the Settings screen); the desktop shell listens. */
 export const SHOW_SHORTCUTS_EVENT = 'overmind:show-shortcuts'

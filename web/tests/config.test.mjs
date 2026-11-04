@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { configPath, expandHome, loadConfig, normalizeConfig, resolveBinary, resolveOvermindBin } from '../lib/config.mjs';
+import { configPath, createSlackSettingsReloader, expandHome, ghIdentitiesOf, loadConfig, normalizeConfig, resolveBinary, resolveOvermindBin, spawnRoots } from '../lib/config.mjs';
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-web-cfg-'));
@@ -38,6 +38,11 @@ test('expandHome expands ~ and ~/ only', () => {
   assert.equal(expandHome('~other/x', HOME), '~other/x');
 });
 
+test('normalizeConfig: hosts.<name>.shared lists the shared sheds', () => {
+  const c = normalizeConfig({ self: 'laptop', hosts: { laptop: {}, shed: { web: 'http://100.x.y.z:7878', shared: true }, ws: { shared: 'yes' } } }, { home: '/h', env: {} });
+  assert.deepEqual(c.sharedHosts, ['shed']);
+});
+
 test('configPath: OVERMIND_CONFIG > XDG_CONFIG_HOME > ~/.config', () => {
   assert.equal(configPath({ OVERMIND_CONFIG: '~/x.json' }, HOME), `${HOME}/x.json`);
   assert.equal(configPath({ XDG_CONFIG_HOME: '/xdg' }, HOME), '/xdg/overmind/config.json');
@@ -64,6 +69,21 @@ test('normalizeConfig: per-host spawnDirs follow self', () => {
   const cfg = normalizeConfig({ ...SAMPLE, self: 'workstation' }, { env: {}, home: HOME });
   assert.deepEqual(cfg.spawnDirs.map((d) => d.label), ['Work', 'Notes', 'Shared']);
   assert.deepEqual(cfg.peers, { laptop: 'http://100.x.y.z:7878' });
+});
+
+test('normalizeConfig: hidden spawnDirs are allowed, not offered; only hidden → Home is offered', () => {
+  const cfg = normalizeConfig(
+    { self: 'laptop', spawnDirs: [{ label: 'Work', paths: { laptop: '~/Code/work' } }, { label: 'Brain', paths: { laptop: '~/brain' }, hidden: true }] },
+    { env: {}, home: HOME },
+  );
+  assert.deepEqual(cfg.spawnDirs, [{ label: 'Work', path: `${HOME}/Code/work` }]);
+  assert.deepEqual(cfg.hiddenSpawnDirs, [{ label: 'Brain', path: `${HOME}/brain` }]);
+  assert.deepEqual(spawnRoots(cfg), [`${HOME}/Code/work`, `${HOME}/brain`]);
+
+  const only = normalizeConfig({ self: 'laptop', spawnDirs: [{ label: 'Brain', paths: { laptop: '~/brain' }, hidden: true }] }, { env: {}, home: HOME });
+  assert.deepEqual(only.spawnDirs, [{ label: 'Home', path: HOME }]);
+  assert.deepEqual(spawnRoots(only), [HOME, `${HOME}/brain`]);
+  assert.deepEqual(normalizeConfig({}, { env: {}, home: HOME }).hiddenSpawnDirs, []);
 });
 
 test('normalizeConfig defaults: missing config = single loopback host', () => {
@@ -193,4 +213,48 @@ test('config.example.json is valid and has placeholders only', () => {
   const cfg = normalizeConfig(raw, { env: {}, home: HOME });
   assert.equal(cfg.self, 'laptop');
   assert.ok(Object.keys(cfg.peers).includes('workstation'));
+});
+
+test('ghIdentitiesOf keeps entries with a usable name and a command', () => {
+  assert.deepEqual(ghIdentitiesOf({}), []);
+  assert.deepEqual(ghIdentitiesOf({ ghIdentities: [] }), []);
+  assert.deepEqual(
+    ghIdentitiesOf({ ghIdentities: { bot: { command: 'gh-bot', login: 'my-app[bot]' }, plain: { command: 'x' }, nocmd: {}, 'a b': { command: 'x' } } }),
+    [{ name: 'bot', login: 'my-app[bot]' }, { name: 'plain', login: 'plain' }],
+  );
+});
+
+test('createSlackSettingsReloader: slack.owner / slack.spawn follow the file; a broken file keeps them', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-cfg-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'config.json');
+  const env = { OVERMIND_CONFIG: file };
+  const write = (obj, at) => {
+    fs.writeFileSync(file, typeof obj === 'string' ? obj : JSON.stringify(obj));
+    fs.utimesSync(file, at, at);
+  };
+  write({ self: 'ws', slack: { host: 'ws', owner: 'UAAAAA' } }, 1000);
+  const config = loadConfig({ env, home: dir, log: { warn() {} } });
+  const reload = createSlackSettingsReloader({ config, env, home: dir });
+  assert.equal(reload(), false); // unchanged
+  write({ self: 'ws', slack: { host: 'other', owner: 'UBBBBB' } }, 2000);
+  assert.equal(reload(), true);
+  assert.equal(config.slack.owner, 'UBBBBB');
+  assert.equal(config.slack.host, 'ws'); // read at start only
+  const logged = [];
+  const reload2 = createSlackSettingsReloader({ config, env, home: dir, log: (l) => logged.push(l) });
+  write('{ not json', 3000);
+  assert.equal(reload2(), false);
+  assert.equal(config.slack.owner, 'UBBBBB');
+  assert.match(logged[0], /did not load/);
+});
+
+test('slack.owners: a list, merged with slack.owner (first); bad ids refused', () => {
+  const n = (slack) => normalizeConfig({ self: 'ws', slack: { host: 'ws', ...slack } }, { env: {}, home: '/home/t' }).slack;
+  assert.deepEqual([n({ owner: 'UAAAAA' }).owner, n({ owner: 'UAAAAA' }).owners], ['UAAAAA', ['UAAAAA']]);
+  const both = n({ owner: 'UAAAAA', owners: ['UBBBBB', 'UAAAAA'] });
+  assert.deepEqual([both.owner, both.owners], ['UAAAAA', ['UAAAAA', 'UBBBBB']]);
+  assert.deepEqual([n({ owners: ['UBBBBB'] }).owner, n({}).owners], ['UBBBBB', []]);
+  assert.throws(() => n({ owners: 'UAAAAA' }), /owners must be a list/);
+  assert.throws(() => n({ owners: ['nope'] }), /owners must be a list/);
 });

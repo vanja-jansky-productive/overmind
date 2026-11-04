@@ -2,7 +2,7 @@
 //
 // Path: $OVERMIND_CONFIG, else ${XDG_CONFIG_HOME:-~/.config}/overmind/config.json.
 // Shape (v1) — see config.example.json and ARCHITECTURE.md:
-//   { version, self, defaultHost, hosts: { name: { ssh, web } },
+//   { version, self, defaultHost, hosts: { name: { ssh, web, editorSsh } },
 //     web: { port, bind, dir, ui, editor, editorSsh, quickReplies, models: [ { id, label } ],
 //            autoName: { enabled, intervalMinutes },
 //            grouping: { enabled, intervalMinutes }, uploads: { dir, maxMB, retentionDays },
@@ -12,7 +12,8 @@
 //     stacks: { enabled, model },         (read by the CLI; the server only reports them)
 //     grouping: { enabled, model, host },   (enabled/model are read by the CLI)
 //     inbox: { host, scanMinutes, workHours, workDays, model, briefModel, briefMinutes, language, comms },
-//     tmux, overmindBin, claude, spawnDirs: [ { label, paths: { host: dir } } ] }
+//     slack: { host, owner, owners, bridges, spawn },
+//     tmux, overmindBin, claude, spawnDirs: [ { label, paths: { host: dir }, hidden? } ] }
 //
 // A missing config file is not an error: the server runs as a single local host
 // ("local", 127.0.0.1, no peers). A present-but-broken file is a hard error.
@@ -31,6 +32,8 @@ export const DEFAULT_UPLOADS_DIR = '~/.local/share/overmind/uploads';
 export const DEFAULT_UPLOAD_MAX_MB = 100;
 export const DEFAULT_MEMOS_DIR = '~/.local/share/overmind/memos';
 export const DEFAULT_MEMO_AUDIO_DIR = '~/.local/share/overmind/memo-audio';
+// Voice prompts that failed to transcribe (lib/transcribe.mjs keepDir).
+export const DEFAULT_VOICE_FAILED_DIR = '~/.local/share/overmind/voice-failed';
 export const DEFAULT_UPLOAD_RETENTION_DAYS = 14;
 export const DEFAULT_STACKS_SYNC_MINUTES = 2;
 export const DEFAULT_STACKS_MODEL = 'sonnet';
@@ -73,6 +76,32 @@ export function overmindStateDir(env = process.env, home = os.homedir()) {
 }
 
 /** A model id typed after `--model` in a shell: letters, digits and `._[]-` only. */
+/** `ghIdentities` → `[{ name, login }]`, entries with a usable name and a `command` only. */
+export function ghIdentitiesOf(raw) {
+  const m = raw?.ghIdentities;
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return [];
+  return Object.entries(m)
+    .filter(([name, v]) => GH_IDENTITY_RE.test(name) && typeof v?.command === 'string' && v.command.trim())
+    .map(([name, v]) => ({ name, login: typeof v.login === 'string' && v.login.trim() ? v.login.trim() : name }));
+}
+
+export const GH_IDENTITY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * `harnesses.<id>.model` / `.effort`: what a spawn uses when it picks none. Read leniently (a bad
+ * value is dropped, never fatal): a model must be a typed-safe id, an effort a lowercase word.
+ */
+export function harnessDefaultsOf(raw) {
+  const out = {};
+  for (const id of ['claude', 'codex', 'pi']) {
+    const h = raw?.harnesses?.[id];
+    const model = typeof h?.model === 'string' && /^[A-Za-z0-9._[\]/:-]{1,100}$/.test(h.model.trim()) ? h.model.trim() : null;
+    const effort = typeof h?.effort === 'string' && /^[a-z]{1,20}$/.test(h.effort.trim()) ? h.effort.trim() : null;
+    out[id] = { model, effort };
+  }
+  return out;
+}
+
 /** `harnesses.<id>.command` when it is a non-blank string, else the bare id. Read leniently. */
 function harnessCommand(raw, id, home) {
   const c = raw?.harnesses?.[id]?.command;
@@ -186,19 +215,41 @@ function spawnDirFor(entry, self, home) {
   const abs = expandHome(dir.trim(), home);
   if (!path.isAbsolute(abs)) throw new Error(`config.spawnDirs path must be absolute or start with ~: ${dir}`);
   const label = typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : path.basename(abs);
-  return { label, path: path.normalize(abs) };
+  return { label, path: path.normalize(abs), hidden: entry.hidden === true };
+}
+
+function spawnDirsOf(list, self, home) {
+  if (list == null) list = [];
+  if (!Array.isArray(list)) throw new Error('config.spawnDirs must be an array');
+  return list.map((e) => spawnDirFor(e, self, home)).filter(Boolean);
 }
 
 /**
  * What this host offers for new sessions: the raw `spawnDirs` list → `[{ label, path }]`
- * (absolute, `~` expanded); `[{ label: "Home", path: home }]` when none is for this host.
+ * (absolute, `~` expanded), without the `hidden: true` entries; `[{ label: "Home", path: home }]`
+ * when none is offered on this host (also when all of this host's entries are hidden).
  * Also used to hot-reload the list after a Settings edit (lib/spawn-dirs.mjs).
  */
 export function spawnDirsFor(list, self, home = os.homedir()) {
-  if (list == null) list = [];
-  if (!Array.isArray(list)) throw new Error('config.spawnDirs must be an array');
-  const dirs = list.map((e) => spawnDirFor(e, self, home)).filter(Boolean);
+  const dirs = spawnDirsOf(list, self, home)
+    .filter((d) => !d.hidden)
+    .map(({ label, path: p }) => ({ label, path: p }));
   return dirs.length ? dirs : [{ label: 'Home', path: home }];
+}
+
+/**
+ * This host's `hidden: true` entries → `[{ label, path }]`: allowed for spawns (e.g. an app's
+ * embedded panel starting sessions in its own dir) but not offered in the New session menu.
+ */
+export function hiddenSpawnDirsFor(list, self, home = os.homedir()) {
+  return spawnDirsOf(list, self, home)
+    .filter((d) => d.hidden)
+    .map(({ label, path: p }) => ({ label, path: p }));
+}
+
+/** The spawn allow-list: every dir offered (`spawnDirs`) plus the hidden ones. */
+export function spawnRoots(config) {
+  return [...(config.spawnDirs ?? []), ...(config.hiddenSpawnDirs ?? [])].map((d) => d.path);
 }
 
 /** The retired `web.ui` shortcut for the old vanilla UI; now means "the default". */
@@ -224,6 +275,49 @@ export function resolveUiDir(uiRaw, { webRoot = null, home = os.homedir() } = {}
  *               minNewChars, maxBriefChars, dir }, stacks: { sync, syncMinutes, generate, model },
  *     restore: { onBoot, markerFile }, configFile, configFound }
  */
+const SLACK_USER_RE = /^[UW][A-Z0-9]+$/;
+
+/**
+ * `slack.spawn`: a mention of this bridge's app in a thread no session follows opens a new
+ * session there, linked to that thread (lib/slack.mjs). Read only on the bridge's own server.
+ * `{ host?, dir?, model?, harness?, ghIdentity?, minutes?, mode?, task?, from? }` —
+ * `host` (default: this one) is where it opens, `dir` a spawn dir there (`~/…` is that host's
+ * home; none = its first), `minutes` the link's duration (default `1d`), `from` who may start one:
+ * `"anyone"` in a channel the app is in, or a list of Slack user ids (default: `[owner]`).
+ */
+export function slackSpawn(raw) {
+  if (raw == null || raw === false) return null;
+  if (!isObject(raw)) throw new Error('config.slack.spawn must be an object { host, dir, model, harness, minutes, mode, task, from }');
+  const str = (k) => {
+    const v = raw[k];
+    if (v == null || v === '') return null;
+    if (typeof v !== 'string' || !v.trim()) throw new Error(`config.slack.spawn.${k} must be a string`);
+    return v.trim();
+  };
+  let from = null; // null = the owner only
+  if (raw.from != null) {
+    if (raw.from === 'anyone') from = 'anyone';
+    else if (Array.isArray(raw.from) && raw.from.every((u) => typeof u === 'string' && SLACK_USER_RE.test(u.trim()))) from = raw.from.map((u) => u.trim());
+    else throw new Error('config.slack.spawn.from must be "anyone" or a list of Slack user ids (U…)');
+  }
+  let minutes = '1d';
+  if (raw.minutes != null && raw.minutes !== '') {
+    if (typeof raw.minutes !== 'string' && typeof raw.minutes !== 'number') throw new Error('config.slack.spawn.minutes must be a duration like 1d, 2h, 90, or "forever"');
+    minutes = raw.minutes;
+  }
+  return {
+    host: str('host'),
+    dir: str('dir'),
+    model: str('model'),
+    harness: str('harness'),
+    ghIdentity: str('ghIdentity'),
+    mode: str('mode'),
+    task: str('task'),
+    minutes,
+    from,
+  };
+}
+
 export function normalizeConfig(
   raw = {},
   { env = process.env, home = os.homedir(), found = true, webRoot = null, fsImpl = fs } = {},
@@ -239,10 +333,19 @@ export function normalizeConfig(
   const hosts = raw.hosts == null ? {} : raw.hosts;
   if (!isObject(hosts)) throw new Error('config.hosts must be an object of name -> { ssh, web }');
   const peers = {};
+  const peerProxies = {}; // peer origin → HTTP proxy url (hosts.<name>.webProxy)
+  const peerConnects = {}; // peer origin → host[:port] dialled instead (hosts.<name>.webConnect)
   const sshHosts = {}; // name → ssh destination (the "Open in editor" Remote-SSH links)
   const hostAddrs = {}; // name → the hostname of its web url (which machine a browser is on)
+  const sharedHosts = []; // hosts.<name>.shared: shared sheds, kept out of the default view and the Inbox
+  let selfWeb = null; // this host's own web url (hosts.<self>.web), for links to it
   for (const [name, host] of Object.entries(hosts)) {
-    if (isObject(host) && typeof host.ssh === 'string' && host.ssh.trim()) sshHosts[name] = host.ssh.trim();
+    if (isObject(host) && host.shared === true) sharedHosts.push(name);
+    if (name === self.trim() && isObject(host) && typeof host.web === 'string' && /^https?:\/\//.test(host.web)) selfWeb = host.web.replace(/\/+$/, '');
+    // `editorSsh`: the destination the browser's machine uses, for a host this server reaches over
+    // the web only (no `ssh`) or under another alias.
+    const dest = isObject(host) ? [host.editorSsh, host.ssh].find((v) => typeof v === 'string' && v.trim()) : null;
+    if (dest) sshHosts[name] = dest.trim();
     if (isObject(host) && typeof host.web === 'string') {
       try {
         hostAddrs[name] = new URL(host.web).hostname.replace(/^\[|\]$/g, '');
@@ -257,6 +360,18 @@ export function normalizeConfig(
       throw new Error(`config.hosts.${name}.web must be an http(s) url`);
     }
     peers[name] = host.web.replace(/\/+$/, '');
+    if (host.webProxy != null) {
+      if (typeof host.webProxy !== 'string' || !/^https?:\/\//.test(host.webProxy)) {
+        throw new Error(`config.hosts.${name}.webProxy must be an http(s) url`);
+      }
+      peerProxies[new URL(peers[name]).origin] = host.webProxy.replace(/\/+$/, '');
+    }
+    if (host.webConnect != null) {
+      if (typeof host.webConnect !== 'string' || !/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(host.webConnect)) {
+        throw new Error(`config.hosts.${name}.webConnect must be a host or host:port`);
+      }
+      peerConnects[new URL(peers[name]).origin] = host.webConnect;
+    }
   }
 
   const web = raw.web == null ? {} : raw.web;
@@ -286,6 +401,7 @@ export function normalizeConfig(
   const uiDir = resolveUiDir(uiRaw, { webRoot, home });
 
   const spawnDirs = spawnDirsFor(raw.spawnDirs, self.trim(), home);
+  const hiddenSpawnDirs = hiddenSpawnDirsFor(raw.spawnDirs, self.trim(), home);
 
   let quickReplies = null;
   if (web.quickReplies != null) {
@@ -395,6 +511,36 @@ export function normalizeConfig(
   if (ib.comms != null) inbox.comms = ib.comms;
   inbox.enabled = inbox.host != null && inbox.host === self.trim();
   if (env.OVERMIND_WEB_INBOX != null && env.OVERMIND_WEB_INBOX !== '' && /^(0|false|off|no)$/i.test(env.OVERMIND_WEB_INBOX)) inbox.enabled = false;
+
+  // slack: Slack links (lib/slack.mjs). One host runs the bridge (`slack.host`); the others proxy
+  // /api/slack there. `owner` is your Slack user id (your messages there are marked as the owner's);
+  // `owners`, a list of them, for a machine several people own (a shared shed). Both may be set.
+  // OVERMIND_WEB_SLACK=0 turns it off on this server.
+  const sl = raw.slack == null ? {} : raw.slack;
+  if (!isObject(sl)) throw new Error('config.slack must be an object { host, owner, owners, bridges }');
+  if (sl.host != null && (typeof sl.host !== 'string' || !sl.host.trim())) throw new Error('config.slack.host must be a host name');
+  if (sl.owner != null && (typeof sl.owner !== 'string' || !/^[UW][A-Z0-9]{4,}$/.test(sl.owner.trim()))) {
+    throw new Error('config.slack.owner must be a Slack user id (U…)');
+  }
+  // `bridges`: { "<session host>": "<bridge host>" } — a host whose sessions another bridge links
+  // (one with its own Slack app); the rest go to `host`.
+  const bridges = {};
+  if (sl.bridges != null) {
+    if (!isObject(sl.bridges)) throw new Error('config.slack.bridges must be an object { "<host>": "<bridge host>" }');
+    for (const [h, b] of Object.entries(sl.bridges)) {
+      if (typeof b !== 'string' || !b.trim()) throw new Error(`config.slack.bridges.${h} must be a host name`);
+      bridges[h] = b.trim();
+    }
+  }
+  const userId = (v) => typeof v === 'string' && /^[UW][A-Z0-9]{4,}$/.test(v.trim());
+  if (sl.owners != null && (!Array.isArray(sl.owners) || !sl.owners.every(userId))) {
+    throw new Error('config.slack.owners must be a list of Slack user ids (U…)');
+  }
+  // `owners`: everyone who owns this machine's sessions, `owner` first; `owner`: the first of them.
+  const owners = [...new Set([sl.owner, ...(sl.owners ?? [])].filter((v) => v != null).map((v) => v.trim()))];
+  const slack = { host: sl.host == null ? null : sl.host.trim(), owner: owners[0] ?? null, owners, bridges, spawn: slackSpawn(sl.spawn) };
+  slack.enabled = slack.host != null && slack.host === self.trim();
+  if (env.OVERMIND_WEB_SLACK != null && env.OVERMIND_WEB_SLACK !== '' && /^(0|false|off|no)$/i.test(env.OVERMIND_WEB_SLACK)) slack.enabled = false;
 
   // web.uploads: where dropped/pasted files are stored (lib/uploads.mjs).
   const wu = web.uploads == null ? {} : web.uploads;
@@ -553,27 +699,37 @@ export function normalizeConfig(
     port,
     bind,
     peers,
+    selfWeb,
+    peerProxies,
+    peerConnects,
     sshHosts,
     hostAddrs,
     editor,
     editorSsh,
     hosts: [self.trim(), ...Object.keys(peers)],
+    sharedHosts,
     overmindBin: resolveOvermindBin(raw, { env, home, fsImpl }),
     tmux: resolveBinary('tmux', { explicit: env.OVERMIND_TMUX || raw.tmux, env, home, fsImpl }),
     claude: typeof raw.claude === 'string' && raw.claude ? expandHome(raw.claude, home) : 'claude',
+    harnessDefaults: harnessDefaultsOf(raw),
     // How each harness launches in a spawned session (`claude`, `harnesses.<id>.command`).
     launchers: {
       claude: typeof raw.claude === 'string' && raw.claude ? expandHome(raw.claude, home) : 'claude',
       codex: harnessCommand(raw, 'codex', home),
       pi: harnessCommand(raw, 'pi', home),
     },
+    // GitHub identities a spawned session can act as (`ghIdentities`): names and logins only —
+    // the launcher comes from `overmind gh-identity launcher`, which owns the shim.
+    ghIdentities: ghIdentitiesOf(raw),
     spawnDirs,
+    hiddenSpawnDirs,
     uiDir,
     quickReplies,
     models,
     autoName,
     grouping,
     inbox,
+    slack,
     uploads,
     files,
     notes,
@@ -614,4 +770,40 @@ export function loadConfig({ env = process.env, home = os.homedir(), webRoot = n
     throw new Error(`invalid overmind config ${file}: ${err.message}`);
   }
   return { ...cfg, configFile: found ? file : null };
+}
+
+/**
+ * The config keys the Slack bridge takes live — `slack.owner(s)` and `slack.spawn` — re-read when the
+ * file changes (`overmind config set`), with no restart. The rest of `slack` (host, bridges) is read at
+ * start. Returns a check to call now and then: true when it took new values. A file that does not
+ * parse keeps the old values (the next change is tried again).
+ */
+export function createSlackSettingsReloader({ config, env = process.env, home = os.homedir(), fsImpl = fs, log = () => {} }) {
+  const file = configPath(env, home);
+  const mtime = () => {
+    try {
+      return fsImpl.statSync(file).mtimeMs;
+    } catch {
+      return null;
+    }
+  };
+  let seen = mtime();
+  return function reload() {
+    const m = mtime();
+    if (m === seen) return false;
+    let fresh;
+    try {
+      fresh = loadConfig({ env, home, fsImpl, log: { warn() {} } });
+    } catch (err) {
+      log(`[slack] config changed but did not load, keeping the old settings: ${err?.message ?? err}`);
+      return false;
+    }
+    seen = m;
+    const snap = () => JSON.stringify([config.slack.owners, config.slack.spawn]);
+    const before = snap();
+    config.slack.owner = fresh.slack.owner;
+    config.slack.owners = fresh.slack.owners;
+    config.slack.spawn = fresh.slack.spawn;
+    return snap() !== before;
+  };
 }

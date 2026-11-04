@@ -6,6 +6,7 @@ import { Link, useLocation } from 'wouter'
 import { ApiError, api } from '@/api/client'
 import type { OvermindResponse, Job, JobRun } from '@/api/types'
 import { HostBadge, HostDot } from '@/components/HostBadge'
+import { ScheduledList } from '@/components/ScheduledList'
 import { ScreenHeader } from '@/components/ScreenHeader'
 import { StatusDot } from '@/components/StatusDot'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ import { Switch } from '@/components/ui/switch'
 import { useOvermind } from '@/hooks/useOvermind'
 import { useJobShow, useJobs } from '@/hooks/useJobs'
 import { useNow } from '@/hooks/useNow'
+import { useSchedule } from '@/hooks/useSchedule'
 import { useSwipeBack } from '@/hooks/useSwipeBack'
 import { relTime } from '@/lib/format'
 import { OUTCOME_TEXT, jobKey, keepLabel, liveSession, liveSummary, outcomeTone, promptLabel, runTree, whenLabel } from '@/lib/jobs'
@@ -36,6 +38,7 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
   const { jobs, errors, loading, reload, patch } = useJobs()
   const { overmind, refresh: refreshOvermind } = useOvermind()
   const now = useNow(30_000)
+  const { pending: scheduled, reload: reloadSchedule } = useSchedule()
   const [open, setOpen] = useState<Set<string>>(() => new Set())
   const [confirm, setConfirm] = useState<HostedJob | null>(null)
   // A run that started: bumps the expanded job's runs.
@@ -73,7 +76,10 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
       size="icon"
       aria-label="Refresh bots"
       title="Refresh"
-      onClick={() => reload()}
+      onClick={() => {
+        reload()
+        reloadSchedule()
+      }}
       className={cn('shrink-0', pane ? 'size-11 rounded-xl' : '-my-1.5 size-11 rounded-xl')}
     >
       <RefreshCwIcon className="size-5" />
@@ -86,6 +92,12 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
         <div className="space-y-2 rounded-xl border p-4">
           <Skeleton className="h-4 w-1/2" />
           <Skeleton className="h-3 w-full" />
+        </div>
+      ) : null}
+      {scheduled.length ? (
+        <div className="space-y-1.5">
+          <h2 className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">Scheduled sessions</h2>
+          <ScheduledList entries={scheduled} now={now} onChanged={reloadSchedule} />
         </div>
       ) : null}
       {jobs.map((j) => (
@@ -117,7 +129,8 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
         <p className="py-8 text-center text-sm text-muted-foreground">No bots. Add one under <span className="font-mono">bots</span> in a host’s overmind config.</p>
       ) : null}
       <p className="text-xs text-dimmer">
-        Bots live in each host’s overmind config; that host’s <span className="font-mono">overmind bots tick</span> service starts them on schedule.
+        Bots live in each host’s overmind config; that host’s <span className="font-mono">overmind bots tick</span> service starts them on schedule, and the
+        one-off sessions scheduled from New session or a task (<span className="font-mono">overmind schedule</span>).
       </p>
     </div>
   )
@@ -216,7 +229,19 @@ function JobCard({
               {j.scheduleText ?? <span className="font-mono">{j.schedule}</span>}
             </span>
             <span>·</span>
-            <span>{j.enabled ? (j.nextRun ? `next ${whenLabel(j.nextRun, now)}` : 'no next run') : 'paused'}</span>
+            {j.on?.github ? (
+              <span className={cn(j.enabled && j.github?.error && 'text-destructive')} title={j.github?.error?.message}>
+                {!j.enabled
+                  ? 'paused'
+                  : j.github?.error
+                    ? `poll failed (${j.github.error.kind})`
+                    : j.github?.lastPoll
+                      ? `polled ${relTime(j.github.lastPoll, now)} ago`
+                      : 'not polled yet'}
+              </span>
+            ) : (
+              <span>{j.enabled ? (j.nextRun ? `next ${whenLabel(j.nextRun, now)}` : 'no next run') : 'paused'}</span>
+            )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-6 text-xs">
             {lastRun ? (
@@ -231,9 +256,11 @@ function JobCard({
         </button>
         <div className="flex shrink-0 flex-col items-end gap-2.5">
           <Switch checked={j.enabled} onCheckedChange={onEnabled} aria-label={`${j.name} on ${j.host} enabled`} />
-          <Button variant="outline" size="sm" onClick={onRun} title="Start a run now">
-            <PlayIcon /> Run now
-          </Button>
+          {j.on?.github ? null : (
+            <Button variant="outline" size="sm" onClick={onRun} title="Start a run now">
+              <PlayIcon /> Run now
+            </Button>
+          )}
         </div>
       </div>
       {open ? (
@@ -320,6 +347,14 @@ function RunItem({ run: r, host, now, overmind }: { run: JobRun; host: string; n
         <span className={cn('font-semibold', OUTCOME_TEXT[tone])}>{r.outcome}</span>
         <span className="text-muted-foreground">{whenLabel(r.startedAt, now)}</span>
         <span className="text-dimmer">{r.trigger}</span>
+        {r.subject ? (
+          <span
+            className={cn('font-mono', r.subject.goneAt ? 'text-dimmer line-through' : 'text-muted-foreground')}
+            title={r.subject.goneAt ? 'branch deleted' : r.subject.sha}
+          >
+            {r.subject.branch}
+          </span>
+        ) : null}
         <span className="ml-auto font-mono text-[0.6875rem] text-dimmer">{r.id}</span>
       </div>
       {r.reason ? <p className="mt-0.5 text-xs break-words text-muted-foreground">{r.reason}</p> : null}

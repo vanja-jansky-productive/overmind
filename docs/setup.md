@@ -118,7 +118,7 @@ Minimal `~/.tmux.conf` on the workstation:
 
 ```tmux
 set -g mouse on                      # scroll + click panes, also on the phone
-bind f switch-client -t overmind     # prefix f: jump back to the overmind dashboard
+bind f switch-client -t overmind        # prefix f: jump back to the overmind dashboard
 bind S switch-client -l              # prefix S: previous session
 ```
 
@@ -172,10 +172,10 @@ Notes:
 On the laptop (from a checkout of this repo):
 
 ```sh
-cargo install --path crates/overmind # see README "Build prerequisites" if linking fails
-overmind init                      # name this machine "laptop", add host "workstation" (ssh: workstation)
-overmind install --host workstation # copies the binary + web app; the workstation needs no Rust
-overmind -H workstation init       # the same wizard on the workstation (self = "workstation")
+cargo install --path crates/overmind  # see README "Build prerequisites" if linking fails
+overmind init                         # name this machine "laptop", add host "workstation" (ssh: workstation)
+overmind install --host workstation   # copies the binary + web app; the workstation needs no Rust
+overmind -H workstation init          # the same wizard on the workstation (self = "workstation")
                                    # or non-interactively: overmind init --yes --self … --add-host … (docs/cli.md)
 overmind doctor
 ```
@@ -188,14 +188,17 @@ in the web app under **Settings → Start directories**: one row per label, a pa
 (empty = not offered there). Save checks every host's own paths, then writes the same list to
 each reachable host's config (through `overmind config set spawnDirs …`); the running servers use it
 at once, no restart. `overmind config set spawnDirs '<json>'` on each host does the same by hand.
+The eye button on a row hides it (`"hidden": true`): the directory stays allowed for spawns — e.g.
+an app whose [embedded panel](architecture.md#embed-view) starts sessions in its own folder — but
+is no longer offered in New session.
 Editing this list is as powerful as spawning (it widens what spawn accepts), and like spawn it is
 unauthenticated — keep the web servers on a private network.
 
 Start the web app on each machine:
 
 ```sh
-overmind web serve                 # foreground
-overmind web install-service       # macOS: launchd agent; elsewhere: prints instructions
+overmind web serve                    # foreground
+overmind web install-service          # macOS: launchd agent; elsewhere: prints instructions
 ```
 
 The launchd agent logs to `~/Library/Logs/overmind.web.log` and pins a stable node
@@ -219,8 +222,8 @@ after one.
 ([cli.md → Bots](cli.md#bots)), then install the ticker that starts them:
 
 ```sh
-overmind bots install-service      # macOS: launchd agent `overmind.jobs`, every minute; logs to ~/Library/Logs/overmind.jobs.log
-overmind bots                      # each bot, its schedule in plain English, next and last run
+overmind bots install-service         # macOS: launchd agent `overmind.jobs`, every minute; logs to ~/Library/Logs/overmind.jobs.log
+overmind bots                         # each bot, its schedule in plain English, next and last run
 ```
 
 Bot sessions run unattended, so a bot usually sets `command` to a launcher that does not stop for

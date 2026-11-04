@@ -105,6 +105,27 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
     return parseObject(stdout, 'overmind rename');
   }
 
+  /**
+   * Put one session to sleep: `overmind --local sleep <target> --json` — its agent ends, its tmux
+   * window (or session) goes, and it stays in the dormant list until restored. Resolves
+   * { sessionId, title, process, terminal, dormant: DormantView, … }; throws OvermindCliError
+   * (`missing` when the binary predates `sleep`).
+   */
+  async function sleep({ target, timeoutMs: t = 30 * 1000 } = {}) {
+    const argv = ['--local', 'sleep', String(target), '--json'];
+    let stdout;
+    try {
+      ({ stdout } = await run(bin, argv, { timeout: t, env: { ...process.env, NO_COLOR: '1' } }));
+    } catch (err) {
+      const e = wrap(err, 'overmind sleep', t);
+      const why = String(err?.stderr ?? '').replace(/^Error:\s*/, '').trim();
+      if (why && !e.timedOut) e.message = why.split('\n')[0];
+      e.missing = !e.timedOut && /unrecognized subcommand|invalid subcommand/i.test(why);
+      throw e;
+    }
+    return parseObject(stdout, 'overmind sleep');
+  }
+
   function tryObject(text) {
     try {
       const v = JSON.parse(String(text ?? '').trim());
@@ -337,6 +358,22 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
   }
 
   /**
+   * The launch command of a session acting on GitHub as identity `name`:
+   * `overmind --local gh-identity launcher <name> --launcher <launcher>` (it writes the shim).
+   */
+  async function ghIdentityLauncher(name, launcher, { timeoutMs: t = 10 * 1000 } = {}) {
+    let stdout;
+    try {
+      ({ stdout } = await run(bin, ['--local', 'gh-identity', 'launcher', name, '--launcher', launcher], { timeout: t, env: { ...process.env, NO_COLOR: '1' } }));
+    } catch (err) {
+      throw wrap(err, 'overmind gh-identity launcher', t);
+    }
+    const line = stdout.trim();
+    if (!line) throw new Error('overmind gh-identity launcher: empty answer');
+    return line;
+  }
+
+  /**
    * Write one config key: `overmind --local config set <key> <json>` against `configFile`
    * (OVERMIND_CONFIG). The CLI owns the config file: it rewrites the raw JSON atomically
    * (tmp + rename), keeps every other key and refuses a file that does not parse.
@@ -500,6 +537,53 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
     return out.trim();
   }
 
+  /**
+   * `overmind --local schedule …` (docs/cli.md → Scheduled sessions). Errors carry the CLI's reason,
+   * `missing` (no `schedule` command: an older CLI), `timedOut`.
+   */
+  async function scheduleRun(args, t, pre = []) {
+    let stdout;
+    try {
+      ({ stdout } = await run(bin, ['--local', ...pre, 'schedule', ...args], { timeout: t, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, NO_COLOR: '1' } }));
+    } catch (err) {
+      const e = wrap(err, `overmind schedule ${args[0] ?? ''}`.trim(), t);
+      const why = lastReason(err);
+      if (why && !e.timedOut) e.message = why;
+      e.missing = !e.timedOut && /unrecognized subcommand 'schedule'/i.test(String(err?.stderr ?? ''));
+      throw e;
+    }
+    return stdout ?? '';
+  }
+
+  /** Pending and recent scheduled sessions: `overmind --local schedule --json` → `{ host, entries }`. */
+  async function schedule({ timeoutMs: t = 30 * 1000 } = {}) {
+    const out = await scheduleRun(['--json'], t);
+    return parseJson(out, 'overmind schedule', (v) => v && Array.isArray(v.entries));
+  }
+
+  /**
+   * Schedule a session: `overmind --local schedule add --json` with `--at` (a time) or `--task`
+   * (+ `--time`) → the new entry. `--flag=value`: a value starting with "-" must not read as a flag.
+   */
+  async function scheduleAdd({ at, task, time, prompt, dir, name, model, harness, ghIdentity }, { timeoutMs: t = 60 * 1000 } = {}) {
+    const flags = [];
+    if (at) flags.push(`--at=${at}`);
+    if (task) flags.push(`--task=${task}`);
+    if (time) flags.push(`--time=${time}`);
+    if (dir) flags.push(`--dir=${dir}`);
+    if (name) flags.push(`--name=${name}`);
+    if (model) flags.push(`--model=${model}`);
+    if (harness && harness !== 'claude') flags.push(`--harness=${harness}`);
+    const pre = ghIdentity ? [`--gh-identity=${ghIdentity}`] : [];
+    const out = await scheduleRun(['add', '--json', ...flags, ...(prompt ? ['--', prompt] : [])], t, pre);
+    return parseJson(out, 'overmind schedule add', (v) => v && typeof v.id === 'string');
+  }
+
+  /** Cancel a pending entry: `overmind --local schedule cancel <id>` → its one-line report. */
+  async function scheduleCancel(id, { timeoutMs: t = 15 * 1000 } = {}) {
+    return (await scheduleRun(['cancel', '--', String(id)], t)).trim();
+  }
+
   // `--flag=value` everywhere: a value starting with "-" must not read as a flag.
   const stackList = () => stack(['list']);
   const stackShow = (id) => stack(['show', id]);
@@ -535,6 +619,7 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
     groupEdit,
     usage,
     harnesses,
+    ghIdentityLauncher,
     prs,
     prCheckout,
     prSeen,
@@ -549,6 +634,9 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
     jobShow,
     jobRunNow,
     jobSetEnabled,
+    schedule,
+    scheduleAdd,
+    scheduleCancel,
     stackList,
     stackShow,
     stackSet,
@@ -558,5 +646,6 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
     stackAdd,
     stackSync,
     restore,
+    sleep,
   };
 }

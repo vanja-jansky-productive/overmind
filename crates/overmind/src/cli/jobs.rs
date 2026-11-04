@@ -7,13 +7,14 @@ use chrono::{DateTime, Local, TimeZone};
 use colored::Colorize;
 use serde_json::{Value, json};
 
-use crate::cli::commands::{clean_model, with_model};
+use crate::cli::commands::clean_model;
 use crate::cli::render::{ago, home_rel};
 use crate::cli::web::{self, ServiceOpts};
 use crate::core::backend::{self, Prompt};
 use crate::core::config;
 use crate::core::discovery::{self, Backend, Session};
-use crate::core::jobs::{self, Due, Job, PromptSrc, Run, Settings, Tag};
+use crate::core::gh_watch::{self, Branch, Fetched, Tracked, WatchError, WatchState};
+use crate::core::jobs::{self, Due, Job, PromptSrc, Run, Settings, Subject, Tag};
 use crate::core::tools;
 use crate::error::{Error, Result};
 
@@ -22,6 +23,11 @@ pub const SERVICE_LOG: &str = "Library/Logs/overmind.jobs.log";
 /// A session is closed by `keep` only once it has also been quiet this long — someone
 /// may have picked the conversation up.
 const QUIET_BEFORE_CLOSE_MS: i64 = 3600 * 1000;
+
+/// A triggered run's session name when the bot sets no `sessionName`.
+const DEFAULT_SESSION_NAME: &str = "{bot} {branch}";
+/// A triggered run's prompt when the bot sets none.
+const DEFAULT_TRIGGER_PROMPT: &str = "New branch {branch} in {repo} (head {sha}): {url}";
 
 fn warn_problems(s: &Settings) {
     for p in &s.problems {
@@ -47,7 +53,7 @@ fn local(ms: i64) -> DateTime<Local> {
         .unwrap_or_else(Local::now)
 }
 
-fn when(t: DateTime<Local>) -> String {
+pub(crate) fn when(t: DateTime<Local>) -> String {
     let now = Local::now();
     if t.date_naive() == now.date_naive() {
         t.format("today %H:%M").to_string()
@@ -87,15 +93,21 @@ fn job_json(j: &Job, st: &jobs::JobState, rows: &[Session], runs: usize) -> Valu
     json!({
         "name": j.name,
         "schedule": j.schedule,
-        "scheduleText": j.cron.describe(),
+        "scheduleText": j.trigger_text(),
+        "on": j.github.as_ref().map(|g| json!({ "github": {
+            "repo": g.repo, "branch": g.branch, "every": g.every, "backfill": g.backfill,
+        } })),
+        "sessionName": j.session_name,
+        "github": st.github,
         "enabled": j.enabled,
         "dir": j.dir,
         "harness": j.harness.id(),
         "model": j.model,
         "command": j.command,
         "keep": j.keep,
+        "pull": j.pull,
         "prompt": prompt,
-        "nextRun": j.enabled.then(|| j.cron.next(Local::now()).map(|t| t.timestamp_millis())).flatten(),
+        "nextRun": j.enabled.then(|| j.next_run(Local::now()).map(|t| t.timestamp_millis())).flatten(),
         "lastSlot": st.last_slot,
         "runs": st.runs[take..].iter().rev().collect::<Vec<&Run>>(),
         "live": live,
@@ -130,10 +142,12 @@ pub fn list(json_out: bool) -> Result<()> {
     let now = Local::now();
     for j in &s.jobs {
         let st = jobs::load_state(&j.name);
-        let next = if j.enabled {
-            j.cron.next(now).map(when).unwrap_or_else(|| "never".into())
-        } else {
+        let next = if !j.enabled {
             "paused".into()
+        } else if j.github.is_some() {
+            poll_words(st.github.as_ref())
+        } else {
+            j.next_run(now).map(when).unwrap_or_else(|| "never".into())
         };
         let last = st
             .runs
@@ -152,14 +166,18 @@ pub fn list(json_out: bool) -> Result<()> {
         } else {
             j.name.dimmed()
         };
+        let next_label = if j.github.is_some() { "poll" } else { "next" };
         println!(
-            "{:<24} {:<28} next {:<18} last {:<20} {}",
+            "{:<24} {:<28} {next_label} {:<18} last {:<20} {}",
             name,
-            j.cron.describe(),
+            j.trigger_text(),
             next,
             last,
             live_s.dimmed()
         );
+        if let Some(w) = &st.github {
+            print_branches(w, &st, &rows, "    ", false);
+        }
     }
     Ok(())
 }
@@ -185,16 +203,37 @@ pub fn show(name: &str, json_out: bool) -> Result<()> {
             "paused".yellow()
         }
     );
+    match &j.github {
+        Some(g) => {
+            println!(
+                "  trigger   {} (every {})",
+                g.describe(),
+                crate::cli::repos::span(g.every)
+            );
+            println!("  polled    {}", poll_words(st.github.as_ref()));
+            println!(
+                "  session   {}",
+                j.session_name.as_deref().unwrap_or(DEFAULT_SESSION_NAME)
+            );
+        }
+        None => println!(
+            "  schedule  {}  ({})  next: {}",
+            j.trigger_text(),
+            j.schedule,
+            j.next_run(Local::now())
+                .map(when)
+                .unwrap_or_else(|| "never".into())
+        ),
+    }
     println!(
-        "  schedule  {}  ({})  next: {}",
-        j.cron.describe(),
-        j.schedule,
-        j.cron
-            .next(Local::now())
-            .map(when)
-            .unwrap_or_else(|| "never".into())
+        "  dir       {}{}",
+        j.dir,
+        if j.pull {
+            "  (pulled before each run)"
+        } else {
+            ""
+        }
     );
-    println!("  dir       {}", j.dir);
     match &j.prompt {
         PromptSrc::None => println!("  prompt    (none)"),
         PromptSrc::Inline(p) => println!("  prompt    {}", crate::cli::render::fit(p, 80)),
@@ -209,12 +248,19 @@ pub fn show(name: &str, json_out: bool) -> Result<()> {
             .map(|m| format!(" --model {m}"))
             .unwrap_or_default()
     );
+    if let Some(g) = &j.gh_identity {
+        println!("  github    as {g} (ghIdentity)");
+    }
     println!(
         "  keep      {}",
         j.keep
             .map(crate::cli::repos::span)
             .unwrap_or_else(|| "never".into())
     );
+    if let Some(w) = &st.github {
+        println!("\n  branches");
+        print_branches(w, &st, &rows, "    ", true);
+    }
     if st.runs.is_empty() {
         println!("\n  never ran");
         return Ok(());
@@ -226,16 +272,38 @@ pub fn show(name: &str, json_out: bool) -> Result<()> {
             "failed" => r.outcome.red(),
             _ => r.outcome.yellow(),
         };
+        let about = r
+            .subject
+            .as_ref()
+            .map(|s| {
+                let gone = if s.gone_at.is_some() {
+                    ", branch gone"
+                } else {
+                    ""
+                };
+                format!("  ({}{gone})", s.branch)
+            })
+            .unwrap_or_default();
         println!(
-            "  {}  {:<8} {}{}",
+            "  {}  {:<8} {}{}{}",
             r.id.bold(),
             r.trigger.dimmed(),
             outcome,
             r.reason
                 .as_deref()
                 .map(|x| format!(" — {x}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            about.dimmed()
         );
+        if let Some(p) = &r.pull {
+            match &p.warning {
+                Some(w) => println!("    {} {}", "! not pulled:".yellow(), w),
+                None if p.pulled > 0 => {
+                    println!("    {}", format!("pulled {} commits", p.pulled).dimmed())
+                }
+                None => {}
+            }
+        }
         for sess in &r.sessions {
             let live: Vec<&Session> = rows
                 .iter()
@@ -286,6 +354,15 @@ fn read_prompt(j: &Job) -> std::result::Result<String, String> {
     }
 }
 
+/// The recipe's prompt with a run's task (`bots run --prompt`) after it.
+fn with_task(base: &str, task: &str) -> String {
+    let base = base.trim_end();
+    if base.is_empty() {
+        return task.to_string();
+    }
+    format!("{base}\n\n{task}")
+}
+
 /// A prompt file may be a note with YAML frontmatter (`---` … `---`): the agent gets the body.
 fn strip_frontmatter(text: &str) -> &str {
     let Some(rest) = text.strip_prefix("---\n") else {
@@ -298,15 +375,33 @@ fn strip_frontmatter(text: &str) -> &str {
 }
 
 /// Start one run of `j` now: its record first (so the spawn lands in it), then the session.
-fn start(j: &Job, trigger: &str, slot: Option<i64>) -> Result<Run> {
+/// `branch`: the branch a GitHub trigger starts it for — `{branch}` & co. in the prompt and the
+/// session name are filled from it, and the run records it as its `subject`.
+fn start(j: &Job, trigger: &str, slot: Option<i64>, branch: Option<&Branch>) -> Result<Run> {
     let now = Local::now();
-    let id = jobs::run_id(now, trigger != "schedule");
+    let id = match branch {
+        Some(b) => jobs::trigger_run_id(now, &b.name),
+        None => jobs::run_id(now, trigger != "schedule"),
+    };
+    let repo = j
+        .github
+        .as_ref()
+        .map(|g| g.repo.as_str())
+        .unwrap_or_default();
     let mut run = Run {
         id: id.clone(),
         trigger: trigger.into(),
         started_at: now.timestamp_millis(),
         slot,
         outcome: "spawned".into(),
+        subject: branch.map(|b| Subject {
+            kind: "branch".into(),
+            repo: repo.into(),
+            branch: b.name.clone(),
+            sha: b.sha.clone(),
+            url: gh_watch::render("{url}", &j.name, repo, b),
+            gone_at: None,
+        }),
         ..Default::default()
     };
     let fail = |mut run: Run, why: String| -> Result<Run> {
@@ -331,9 +426,38 @@ fn start(j: &Job, trigger: &str, slot: Option<i64>) -> Result<Run> {
         Ok(m) => m.flatten(),
         Err(e) => return fail(run, e.to_string()),
     };
+    // `pull: true`: before the prompt is read — a promptFile in `dir` is read fresh.
+    let pull_note = if j.pull && !crate::core::hosts::dry_run() {
+        let p = jobs::pull_dir(Path::new(&dir));
+        let note = p
+            .warning
+            .as_deref()
+            .map(|w| jobs::pull_warning_line(&j.dir, w));
+        run.pull = Some(p);
+        note
+    } else {
+        None
+    };
     let text = match read_prompt(j) {
         Ok(t) => t,
         Err(e) => return fail(run, e),
+    };
+    let text = match branch {
+        Some(b) if text.trim().is_empty() => {
+            gh_watch::render(DEFAULT_TRIGGER_PROMPT, &j.name, repo, b)
+        }
+        Some(b) => gh_watch::render(&text, &j.name, repo, b),
+        None => text,
+    };
+    let text = match pull_note {
+        Some(n) if !text.trim().is_empty() => format!("{n}\n\n{text}"),
+        _ => text,
+    };
+    // A bot session closes itself once its work is done and nothing waits on the user.
+    let text = if text.trim().is_empty() {
+        text
+    } else {
+        crate::core::done::with_instruction(&text)
     };
     let prompt_file = jobs::prompt_path(&j.name, &id);
     if !text.trim().is_empty() {
@@ -347,7 +471,7 @@ fn start(j: &Job, trigger: &str, slot: Option<i64>) -> Result<Run> {
         run: format!("{}/{id}", j.name),
         command: j.command.clone(),
     };
-    let launcher = with_model(
+    let launcher = j.harness.with_defaults(
         j.command
             .as_deref()
             .map(String::from)
@@ -355,7 +479,15 @@ fn start(j: &Job, trigger: &str, slot: Option<i64>) -> Result<Run> {
             .as_str(),
         model.as_deref(),
     );
-    let name = jobs::session_name(&j.name, &id);
+    let launcher =
+        match crate::core::gh_identity::wrap(&launcher, j.harness, j.gh_identity.as_deref()) {
+            Ok(l) => l,
+            Err(e) => return fail(run, e.to_string()),
+        };
+    let name = match branch {
+        Some(b) => session_name_for(j, b),
+        None => jobs::session_name(&j.name, &id),
+    };
     let path_s = prompt_file.display().to_string();
     let prompt = if run.prompt_file.is_some() {
         Prompt::File(&path_s)
@@ -364,6 +496,12 @@ fn start(j: &Job, trigger: &str, slot: Option<i64>) -> Result<Run> {
     };
     if crate::core::hosts::dry_run() {
         let line = backend::launch_command(&dir, prompt, Some(&name), &launcher, j.harness);
+        if j.pull {
+            println!(
+                "dry-run: would pull {} first (fetch, fast-forward only)",
+                j.dir
+            );
+        }
         println!("dry-run: would start {} ({}): {line}", j.name, tag.run);
         return Ok(run);
     }
@@ -399,17 +537,37 @@ fn describe(r: &Run) -> String {
 }
 
 /// `overmind jobs run <name>`: start a run now, whatever the schedule says.
-pub fn run_now(name: &str, force: bool) -> Result<()> {
+/// `overmind bots run <name> [--prompt <text>]`: a run now; `--prompt` is added after the recipe's
+/// prompt — a task for this run (e.g. acting on the bot's own report), with the recipe's context.
+pub fn run_now(name: &str, force: bool, prompt: Option<String>) -> Result<()> {
     let s = Settings::load();
     warn_problems(&s);
-    let j = job(&s, name)?;
+    let recipe = job(&s, name)?;
+    let custom = match prompt.filter(|p| !p.trim().is_empty()) {
+        Some(task) => {
+            let base = read_prompt(recipe).map_err(|e| Error::Other(format!("{name}: {e}")))?;
+            Some(Job {
+                prompt: PromptSrc::Inline(with_task(&base, &task)),
+                ..recipe.clone()
+            })
+        }
+        None => None,
+    };
+    let j = custom.as_ref().unwrap_or(recipe);
     if !force && let Some(why) = busy_reason(&discovery::discover(), &j.name) {
         return Err(Error::Other(format!(
             "{}: {why} — pass --force to start another run anyway",
             j.name
         )));
     }
-    let r = start(j, "manual", None)?;
+    if j.github.is_some() {
+        return Err(Error::Other(format!(
+            "{}: a GitHub bot runs once per branch, when a poll finds it — see `overmind bots check {0}`; \
+`overmind bots forget {0} <branch>` makes the next poll start that branch again",
+            j.name
+        )));
+    }
+    let r = start(j, "manual", None, None)?;
     println!("{} {} — {}", "→".cyan(), j.name.bold(), describe(&r));
     Ok(())
 }
@@ -423,7 +581,8 @@ fn log(quiet: bool, line: &str) {
 }
 
 /// `overmind jobs tick`: what the launchd agent runs every minute — fire due jobs, record missed
-/// slots, close the idle sessions of runs past their `keep`.
+/// slots, close the idle sessions of runs past their `keep`; then the scheduled sessions
+/// (`overmind schedule`).
 pub fn tick(quiet: bool) -> Result<()> {
     let s = Settings::load();
     if !quiet {
@@ -437,8 +596,24 @@ pub fn tick(quiet: bool) -> Result<()> {
     };
     let mut failed = 0;
     for j in &s.jobs {
+        let Some(cron) = &j.cron else {
+            match github_tick(j, now, quiet, false) {
+                Ok(t) => {
+                    failed += t.failed;
+                    if t.started > 0 {
+                        rows = None;
+                    }
+                }
+                Err(e) => {
+                    failed += 1;
+                    log(quiet, &format!("{}: {e}", j.name));
+                }
+            }
+            cleanup(j, now, quiet, &mut rows)?;
+            continue;
+        };
         let mut st = jobs::load_state(&j.name);
-        let (d, last) = jobs::due(&j.cron, j.enabled, st.last_slot, now);
+        let (d, last) = jobs::due(cron, j.enabled, st.last_slot, now);
         let changed = st.last_slot != Some(last);
         st.last_slot = Some(last);
         match d {
@@ -484,7 +659,7 @@ pub fn tick(quiet: bool) -> Result<()> {
                     log(quiet, &format!("{}: skipped — {why}", j.name));
                     continue;
                 }
-                match start(j, "schedule", Some(slot)) {
+                match start(j, "schedule", Some(slot), None) {
                     Ok(r) => {
                         rows = None; // a new session exists now
                         log(quiet, &format!("{}: started {}", j.name, describe(&r)));
@@ -498,10 +673,567 @@ pub fn tick(quiet: bool) -> Result<()> {
         }
         cleanup(j, now, quiet, &mut rows)?;
     }
+    if !crate::core::done::load().marks.is_empty() {
+        for line in crate::core::done::prune(&rows_now(&mut rows))? {
+            log(quiet, &line);
+        }
+    }
+    failed += crate::cli::schedule::tick(quiet)?;
     if failed > 0 {
-        return Err(Error::exit(1, format!("{failed} bot(s) failed to start")));
+        return Err(Error::exit(
+            1,
+            format!("{failed} bot(s) or scheduled session(s) failed to start"),
+        ));
     }
     Ok(())
+}
+
+// --- GitHub triggers -------------------------------------------------------------
+
+/// The session name of `j`'s run for `b`.
+fn session_name_for(j: &Job, b: &Branch) -> String {
+    let repo = j
+        .github
+        .as_ref()
+        .map(|g| g.repo.as_str())
+        .unwrap_or_default();
+    gh_watch::render(
+        j.session_name.as_deref().unwrap_or(DEFAULT_SESSION_NAME),
+        &j.name,
+        repo,
+        b,
+    )
+}
+
+/// Load the bot's state, change its `github` part, save it.
+fn update_watch(job: &str, f: impl FnOnce(&mut WatchState, &mut Vec<Run>)) -> Result<()> {
+    let mut st = jobs::load_state(job);
+    let mut w = st.github.take().unwrap_or_default();
+    f(&mut w, &mut st.runs);
+    st.github = Some(w);
+    jobs::save_state(job, &st)
+}
+
+/// "30s ago, ok" / "2m ago — auth: …" / "never".
+fn poll_words(w: Option<&WatchState>) -> String {
+    let Some(w) = w.filter(|w| w.last_poll.is_some()) else {
+        return "never polled".into();
+    };
+    match &w.error {
+        Some(e) => format!("{} ago — {}", ago(w.last_poll), e.kind),
+        None => format!("{} ago, ok", ago(w.last_poll)),
+    }
+}
+
+/// The branches a GitHub bot remembers, with their sessions' state.
+fn print_branches(w: &WatchState, st: &jobs::JobState, rows: &[Session], indent: &str, all: bool) {
+    if let Some(e) = &w.error {
+        println!("{indent}{} {}", "poll failed:".red(), e.message);
+    }
+    let tmux = backend::tmux_session_names();
+    let mut existing = 0;
+    for (name, t) in &w.branches {
+        if t.outcome == "existing" && !all {
+            existing += 1;
+            continue;
+        }
+        let session = t.tmux_session.as_deref().map(|ts| {
+            let live = rows
+                .iter()
+                .find(|x| x.tmux_session.as_deref() == Some(ts))
+                .map(|x| x.status.clone());
+            let state = match live {
+                Some(s) => s,
+                None if tmux.iter().any(|x| x == ts) => "open".into(),
+                None => "closed".into(),
+            };
+            format!("{ts} ({state})")
+        });
+        let outcome = match t.outcome.as_str() {
+            "spawned" | "adopted" => t.outcome.green(),
+            "failed" => t.outcome.red(),
+            _ => t.outcome.dimmed(),
+        };
+        println!(
+            "{indent}{:<24} {:<9} {}{}",
+            name,
+            outcome,
+            session.unwrap_or_default(),
+            t.reason
+                .as_deref()
+                .map(|r| format!(" — {r}"))
+                .unwrap_or_default()
+                .dimmed()
+        );
+    }
+    if existing > 0 {
+        println!(
+            "{indent}{}",
+            format!("+{existing} branch(es) that were there before the bot (not run)").dimmed()
+        );
+    }
+    let gone: Vec<&str> = st
+        .runs
+        .iter()
+        .rev()
+        .filter_map(|r| r.subject.as_ref())
+        .filter(|s| s.gone_at.is_some())
+        .map(|s| s.branch.as_str())
+        .take(5)
+        .collect();
+    if all && !gone.is_empty() {
+        println!(
+            "{indent}{}",
+            format!("deleted since their run: {}", gone.join(", ")).dimmed()
+        );
+    }
+}
+
+/// What one GitHub bot's tick did.
+#[derive(Default)]
+struct TriggerTick {
+    started: usize,
+    /// Runs that failed to start.
+    failed: usize,
+    /// The poll itself failed (logged, recorded in the state for `bots` and `doctor`).
+    poll_failed: bool,
+}
+
+/// Poll one GitHub bot if it is due (or `force`), and act on what changed: start a run for each
+/// new branch, remember the rest, drop deleted branches and mark their runs.
+fn github_tick(j: &Job, now: DateTime<Local>, quiet: bool, force: bool) -> Result<TriggerTick> {
+    let Some(on) = &j.github else {
+        return Ok(TriggerTick::default());
+    };
+    let now_ms = now.timestamp_millis();
+    let st = jobs::load_state(&j.name);
+    let w = st.github.clone().unwrap_or_default();
+    if !j.enabled {
+        // Paused: re-arm, so what appears meanwhile is remembered, not run, on re-enable.
+        if w.armed {
+            update_watch(&j.name, |w, _| {
+                w.armed = false;
+                w.etag = None;
+            })?;
+        }
+        return Ok(TriggerTick::default());
+    }
+    if !force && !gh_watch::poll_due(on, &w, now_ms) {
+        return Ok(TriggerTick::default());
+    }
+    let key = WatchState::key(on);
+    let same = w.watch == key && w.armed;
+    let fetched = gh_watch::gh_for(j.gh_identity.as_deref())
+        .map_err(|message| gh_watch::PollError {
+            kind: "auth",
+            message,
+        })
+        .map(|gh| gh_watch::fetch(&gh, on, w.etag.as_deref().filter(|_| same)));
+    let (res, limits) = match fetched {
+        Ok((r, l)) => (r, l),
+        Err(e) => (Err(e), Default::default()),
+    };
+    let branches = match res {
+        Err(e) => {
+            let retry = gh_watch::retry_at(&e, &limits, now_ms);
+            log(
+                quiet,
+                &format!("{}: poll failed ({}) — {}", j.name, e.kind, e.message),
+            );
+            update_watch(&j.name, |w, _| {
+                if w.watch != key {
+                    *w = WatchState {
+                        watch: key.clone(),
+                        ..Default::default()
+                    };
+                }
+                w.last_poll = Some(now_ms);
+                w.next_poll = Some(retry);
+                w.rate_remaining = limits.remaining.or(w.rate_remaining);
+                w.error = Some(WatchError {
+                    kind: e.kind.into(),
+                    message: e.message.clone(),
+                    at: now_ms,
+                });
+            })?;
+            return Ok(TriggerTick {
+                poll_failed: true,
+                ..Default::default()
+            });
+        }
+        Ok(Fetched::NotModified) => {
+            update_watch(&j.name, |w, _| {
+                w.last_poll = Some(now_ms);
+                w.last_ok = Some(now_ms);
+                w.next_poll = gh_watch::throttle_until(&limits, now_ms);
+                w.rate_remaining = limits.remaining.or(w.rate_remaining);
+                w.error = None;
+            })?;
+            return Ok(TriggerTick::default());
+        }
+        Ok(Fetched::Branches(b, etag)) => {
+            let plan = gh_watch::plan(on, &w, &b);
+            // Everything but the starts first: a crash mid-spawn must not lose what was learned.
+            update_watch(&j.name, |w, runs| {
+                if w.watch != key {
+                    *w = WatchState {
+                        watch: key.clone(),
+                        ..Default::default()
+                    };
+                }
+                w.last_poll = Some(now_ms);
+                w.last_ok = Some(now_ms);
+                w.next_poll = gh_watch::throttle_until(&limits, now_ms);
+                w.rate_remaining = limits.remaining.or(w.rate_remaining);
+                w.error = None;
+                w.etag = etag.clone();
+                for r in &plan.remember {
+                    w.branches.insert(
+                        r.name.clone(),
+                        Tracked {
+                            sha: r.sha.clone(),
+                            first_seen: now_ms,
+                            outcome: "existing".into(),
+                            ..Default::default()
+                        },
+                    );
+                }
+                for (name, sha) in &plan.moved {
+                    if let Some(t) = w.branches.get_mut(name) {
+                        t.sha = sha.clone();
+                    }
+                }
+                for name in &plan.gone {
+                    if let Some(t) = w.branches.remove(name) {
+                        mark_gone(runs, &on.repo, name, t.run.as_deref(), now_ms);
+                    }
+                }
+                w.armed = true;
+            })?;
+            if !plan.remember.is_empty() {
+                log(
+                    quiet,
+                    &format!(
+                        "{}: first poll — remembered {} existing branch(es), not run",
+                        j.name,
+                        plan.remember.len()
+                    ),
+                );
+            }
+            for name in &plan.gone {
+                log(
+                    quiet,
+                    &format!(
+                        "{}: {name} was deleted — dropped (its session stays)",
+                        j.name
+                    ),
+                );
+            }
+            plan.start
+        }
+    };
+    let mut out = TriggerTick::default();
+    for b in &branches {
+        let name = session_name_for(j, b);
+        let tmux_name = crate::core::tmux::sanitize_name(&name);
+        // A session for this branch is already open (state lost, or `forget` while it runs).
+        let tracked = if backend::tmux_session_names().contains(&tmux_name) {
+            log(
+                quiet,
+                &format!(
+                    "{}: {} — session {tmux_name} is already open, not starting another",
+                    j.name, b.name
+                ),
+            );
+            Tracked {
+                sha: b.sha.clone(),
+                first_seen: now_ms,
+                outcome: "adopted".into(),
+                tmux_session: Some(tmux_name),
+                ..Default::default()
+            }
+        } else {
+            // Claim the branch before the spawn: a tick that dies mid-spawn finds it claimed.
+            update_watch(&j.name, |w, _| {
+                w.branches.insert(
+                    b.name.clone(),
+                    Tracked {
+                        sha: b.sha.clone(),
+                        first_seen: now_ms,
+                        outcome: "starting".into(),
+                        ..Default::default()
+                    },
+                );
+            })?;
+            match start(j, "github", None, Some(b)) {
+                Ok(r) => {
+                    out.started += 1;
+                    log(
+                        quiet,
+                        &format!("{}: {} — started {}", j.name, b.name, describe(&r)),
+                    );
+                    Tracked {
+                        sha: b.sha.clone(),
+                        first_seen: now_ms,
+                        outcome: "spawned".into(),
+                        run: Some(r.id.clone()),
+                        tmux_session: r.sessions.first().map(|s| s.tmux_session.clone()),
+                        reason: None,
+                    }
+                }
+                Err(e) => {
+                    out.failed += 1;
+                    log(quiet, &format!("{}: {} — failed: {e}", j.name, b.name));
+                    Tracked {
+                        sha: b.sha.clone(),
+                        first_seen: now_ms,
+                        outcome: "failed".into(),
+                        reason: Some(format!(
+                            "{e} — `overmind bots forget {} {}` retries",
+                            j.name, b.name
+                        )),
+                        ..Default::default()
+                    }
+                }
+            }
+        };
+        update_watch(&j.name, |w, _| {
+            w.branches.insert(b.name.clone(), tracked);
+        })?;
+    }
+    Ok(out)
+}
+
+/// Mark the run for a deleted branch (its own, else the newest about that branch).
+fn mark_gone(runs: &mut [Run], repo: &str, branch: &str, run: Option<&str>, now_ms: i64) {
+    let found = runs.iter_mut().rev().find(|r| {
+        r.subject
+            .as_ref()
+            .is_some_and(|s| s.repo == repo && s.branch == branch && s.gone_at.is_none())
+            && run.is_none_or(|id| r.id == id)
+    });
+    if let Some(s) = found.and_then(|r| r.subject.as_mut()) {
+        s.gone_at = Some(now_ms);
+    }
+}
+
+/// `overmind bots check <name> [--dry-run]`: poll a GitHub bot now; `--dry-run` prints what it
+/// would start without starting anything or touching its state.
+pub fn check(name: &str, dry_run: bool, json_out: bool) -> Result<()> {
+    let s = Settings::load();
+    warn_problems(&s);
+    let j = job(&s, name)?;
+    let Some(on) = &j.github else {
+        return Err(Error::Other(format!(
+            "{name} runs on a schedule, not on a GitHub trigger — nothing to check"
+        )));
+    };
+    if !dry_run {
+        if !j.enabled {
+            return Err(Error::Other(format!(
+                "{name} is paused — `overmind bots enable {name}`, or look with --dry-run"
+            )));
+        }
+        let t = github_tick(j, Local::now(), false, true)?;
+        let st = jobs::load_state(&j.name);
+        if json_out {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "started": t.started, "failed": t.failed, "github": st.github,
+                }))?
+            );
+        } else if let Some(w) = &st.github {
+            println!("{} — {}", j.name.bold(), poll_words(Some(w)));
+            print_branches(w, &st, &discovery::discover(), "  ", true);
+        }
+        if t.failed > 0 || t.poll_failed {
+            return Err(Error::exit(1, format!("{name}: poll or start failed")));
+        }
+        return Ok(());
+    }
+    let gh = gh_watch::gh_for(j.gh_identity.as_deref()).map_err(Error::Other)?;
+    let (res, _) = gh_watch::fetch(&gh, on, None);
+    let branches = match res {
+        Ok(Fetched::Branches(b, _)) => b,
+        Ok(Fetched::NotModified) => Vec::new(),
+        Err(e) => {
+            return Err(Error::Other(format!(
+                "{name}: poll failed ({}) — {}",
+                e.kind, e.message
+            )));
+        }
+    };
+    let st = jobs::load_state(&j.name).github.unwrap_or_default();
+    let plan = gh_watch::plan(on, &st, &branches);
+    let tmux = backend::tmux_session_names();
+    let rows: Vec<Value> = branches
+        .iter()
+        .map(|b| {
+            let session = crate::core::tmux::sanitize_name(&session_name_for(j, b));
+            let action = if plan.start.contains(b) {
+                if tmux.contains(&session) {
+                    "adopt"
+                } else {
+                    "start"
+                }
+            } else if plan.remember.contains(b) {
+                "remember"
+            } else {
+                "known"
+            };
+            json!({ "branch": b.name, "sha": b.sha, "action": action, "session": session })
+        })
+        .collect();
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "branches": rows, "gone": plan.gone }))?
+        );
+        return Ok(());
+    }
+    println!(
+        "{} — {} ({} matching now){}",
+        j.name.bold(),
+        on.describe(),
+        branches.len(),
+        if j.enabled { "" } else { " — paused" }
+    );
+    for r in &rows {
+        let action = r["action"].as_str().unwrap_or_default();
+        let what = match action {
+            "start" => format!(
+                "would start session {}",
+                r["session"].as_str().unwrap_or_default()
+            )
+            .green(),
+            "adopt" => format!(
+                "session {} is open — would not start another",
+                r["session"].as_str().unwrap_or_default()
+            )
+            .yellow(),
+            "remember" => "first poll: would remember, not run".dimmed(),
+            _ => "already handled".dimmed(),
+        };
+        println!("  {:<24} {what}", r["branch"].as_str().unwrap_or_default());
+    }
+    for g in &plan.gone {
+        println!(
+            "  {:<24} {}",
+            g,
+            "deleted — would drop it (session stays)".dimmed()
+        );
+    }
+    Ok(())
+}
+
+/// `overmind bots forget <name> <branch>`: drop a branch from what a GitHub bot remembers — if it
+/// still exists, the next poll starts a run for it again.
+pub fn forget(name: &str, branch: &str) -> Result<()> {
+    let s = Settings::load();
+    let j = job(&s, name)?;
+    if j.github.is_none() {
+        return Err(Error::Other(format!("{name} has no GitHub trigger")));
+    }
+    let mut found = None;
+    update_watch(&j.name, |w, _| {
+        found = w.branches.remove(branch);
+        if found.is_some() {
+            // The next tick polls, with a full answer.
+            w.etag = None;
+            w.last_poll = None;
+            w.next_poll = None;
+        }
+    })?;
+    match found {
+        Some(t) => {
+            println!(
+                "{name}: forgot {branch} ({}) — the next poll starts it again if it still exists{}",
+                t.outcome,
+                t.tmux_session
+                    .map(|s| format!(" (not while session {s} is open)"))
+                    .unwrap_or_default()
+            );
+            Ok(())
+        }
+        None => Err(Error::Other(format!("{name} does not remember {branch}"))),
+    }
+}
+
+/// `overmind doctor`: the tick service, when any bot is enabled, and each GitHub bot's last poll.
+pub fn health() -> Vec<crate::cli::hosts::BotHealth> {
+    use crate::cli::hosts::BotHealth;
+    let s = Settings::load();
+    let mut out = Vec::new();
+    if !s.jobs.iter().any(|j| j.enabled) {
+        return out;
+    }
+    if cfg!(target_os = "macos")
+        && let Some(home) = dirs::home_dir()
+        && !home
+            .join(format!("Library/LaunchAgents/{LAUNCHD_LABEL}.plist"))
+            .exists()
+    {
+        out.push(BotHealth {
+            name: String::new(),
+            ok: false,
+            line: "bots: the tick service is not installed — nothing runs them; run: overmind bots install-service".into(),
+        });
+    }
+    let now_ms = Local::now().timestamp_millis();
+    for j in s.jobs.iter().filter(|j| j.enabled) {
+        let Some(on) = &j.github else { continue };
+        let w = jobs::load_state(&j.name).github.unwrap_or_default();
+        let (ok, what) = match (&w.error, w.last_ok) {
+            (Some(e), _) => (
+                false,
+                format!(
+                    "poll failed {} ago ({}): {}",
+                    ago(Some(e.at)),
+                    e.kind,
+                    e.message
+                ),
+            ),
+            (None, None) => (true, "not polled yet".to_string()),
+            // Three missed polls in a row: the tick is not running.
+            (None, Some(t)) if now_ms - t > (on.every * 3 + 120) * 1000 => (
+                false,
+                format!(
+                    "last polled {} ago — is the tick service running?",
+                    ago(Some(t))
+                ),
+            ),
+            (None, Some(t)) => {
+                let started = w
+                    .branches
+                    .values()
+                    .filter(|t| t.outcome == "spawned")
+                    .count();
+                (
+                    true,
+                    format!(
+                        "polled {} ago, {} branch(es) remembered, {started} started",
+                        ago(Some(t)),
+                        w.branches.len()
+                    ),
+                )
+            }
+        };
+        let rate = w
+            .rate_remaining
+            .map(|r| format!(", rate limit left {r}"))
+            .unwrap_or_default();
+        out.push(BotHealth {
+            name: j.name.clone(),
+            ok,
+            line: format!(
+                "bot {} ({}): {what}{rate}",
+                j.name,
+                on.describe().to_lowercase()
+            ),
+        });
+    }
+    out
 }
 
 /// Close the sessions of `j`'s runs that are past `keep`, idle and quiet; mark the ones that
@@ -579,12 +1311,19 @@ pub fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     config::patch(&format!("{section}.{name}.enabled"), Value::Bool(enabled))?;
     if enabled {
         let j = Settings::load();
-        let next = j
-            .get(name)
-            .and_then(|j| j.cron.next(Local::now()))
-            .map(when)
-            .unwrap_or_else(|| "never".into());
-        println!("{name}: enabled — next run {next}");
+        let j = j.get(name);
+        if let Some(g) = j.and_then(|j| j.github.as_ref()) {
+            println!(
+                "{name}: enabled — watches {} (branches there now are remembered, not run)",
+                g.describe().to_lowercase()
+            );
+        } else {
+            let next = j
+                .and_then(|j| j.next_run(Local::now()))
+                .map(when)
+                .unwrap_or_else(|| "never".into());
+            println!("{name}: enabled — next run {next}");
+        }
     } else {
         println!("{name}: paused");
     }
@@ -659,6 +1398,15 @@ pub fn install_service(o: ServiceOpts) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_task_follows_the_recipe_prompt() {
+        assert_eq!(
+            with_task("Deploy ctx.\n", "comment on: 1"),
+            "Deploy ctx.\n\ncomment on: 1"
+        );
+        assert_eq!(with_task("  ", "comment on: 1"), "comment on: 1");
+    }
 
     #[test]
     fn prompt_files_lose_their_frontmatter() {

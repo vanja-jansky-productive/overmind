@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MODEL_ID_RE } from './config.mjs';
+import { GH_IDENTITY_RE, MODEL_ID_RE } from './config.mjs';
 import { validateTitle } from './util.mjs';
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
@@ -53,16 +53,44 @@ export const TYPED_LINE_MAX = 900;
 export const HARNESSES = ['claude', 'codex', 'pi'];
 export const HARNESS_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi' };
 
+/** Reasoning-effort levels per harness when the host does not say (`overmind harness list` does). */
+export const EFFORT_RE = /^[a-z]{1,20}$/;
+
+/** The launcher arguments that set the reasoning effort (`core::harness::Harness::effort_args`). */
+export function effortArgs(harness, level) {
+  if (harness === 'codex') return ['-c', `model_reasoning_effort=${level}`];
+  if (harness === 'pi') return ['--thinking', level];
+  return ['--effort', level];
+}
+
+/**
+ * What a spawn adds to `launcher` from the host's defaults (`harnesses.<id>.model` / `.effort`,
+ * Settings → Models): the picked model, else the default one, and the default effort — unless the
+ * launcher already sets one (a wrapper with flags keeps its own). Mirrors `Harness::with_defaults`.
+ * @returns {{ model: string, effort: string | null }}
+ */
+export function applyHarnessDefaults(launcher, harness, model, defaults = {}) {
+  const words = String(launcher).split(/\s+/);
+  const has = (...flags) => words.some((w) => flags.some((f) => w === f || w.startsWith(`${f}=`)));
+  const setsModel = has('--model') || (harness === 'codex' && has('-m'));
+  const setsEffort = has('--effort', '--thinking') || String(launcher).includes('model_reasoning_effort');
+  return {
+    model: model || (!setsModel && defaults.model) || '',
+    effort: (!setsEffort && defaults.effort) || null,
+  };
+}
+
 /**
  * Build the shell line typed into the new pane (`promptFile`: read the prompt from there;
  * `resume`: a session id to continue — a branch, lib/branch.mjs).
  */
-export function launchCommand({ launcher = 'claude', harness = 'claude', name, title, prompt, model, promptFile, resume }) {
+export function launchCommand({ launcher = 'claude', harness = 'claude', name, title, prompt, model, effort = null, promptFile, resume }) {
   // No name → plain `claude`: it derives `<cwd>-9d` and the auto-namer (lib/autoname.mjs)
   // replaces that with a task-shaped name, tmux session included, once the session is idle.
   // Codex has no name flag: its tmux session carries the name, and Codex titles the thread.
   const parts = [launcher];
   if (model) parts.push('--model', shq(model));
+  if (effort && EFFORT_RE.test(effort)) parts.push(...effortArgs(harness, effort));
   // `title`: what the user typed as the session's name; `name` is its tmux-safe slug.
   if ((title || name) && harness !== 'codex') parts.push('-n', shq(title || name));
   if (resume) parts.push(harness === 'codex' ? 'resume' : '--resume', shq(resume));
@@ -70,6 +98,8 @@ export function launchCommand({ launcher = 'claude', harness = 'claude', name, t
   else if (prompt && prompt.trim()) parts.push(shqTyped(prompt));
   return parts.join(' ');
 }
+
+const EMBED_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
   const errors = [];
@@ -109,8 +139,22 @@ export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
     if (!HARNESSES.includes(body.harness)) errors.push(`harness must be one of ${HARNESSES.join(', ')}`);
     else harness = body.harness;
   }
+  // A GitHub identity the session acts as (`ghIdentities`); '' / absent = the user's own.
+  let ghIdentity = null;
+  if (body?.ghIdentity != null && body.ghIdentity !== '') {
+    if (typeof body.ghIdentity !== 'string' || !GH_IDENTITY_RE.test(body.ghIdentity)) {
+      errors.push('ghIdentity must be 1-64 chars of letters, digits, - or _');
+    } else if (harness !== 'claude') errors.push('only Claude sessions take a GitHub identity');
+    else ghIdentity = body.ghIdentity;
+  }
+  // The app whose embedded panel spawns it (the embed view's `app`): a label on the pane.
+  let embed = null;
+  if (body?.embed != null && body.embed !== '') {
+    if (typeof body.embed !== 'string' || !EMBED_RE.test(body.embed)) errors.push('embed must be 1-40 chars of letters, digits, - or _');
+    else embed = body.embed;
+  }
   if (errors.length) return { ok: false, error: errors.join('; ') };
-  return { ok: true, name, title, dir, prompt, nameGiven, model, harness };
+  return { ok: true, name, title, dir, prompt, nameGiven, model, harness, ghIdentity, embed };
 }
 
 /** True when `child` is `root` or lies beneath it (both already resolved). */
@@ -173,6 +217,12 @@ export function createSpawner({
   launcher = 'claude',
   launchers = {},
   enterDelayMs = 150,
+  // (name, launcher) → the launcher of a session acting as GitHub identity `name`.
+  ghIdentityLauncher = null,
+  ghIdentities = [],
+  // () → { <harness>: { model, effort } }: the defaults a spawn uses when it picks none (live:
+  // Settings → Models updates them without a restart).
+  harnessDefaults = () => ({}),
   sleep,
   promptDir = path.join(os.homedir(), '.claude', 'overmind-prompts'),
 }) {
@@ -210,8 +260,14 @@ export function createSpawner({
     await wait(enterDelayMs);
   }
 
-  /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness }} */
-  async function spawn({ name, title = '', dir, prompt, nameGiven = true, model = '', harness = 'claude', resume = null }) {
+  /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness, ghIdentity, embed, resume? }} */
+  async function spawn({ name, title = '', dir, prompt, nameGiven = true, model = '', harness = 'claude', ghIdentity = null, embed = null, resume = null }) {
+    if (ghIdentity && !ghIdentities.some((i) => i.name === ghIdentity)) {
+      throw Object.assign(new Error(`no GitHub identity "${ghIdentity}" in this host's overmind config`), { status: 400 });
+    }
+    if (ghIdentity && !ghIdentityLauncher) {
+      throw Object.assign(new Error('GitHub identities need the overmind CLI'), { status: 500 });
+    }
     let st;
     try {
       st = await fs.stat(dir);
@@ -224,7 +280,10 @@ export function createSpawner({
     }
     // oh-my-zsh's "Would you like to update? [Y/n]" reads one key: the first typed character.
     await run(tmux, ['new-session', '-d', '-s', name, '-c', dir, '-e', 'DISABLE_AUTO_UPDATE=true'], { timeout: 8000 });
-    const launch = { launcher: launchers[harness] || (harness === 'claude' ? launcher : harness), harness, name: nameGiven ? name : null, title: title || null, prompt, model, resume };
+    let base = launchers[harness] || (harness === 'claude' ? launcher : harness);
+    if (ghIdentity) base = await ghIdentityLauncher(ghIdentity, base);
+    const picked = applyHarnessDefaults(base, harness, model, harnessDefaults()?.[harness] ?? {});
+    const launch = { launcher: base, harness, name: nameGiven ? name : null, title: title || null, prompt, model: picked.model, effort: picked.effort, resume };
     let command = launchCommand(launch);
     if (Buffer.byteLength(command) > TYPED_LINE_MAX) {
       const d = new Date();
@@ -239,9 +298,12 @@ export function createSpawner({
     await run(tmux, ['send-keys', '-t', `${name}:`, '-l', '--', command], { timeout: 8000 });
     await wait(150);
     await run(tmux, ['send-keys', '-t', `${name}:`, 'Enter'], { timeout: 8000 });
+    // The `overmind list` label; the shell already carries the identity.
+    if (ghIdentity) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@overmind_gh_identity', ghIdentity], { timeout: 5000 }).catch(() => {});
+    if (embed) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@overmind_embed', embed], { timeout: 5000 }).catch(() => {});
     const trusted = await acceptTrustPrompt(name, { harness });
     if (!trusted) await ensureStarted(name, { harness });
-    return { name, dir, tmuxSession: name, command, trusted, model: model || null, harness, ...(resume ? { resume } : {}) };
+    return { name, dir, tmuxSession: name, command, trusted, model: picked.model || null, harness, ghIdentity, embed, ...(resume ? { resume } : {}) };
   }
 
   /**

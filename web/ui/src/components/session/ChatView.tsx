@@ -1,7 +1,8 @@
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { ChevronRightIcon, ChevronsUpIcon, ClipboardIcon, ClockIcon, GitBranchIcon, HandIcon, Loader2Icon, MessageSquareDashedIcon, SquareSlashIcon, TerminalIcon } from 'lucide-react'
 
-import type { Message } from '@/api/types'
+import type { Message, SessionDone } from '@/api/types'
+import { DoneCard } from '@/components/session/DoneCard'
 import { LatestButton } from '@/components/session/LatestButton'
 import { QuestionCard, type QuestionActions } from '@/components/session/QuestionCard'
 import { Linkified, Markdown } from '@/components/Markdown'
@@ -14,7 +15,7 @@ import { SpeakButton } from '@/components/SpeakButton'
 import { canBranchFrom } from '@/lib/branch'
 import { msgKind, sameGroup, splitPasted, visibleMessages } from '@/lib/chat'
 import { pendingQuestion } from '@/lib/questions'
-import { pathCandidates } from '@/lib/paths'
+import { pathCandidates, textPathCandidates } from '@/lib/paths'
 import { CHAT_FONT_REM } from '@/lib/prefs'
 import { cn } from '@/lib/utils'
 
@@ -36,13 +37,17 @@ export interface ChatViewProps {
   jumpSignal: number
   /** Desktop pane: a wider (still readable) column. */
   wide?: boolean
-  /** Link file paths in Claude's messages that exist on the session's host (click → preview). */
+  /** Link file paths in the chat (Claude's messages and prompts) that exist on the session's host (click → preview). */
   fileLinks?: FileStats
   /** The outbox's optimistic bubbles, after the transcript; `outboxKey` changes when they do (keeps the tail followed). */
   outbox?: React.ReactNode
   outboxKey?: string
   /** Answer / dismiss Claude's pending question from its card; absent = the card is read-only. */
   questionActions?: QuestionActions | null
+  /** It reported its work finished (`overmind done`, see sessionDone): a Done card ends the conversation. */
+  done?: SessionDone | null
+  /** Close the session from the Done card (the card arms it first); absent = no Close button. */
+  onCloseDone?: () => Promise<void>
   /** "Branch from here" on prompts and replies with a ref; absent = no branching (pi, a gone session). */
   onBranch?: ((m: Message) => void) | null
 }
@@ -192,7 +197,7 @@ const Bubble = memo(function Bubble({
       </div>
     )
   }
-  // Agent text: the caption row carries a read-aloud button.
+  // Agent text: the final reply's caption row carries a read-aloud button; interim notes don't.
   const speakId = `${m.ts ?? ''}:${text.length}:${text.slice(0, 24)}`
   const agentCap = (
     <div className="flex items-center gap-1 px-1 pt-0.5 text-[0.625rem] text-dimmer tabular-nums">
@@ -205,7 +210,7 @@ const Bubble = memo(function Bubble({
     return (
       <div className="flex w-full flex-col items-start">
         <Markdown text={text} className="border-l-2 border-border pl-2.5 text-[0.86em] leading-normal text-muted-foreground" />
-        {agentCap}
+        {cap}
       </div>
     )
   }
@@ -266,18 +271,24 @@ export function ChatView(p: ChatViewProps) {
       setTop(el.scrollTop + (el.scrollHeight - lastHeight.current))
     } else stick()
     lastHeight.current = el.scrollHeight
-  }, [p.messages, p.hideNotes, p.status, p.loadingOlder, p.outboxKey, ref, setFollow, setTop, stick])
+  }, [p.messages, p.hideNotes, p.status, p.loadingOlder, p.outboxKey, p.done, ref, setFollow, setTop, stick])
 
   useEffect(() => {
     if (p.jumpSignal) jump()
   }, [p.jumpSignal, jump])
 
-  // Ask the host which of the paths Claude mentioned exist (batched, cached per session).
+  // Ask the host which of the paths in the chat exist (batched, cached per session): Claude's
+  // markdown, and the plain text of prompts and command arguments.
   const requestStats = p.fileLinks?.request
   useEffect(() => {
     if (!requestStats || !p.messages) return
     const candidates: string[] = []
-    for (const m of p.messages) if (msgKind(m) === 'assistant' && typeof m.text === 'string') candidates.push(...pathCandidates(m.text))
+    for (const m of p.messages) {
+      const kind = msgKind(m)
+      if (kind === 'assistant' && typeof m.text === 'string') candidates.push(...pathCandidates(m.text))
+      else if (kind === 'user' && typeof m.text === 'string') candidates.push(...textPathCandidates(m.text))
+      else if (kind === 'command' && m.name !== '!' && typeof m.args === 'string') candidates.push(...textPathCandidates(m.args))
+    }
     if (candidates.length) requestStats(candidates)
   }, [p.messages, requestStats])
 
@@ -326,7 +337,7 @@ export function ChatView(p: ChatViewProps) {
         <div className={p.wide ? 'mx-auto w-full max-w-4xl px-4 pt-3 pb-4' : 'mx-auto w-full max-w-3xl px-2 pt-3 pb-4'}>
           {p.canLoadOlder || p.loadingOlder ? (
             <div className="flex justify-center pb-3">
-              <Button variant="outline" size="sm" className="h-8 rounded-full px-3.5" disabled={p.loadingOlder} onClick={p.onLoadOlder}>
+              <Button variant="outline" disabled={p.loadingOlder} onClick={p.onLoadOlder}>
                 {p.loadingOlder ? <Loader2Icon className="animate-spin" /> : <ChevronsUpIcon />}
                 {p.loadingOlder ? 'Loading…' : 'Load older'}
               </Button>
@@ -335,6 +346,7 @@ export function ChatView(p: ChatViewProps) {
           {p.fileLinks ? <FileLinksContext.Provider value={p.fileLinks.api}>{body}</FileLinksContext.Provider> : body}
           {p.outbox}
           {p.messages ? <Typing status={p.status} waitingFor={p.waitingFor} asking={!!asking && !!p.questionActions} /> : null}
+          {p.messages && p.done ? <DoneCard done={p.done} now={now} onClose={p.onCloseDone} /> : null}
         </div>
       </div>
       <LatestButton show={!following} onClick={jump} />

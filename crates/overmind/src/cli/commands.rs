@@ -95,15 +95,39 @@ pub(crate) fn clean_model(raw: &str) -> Result<Option<String>> {
     Ok(Some(m.to_string()))
 }
 
-/// The launcher with `--model <id>` appended when one was picked.
-pub(crate) fn with_model(launcher: &str, model: Option<&str>) -> String {
-    match model {
-        Some(m) => format!("{launcher} --model {}", crate::core::tools::shq(m)),
-        None => launcher.to_string(),
+/// `overmind harness list`: what this host can spawn, and the models each one offers.
+/// `overmind gh-identity list`: the configured GitHub identities.
+pub fn gh_identity_list(json: bool) -> Result<()> {
+    let rows = crate::core::gh_identity::all();
+    if json {
+        let v: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|i| serde_json::json!({ "name": i.name, "login": i.login, "command": i.command }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
     }
+    if rows.is_empty() {
+        println!("no GitHub identities (config ghIdentities)");
+    }
+    for i in &rows {
+        println!("{:<16} {:<28} {}", i.name, i.login, i.command.dimmed());
+    }
+    Ok(())
 }
 
-/// `overmind harness list`: what this host can spawn, and the models each one offers.
+/// `overmind gh-identity launcher <name>`: what a session with that identity is launched with.
+pub fn gh_identity_launcher(name: &str, launcher: Option<&str>) -> Result<()> {
+    let base = launcher
+        .map(str::to_string)
+        .unwrap_or_else(resolve_launcher);
+    println!(
+        "{}",
+        crate::core::gh_identity::wrap(&base, Harness::Claude, Some(name))?
+    );
+    Ok(())
+}
+
 pub fn harness_list(json: bool, with_models: bool) -> Result<()> {
     let rows: Vec<harness::HarnessInfo> = Harness::ALL
         .iter()
@@ -166,6 +190,10 @@ pub fn list_rows() -> Vec<Session> {
     title::stamp_display_titles(&mut rows);
     // Which session stack each row is in (read-only: no sync, no writes).
     crate::core::stack::stamp_stacks(&mut rows);
+    // Which sessions reported themselves done (`overmind done`) and were not prompted since.
+    crate::core::done::stamp_done(&mut rows);
+    // The branch + GitHub repo of each row's checkout (views link PRs by it, on any host).
+    crate::core::git::stamp_git(&mut rows);
     // What runs now, for session recovery after a reboot (core::snapshot). Never fails the
     // listing; a no-op in fixture mode and when nothing changed.
     if discovered {
@@ -223,6 +251,74 @@ pub fn send(target: &str, text: &str) -> Result<()> {
         s.headline().bold(),
         s.backend.label(),
         text
+    );
+    Ok(())
+}
+
+/// `overmind done`: mark (or `--cancel`, unmark) the session this runs in as finished.
+pub fn done(note: Option<String>, cancel: bool) -> Result<()> {
+    let rows = discovery::discover();
+    let pane = crate::core::done::own_pane_from_env(Some(&rows)).ok_or_else(|| {
+        Error::Other(if std::env::var_os("CODEX_THREAD_ID").is_some() {
+            "overmind done: no Codex session in tmux has this $CODEX_THREAD_ID".into()
+        } else {
+            "overmind done runs inside the session's own tmux pane ($TMUX_PANE is not set)".into()
+        })
+    })?;
+    let m = crate::core::done::mark(&rows, &pane, note, cancel)?;
+    if cancel {
+        println!("{}: no longer marked done", m.tmux_session);
+    } else {
+        println!(
+            "{}: marked done — Overmind shows it, the user closes it (overmind done --cancel to undo)",
+            m.tmux_session
+        );
+    }
+    Ok(())
+}
+
+/// `overmind ask-done <target>`: ask a session to report itself done once finished.
+pub fn ask_done(target: &str) -> Result<()> {
+    let s = discovery::resolve(target).map_err(Error::Other)?;
+    if s.backend != Backend::Tmux {
+        return Err(Error::Other(format!(
+            "{} is not in tmux — only a tmux session can report itself done",
+            s.headline()
+        )));
+    }
+    if s.status == "waiting" {
+        return Err(Error::Other(format!(
+            "{} is waiting on you — answer it first (the keys would land in its prompt)",
+            s.headline()
+        )));
+    }
+    backend::send(&s, crate::core::done::INSTRUCTION)?;
+    println!(
+        "asked {} to report itself done when finished",
+        s.headline().bold()
+    );
+    Ok(())
+}
+
+/// `overmind sleep`: end a session but keep it dormant (see [`crate::core::sleep`]).
+pub fn sleep(target: &str, json: bool) -> Result<()> {
+    let s = discovery::resolve(target).map_err(Error::Other)?;
+    let r = crate::core::sleep::sleep(&s)?;
+    if json {
+        let mut v = serde_json::to_value(&r)?;
+        v["host"] = serde_json::Value::String(host_label());
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    if r.dry_run {
+        return Ok(());
+    }
+    let target = r.dormant.as_ref().map(|d| d.target.as_str()).unwrap_or("");
+    println!(
+        "{} is dormant ({}) — bring it back: overmind restore {}",
+        r.title.bold(),
+        r.terminal.replace('-', " "),
+        crate::core::tools::shq_min(target)
     );
     Ok(())
 }
@@ -558,6 +654,11 @@ pub struct SpawnOpts {
     pub harness: Harness,
     pub tmux_session: Option<String>,
     pub window: bool,
+    /// The session closes itself once finished ([`crate::core::done`]): tmux, the instruction
+    /// below the prompt.
+    pub ask_done: bool,
+    /// Start linked to Slack: tmux, no prompt at launch — it goes in with the link's intro.
+    pub slack: Option<crate::cli::slack::SpawnLink>,
 }
 
 impl SpawnOpts {
@@ -608,7 +709,27 @@ pub fn spawn(prompt: Option<String>, from: Option<String>, opts: SpawnOpts) -> R
         .transpose()?
         .flatten();
     let prompt = prompt.unwrap_or_default();
-    let launcher = with_model(&opts.harness.command(), model.as_deref());
+    let (prompt, backend_kind) = if opts.ask_done {
+        (crate::core::done::with_instruction(&prompt), Backend::Tmux)
+    } else {
+        (prompt, backend_kind)
+    };
+    if let Some(link) = &opts.slack {
+        return spawn_linked(
+            &dir,
+            name.as_deref(),
+            &prompt,
+            model.as_deref(),
+            &opts,
+            link,
+        );
+    }
+    let launcher = crate::core::gh_identity::wrap_current(
+        &opts
+            .harness
+            .with_defaults(&opts.harness.command(), model.as_deref()),
+        opts.harness,
+    )?;
     if crate::core::hosts::dry_run() {
         let line = backend::launch_command(
             &dir,
@@ -641,9 +762,51 @@ pub fn spawn(prompt: Option<String>, from: Option<String>, opts: SpawnOpts) -> R
     Ok(())
 }
 
+/// `spawn --slack`: start in tmux with no prompt, link the session once it has registered, and
+/// let the link's intro carry the prompt — so it never works on it before it knows it is in Slack.
+fn spawn_linked(
+    dir: &str,
+    name: Option<&str>,
+    prompt: &str,
+    model: Option<&str>,
+    opts: &SpawnOpts,
+    link: &crate::cli::slack::SpawnLink,
+) -> Result<()> {
+    let launcher = crate::core::gh_identity::wrap_current(
+        &opts.harness.with_defaults(&opts.harness.command(), model),
+        opts.harness,
+    )?;
+    if crate::core::hosts::dry_run() {
+        let line = backend::launch_command(dir, Prompt::Inline(""), name, &launcher, opts.harness);
+        println!("dry-run: would spawn a tmux session: {line}");
+        println!(
+            "dry-run: then link it to {} for {}",
+            link.url, link.duration
+        );
+        return Ok(());
+    }
+    crate::cli::slack::check_linkable()?;
+    let tag = crate::core::jobs::Tag::from_env();
+    let (desc, tmux) = backend::spawn_tagged(
+        Backend::Tmux,
+        dir,
+        Prompt::Inline(""),
+        name,
+        opts.tmux_session.as_deref(),
+        false,
+        &launcher,
+        opts.harness,
+        tag.as_ref(),
+    )?;
+    println!("{desc} in {}", home_rel(dir));
+    let tmux =
+        tmux.ok_or_else(|| Error::Other("the session has no tmux session to link".into()))?;
+    crate::cli::slack::link_spawned(&tmux, link, prompt)
+}
+
 /// `spawn --from <session>`: a new session in the source's cwd (on this host — `-H` already
 /// brought us to the source's host) whose first prompt is the brief's continue prompt, plus
-/// `extra` after a blank line. The prompt goes through a file, like a handoff brief: it is
+/// `extra` (the task; the default one when empty) below its separator. The prompt goes through a file, like a handoff brief: it is
 /// multi-line, and the file stays as the record of what was handed on.
 fn spawn_from(source: &str, extra: Option<String>, mut opts: SpawnOpts) -> Result<()> {
     let c = crate::cli::brief::continue_from(source)?;
@@ -662,11 +825,12 @@ fn spawn_from(source: &str, extra: Option<String>, mut opts: SpawnOpts) -> Resul
         .map(clean_model)
         .transpose()?
         .flatten();
-    let mut text = c.prompt.clone();
-    if let Some(e) = extra.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
-        text.push_str("\n\n");
-        text.push_str(e);
-    }
+    let task = extra.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    let text = format!(
+        "{}\n\n{}",
+        c.prompt,
+        task.unwrap_or(crate::core::brief::CONTINUE_DEFAULT_TASK)
+    );
     let now = chrono::Local::now();
     let short: String = c.id.chars().take(8).collect();
     let path = handoff_dir().join(format!(
@@ -674,7 +838,12 @@ fn spawn_from(source: &str, extra: Option<String>, mut opts: SpawnOpts) -> Resul
         now.format("%Y%m%d-%H%M%S")
     ));
     let path_s = path.display().to_string();
-    let launcher = with_model(&opts.harness.command(), model.as_deref());
+    let launcher = crate::core::gh_identity::wrap_current(
+        &opts
+            .harness
+            .with_defaults(&opts.harness.command(), model.as_deref()),
+        opts.harness,
+    )?;
     if crate::core::hosts::dry_run() {
         let line = backend::launch_command(
             &dir,
@@ -847,7 +1016,12 @@ pub fn handoff(
         slug(&brief)
     ));
     if crate::core::hosts::dry_run() {
-        let launcher = with_model(&opts.harness.command(), model.as_deref());
+        let launcher = crate::core::gh_identity::wrap_current(
+            &opts
+                .harness
+                .with_defaults(&opts.harness.command(), model.as_deref()),
+            opts.harness,
+        )?;
         let path_s = path.display().to_string();
         let line = backend::launch_command(
             &dir,
@@ -870,7 +1044,12 @@ pub fn handoff(
     std::fs::write(&path, &text)?;
 
     let before: HashSet<String> = discovery::discover().iter().map(Session::key).collect();
-    let launcher = with_model(&opts.harness.command(), model.as_deref());
+    let launcher = crate::core::gh_identity::wrap_current(
+        &opts
+            .harness
+            .with_defaults(&opts.harness.command(), model.as_deref()),
+        opts.harness,
+    )?;
     let desc = backend::spawn(
         backend_kind,
         &dir,
@@ -959,11 +1138,6 @@ mod tests {
         for bad in ["a b", "x';id'", "$(id)", "a;b", "`id`", &"x".repeat(101)] {
             assert!(clean_model(bad).is_err(), "{bad}");
         }
-        assert_eq!(
-            with_model("claude", Some("claude-haiku-4-5-20251001")),
-            "claude --model 'claude-haiku-4-5-20251001'"
-        );
-        assert_eq!(with_model("cc", None), "cc");
     }
 
     #[test]

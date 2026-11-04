@@ -17,7 +17,7 @@
 //!   },
 //!   "web":  { "port": 7878, "bind": "0.0.0.0", "dir": null },
 //!   "tmux": null,
-//!   "spawnDirs": [ { "label": "Work", "paths": { "laptop": "~/Code/app" } } ]
+//!   "spawnDirs": [ { "label": "Work", "paths": { "laptop": "~/Code/app" }, "hidden": false } ]
 //! }
 //! ```
 
@@ -56,6 +56,22 @@ pub struct Host {
     pub web: Option<String>,
     /// Path to `overmind` on that host; `None` → `~/.local/bin/overmind`, then PATH.
     pub overmind_bin: Option<String>,
+    /// ssh destination the web UI's "Open in editor" links use for this host (read by the web
+    /// server only); `None` → `ssh`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editor_ssh: Option<String>,
+    /// HTTP proxy the web server reaches this host's `web` through (read by the web server only),
+    /// e.g. a second tailnet's userspace `tailscaled`; `None` → direct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_proxy: Option<String>,
+    /// `host[:port]` the web server dials for this host's `web` instead of the url's own name
+    /// (read by the web server only); TLS and `Host` keep the url's name. `None` → the url's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_connect: Option<String>,
+    /// A shared shed (other people's sessions too): the web UI keeps its sessions out of the
+    /// default view, the Inbox and the waiting count; `list --mine` / `--shared` split on it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -91,6 +107,17 @@ pub struct SpawnDir {
     pub label: Option<String>,
     /// host name → directory on that host.
     pub paths: Map<String, Value>,
+    /// Allowed for spawns (the web server's allow-list) but not offered in the New session menu.
+    /// Read leniently: anything but `true` is `false`, so a hand-edited value never breaks the config.
+    #[serde(
+        skip_serializing_if = "std::ops::Not::not",
+        deserialize_with = "true_or_false"
+    )]
+    pub hidden: bool,
+}
+
+fn true_or_false<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(Value::deserialize(d)?.as_bool() == Some(true))
 }
 
 /// `tui` — dashboard preferences that survive restarts.
@@ -222,6 +249,9 @@ pub struct Config {
     /// `harnesses.<codex|pi>.command` — how the other harnesses launch. Raw JSON,
     /// read leniently (see [`Config::harness_command`]).
     pub harnesses: Value,
+    /// `ghIdentities.<name>` — GitHub Apps a spawned session can act as. Raw JSON, read
+    /// leniently (see [`crate::core::gh_identity`]).
+    pub gh_identities: Value,
     pub spawn_dirs: Vec<SpawnDir>,
     pub tui: UiConfig,
     pub naming: NamingConfig,
@@ -251,6 +281,18 @@ impl Config {
             .as_str()
             .map(str::trim)
             .filter(|c| !c.is_empty())
+            .map(str::to_string)
+    }
+
+    /// `harnesses.<id>.<key>` (`model`, `effort`) when it is a non-blank string: the default a
+    /// spawn uses when it picks none (Settings → Models writes them to every host).
+    pub fn harness_default(&self, id: &str, key: &str) -> Option<String> {
+        self.harnesses
+            .get(id)?
+            .get(key)?
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
             .map(str::to_string)
     }
 
@@ -289,6 +331,15 @@ impl Config {
         let mut out = vec![me.clone()];
         out.extend(self.hosts.keys().filter(|k| **k != me).cloned());
         out
+    }
+
+    /// Whether `hosts.<name>.shared` is `true` (a shared shed, not one of the user's own).
+    pub fn is_shared(&self, name: &str) -> bool {
+        self.hosts
+            .get(name)
+            .and_then(|h| h.get("shared"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
 
     /// Hosts overmind can run commands on: this machine plus every host with an
@@ -369,8 +420,17 @@ impl Config {
         out
     }
 
-    /// The spawn directory list for one host: `(label, path)` with `~` kept.
+    /// The spawn directory list for one host: `(label, path)` with `~` kept, hidden entries
+    /// included (see [`Config::spawn_dir_entries_for`] to tell them apart).
     pub fn spawn_dirs_for(&self, host: &str) -> Vec<(String, String)> {
+        self.spawn_dir_entries_for(host)
+            .into_iter()
+            .map(|(label, path, _)| (label, path))
+            .collect()
+    }
+
+    /// Like [`Config::spawn_dirs_for`], plus each entry's `hidden` flag.
+    pub fn spawn_dir_entries_for(&self, host: &str) -> Vec<(String, String, bool)> {
         self.spawn_dirs
             .iter()
             .filter_map(|d| {
@@ -381,7 +441,7 @@ impl Config {
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| p.clone())
                 });
-                Some((label, p))
+                Some((label, p, d.hidden))
             })
             .collect()
     }
@@ -584,6 +644,33 @@ mod tests {
     }
 
     #[test]
+    fn spawn_dirs_carry_hidden_leniently() {
+        let mut raw = sample();
+        raw["spawnDirs"] = json!([
+            { "label": "Work", "paths": { "laptop": "~/Code/app" } },
+            { "label": "Brain", "paths": { "laptop": "~/brain" }, "hidden": true },
+            { "label": "Odd", "paths": { "laptop": "~/odd" }, "hidden": "yes" }
+        ]);
+        let c: Config = serde_json::from_value(raw).unwrap();
+        assert_eq!(
+            c.spawn_dir_entries_for("laptop")
+                .into_iter()
+                .map(|(l, _, h)| (l, h))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Work".to_string(), false),
+                ("Brain".to_string(), true),
+                ("Odd".to_string(), false)
+            ]
+        );
+        assert_eq!(
+            c.spawn_dirs_for("laptop").len(),
+            3,
+            "hidden ones are still listed"
+        );
+    }
+
+    #[test]
     fn parses_the_documented_shape() {
         let c: Config = serde_json::from_value(sample()).unwrap();
         assert_eq!(c.self_name(), "laptop");
@@ -627,6 +714,19 @@ mod tests {
         );
         assert!(p.contains("hosts.c has neither"), "{p}");
         assert!(p.contains("http(s)"), "{p}");
+    }
+
+    #[test]
+    fn is_shared_reads_the_host_flag() {
+        let c: Config = serde_json::from_value(json!({
+            "self": "ws",
+            "hosts": { "ws": {}, "box": { "ssh": "box", "shared": true }, "odd": { "shared": "yes" } }
+        }))
+        .unwrap();
+        assert!(c.is_shared("box"));
+        assert!(!c.is_shared("ws"));
+        assert!(!c.is_shared("odd"));
+        assert!(!c.is_shared("missing"));
     }
 
     #[test]

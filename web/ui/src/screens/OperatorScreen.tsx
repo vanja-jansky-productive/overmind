@@ -96,8 +96,13 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
         setChat({ key: sessionKey(session), list: r.messages })
         setOpStatus(r.status)
       } catch (err) {
+        // Just started, nothing said yet: no transcript until the first prompt.
+        if (err instanceof ApiError && err.status === 404 && err.message.startsWith('transcript not found')) {
+          setChat({ key: sessionKey(session), list: [] })
+          setOpStatus(session.status ?? null)
+        }
         // Gone (closed, host restarted): look for the operator again.
-        if (err instanceof ApiError && err.status === 404) setStatus(null)
+        else if (err instanceof ApiError && err.status === 404) setStatus(null)
         else throw err
       }
     },
@@ -115,12 +120,14 @@ export function OperatorScreen({ layout = 'screen' }: { layout?: 'screen' | 'pan
       spoken.current = last?.role === 'assistant' ? last.key : null
       return
     }
-    const reply = replyToSpeak(turns, opStatus, spoken.current)
+    // Claude's transcript lines are written whole: a final reply is the end of the turn, so it
+    // is read at once rather than after the status turns idle (a second or two later).
+    const reply = replyToSpeak(turns, opStatus, spoken.current, { final: (session?.harness ?? 'claude') === 'claude' })
     if (!reply) return
     spoken.current = reply.key
     setAwaiting(false)
     if (autoSpeak) void speak(reply.text, `operator:${reply.key}`)
-  }, [messages, turns, opStatus, autoSpeak, speak])
+  }, [messages, turns, opStatus, autoSpeak, speak, session?.harness])
 
   // Announce sessions that start waiting on you.
   const sessions = useMemo(() => allSessions(overmind), [overmind])

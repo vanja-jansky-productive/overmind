@@ -93,6 +93,16 @@ pub struct ClaudeSnap {
     /// Which harness runs it; absent (older files, every Claude session) = Claude.
     #[serde(skip_serializing_if = "is_claude")]
     pub harness: Harness,
+    /// The GitHub identity it acted as ([`crate::core::gh_identity`]); a resume keeps it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gh_identity: Option<String>,
+    /// The [bot](crate::core::jobs) run it belonged to (`<bot>/<run>`); a resume rejoins it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_run: Option<String>,
+    /// Dormant entries only: put to sleep on purpose ([`put_to_sleep`]), not left by a
+    /// reboot — `restore --all` (and so `restore.onBoot`) leaves it be.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub slept: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -151,6 +161,9 @@ pub struct TmuxSnap {
     /// Closed entries only: when it ended.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
+    /// Dormant entries only: put to sleep on purpose (see [`ClaudeSnap::slept`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub slept: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -547,8 +560,10 @@ fn flags_beyond(launcher: &str, flags: &[String]) -> Vec<String> {
 }
 
 /// The shell line typed into a restored pane:
-/// `cd <cwd> && <launcher> <flags the launcher lacks> --resume <sessionId>`.
-pub fn resume_line(launcher: &str, cwd: &str, c: &ClaudeSnap) -> String {
+/// `cd <cwd> && <launcher> <flags the launcher lacks> --resume <sessionId>`, under the GitHub
+/// identity the session had (an identity no longer configured here is an error, not a resume
+/// as the user).
+pub fn resume_line(launcher: &str, cwd: &str, c: &ClaudeSnap) -> Result<String> {
     use crate::core::backend::{Prompt, launch_command};
     if c.harness != Harness::Claude {
         // Codex / pi keep only `--model <id>` (see `place`), under their own launcher.
@@ -558,16 +573,24 @@ pub fn resume_line(launcher: &str, cwd: &str, c: &ClaudeSnap) -> String {
             model.map(String::as_str),
             &c.session_id,
         );
-        return launch_command(cwd, Prompt::None, None, &cmd, c.harness);
+        let cmd = crate::core::gh_identity::wrap(&cmd, c.harness, c.gh_identity.as_deref())?;
+        return Ok(launch_command(cwd, Prompt::None, None, &cmd, c.harness));
     }
-    let mut cmd = launcher.to_string();
+    let mut cmd =
+        crate::core::gh_identity::wrap(launcher, Harness::Claude, c.gh_identity.as_deref())?;
     for f in flags_beyond(launcher, &c.flags) {
         cmd.push(' ');
         cmd.push_str(&tools::shq_min(&f));
     }
     cmd.push_str(" --resume ");
     cmd.push_str(&tools::shq_min(&c.session_id));
-    launch_command(cwd, Prompt::None, None, &cmd, Harness::Claude)
+    Ok(launch_command(
+        cwd,
+        Prompt::None,
+        None,
+        &cmd,
+        Harness::Claude,
+    ))
 }
 
 /// argv of each pid: `/proc/<pid>/cmdline` where there is one (exact), else one `ps` call
@@ -762,6 +785,8 @@ fn claude_of(s: &Session) -> Option<ClaudeSnap> {
         cwd: s.cwd.clone(),
         title: Some(s.display_title.clone().unwrap_or_else(|| s.headline())),
         harness: s.harness,
+        gh_identity: s.gh_identity.clone(),
+        job_run: s.origin.as_ref().map(|o| format!("{}/{}", o.job, o.run)),
         ..Default::default()
     })
 }
@@ -1203,6 +1228,8 @@ pub struct DormantView {
     pub windows: usize,
     pub panes: usize,
     pub sessions: Vec<DormantSession>,
+    /// Put to sleep on purpose (`overmind sleep`) rather than left by a reboot; `--all` skips it.
+    pub slept: bool,
 }
 
 fn session_view(c: &ClaudeSnap) -> DormantSession {
@@ -1228,6 +1255,7 @@ pub fn dormant_views(s: &Snapshot) -> Vec<DormantView> {
             windows: t.windows.len(),
             panes: t.pane_count(),
             sessions: t.claudes().map(session_view).collect(),
+            slept: t.slept,
         })
         .collect();
     let mut claude: Vec<DormantView> = s
@@ -1242,6 +1270,7 @@ pub fn dormant_views(s: &Snapshot) -> Vec<DormantView> {
             windows: 1,
             panes: 1,
             sessions: vec![session_view(c)],
+            slept: c.slept,
         })
         .collect();
     let newest = |a: &DormantView, b: &DormantView| b.since.cmp(&a.since);
@@ -1342,6 +1371,7 @@ pub fn closed_views(s: &Snapshot) -> Vec<ClosedView> {
                 windows: t.windows.len(),
                 panes: t.pane_count(),
                 sessions: t.claudes().map(session_view).collect(),
+                slept: false,
             },
             closed_at: t.closed_at.clone(),
             tmux_session: None,
@@ -1355,6 +1385,7 @@ pub fn closed_views(s: &Snapshot) -> Vec<ClosedView> {
                 windows: 1,
                 panes: 1,
                 sessions: vec![session_view(c)],
+                slept: false,
             },
             closed_at: c.closed_at.clone(),
             tmux_session: c.tmux_session.clone(),
@@ -1557,6 +1588,80 @@ pub struct Restored {
     /// Every tmux command and launch line, in order (what a dry run would print).
     pub commands: Vec<String>,
     pub dry_run: bool,
+}
+
+/// Mark a resumed pane with the GitHub identity its session had (the `overmind list` label).
+fn tag_identity(ex: &mut Exec, pane: &str, c: &ClaudeSnap, warnings: &mut Vec<String>) {
+    if let Some(g) = &c.gh_identity {
+        ex.soft(
+            vec![
+                "set-option".into(),
+                "-p".into(),
+                "-t".into(),
+                pane.into(),
+                crate::core::gh_identity::PANE_OPTION.into(),
+                g.clone(),
+            ],
+            warnings,
+        );
+    }
+}
+
+/// A bot session (`job_run`) comes back in its run: the pane option `overmind list` reads as its
+/// `origin`, and the run's environment for the resumed agent and for what it spawns.
+fn tag_job(ex: &mut Exec, pane: &str, c: &ClaudeSnap, warnings: &mut Vec<String>) {
+    let Some(tag) = job_tag(c) else { return };
+    ex.soft(
+        vec![
+            s("set-option"),
+            s("-p"),
+            s("-t"),
+            pane.into(),
+            s(crate::core::jobs::PANE_OPTION),
+            tag.run.clone(),
+        ],
+        warnings,
+    );
+    for kv in tag.env() {
+        if let Some((k, v)) = kv.split_once('=') {
+            ex.soft(
+                vec![
+                    s("set-environment"),
+                    s("-t"),
+                    pane.into(),
+                    k.into(),
+                    v.into(),
+                ],
+                warnings,
+            );
+        }
+    }
+}
+
+/// The run tag of a bot session, with its bot's launcher (when the bot is still configured).
+fn job_tag(c: &ClaudeSnap) -> Option<crate::core::jobs::Tag> {
+    let run = c.job_run.clone()?;
+    let (job, _) = crate::core::jobs::split_run(&run)?;
+    let command = crate::core::jobs::Settings::load()
+        .get(job)
+        .and_then(|j| j.command.clone());
+    Some(crate::core::jobs::Tag { run, command })
+}
+
+/// [`resume_line`] for a pane of a restore: a bot session resumes under its bot's launcher,
+/// with its run's environment exported first (the shell is already running).
+fn restore_line(launcher: &str, dir: &str, c: &ClaudeSnap) -> Result<String> {
+    let Some(tag) = job_tag(c) else {
+        return resume_line(launcher, dir, c);
+    };
+    let line = resume_line(tag.command.as_deref().unwrap_or(launcher), dir, c)?;
+    let env: Vec<String> = tag
+        .env()
+        .iter()
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| format!("{k}={}", tools::shq_min(v)))
+        .collect();
+    Ok(format!("export {} && {line}", env.join(" ")))
 }
 
 /// Runs (or, dry, only renders) the tmux commands of one restore.
@@ -1773,8 +1878,10 @@ fn rebuild(
     }
     let mut launched = Vec::new();
     for (pane, dir, c) in pending {
-        let line = resume_line(launcher, &dir, c);
+        tag_job(ex, &pane, c, warnings);
+        let line = restore_line(launcher, &dir, c)?;
         ex.type_line(&pane, &line)?;
+        tag_identity(ex, &pane, c, warnings);
         launched.push(Launched {
             session_id: c.session_id.clone(),
             title: c.title.clone(),
@@ -1905,6 +2012,97 @@ fn remove_closed(snap: &mut Snapshot, target: &Target) -> bool {
             }
             hit
         }
+    }
+}
+
+/// Move a session that just ended (`overmind sleep` ended it) from where the snapshot keeps it —
+/// still lingering (`goneAt`) or already closed — into `dormant`, marked `slept`: a whole
+/// tmux session when it went down with it, else the lone Claude session. A session id that
+/// is live again is never put to sleep (exit 3 then, like a missing one).
+pub fn put_to_sleep(session_id: &str) -> Result<DormantView> {
+    let now = iso(Utc::now());
+    update(|snap| sleep_in(snap, session_id, &now))?
+}
+
+/// The body of [`put_to_sleep`] on a loaded snapshot, `now` stamped as `since`.
+fn sleep_in(
+    snap: &mut Snapshot,
+    session_id: &str,
+    now: &str,
+) -> Result<(bool, Result<DormantView>)> {
+    {
+        let entries = closed_entries(snap);
+        let target = if let Some(t) = entries
+            .tmux
+            .iter()
+            .find(|t| t.claudes().any(|c| c.session_id == session_id))
+        {
+            Target::Tmux(t.name.clone())
+        } else if entries.claude.iter().any(|c| c.session_id == session_id) {
+            Target::Claude(session_id.to_string())
+        } else {
+            return Ok((
+                false,
+                Err(Error::exit(
+                    EXIT_NOTHING,
+                    format!(
+                        "{session_id} is not in the snapshot as ended — nothing to keep dormant"
+                    ),
+                )),
+            ));
+        };
+        if !remove_closed(snap, &target) {
+            return Ok((
+                false,
+                Err(Error::Other("snapshot changed meanwhile".into())),
+            ));
+        }
+        let fresh = |c: &mut ClaudeSnap| {
+            c.gone_at = None;
+            c.closed_at = None;
+            c.since = None;
+        };
+        match target {
+            Target::Tmux(n) => {
+                let mut t = entries
+                    .tmux
+                    .into_iter()
+                    .find(|t| t.name == n)
+                    .unwrap_or_default();
+                for p in t.windows.iter_mut().flat_map(|w| w.panes.iter_mut()) {
+                    if let Some(c) = p.claude.as_mut() {
+                        fresh(c);
+                    }
+                }
+                t.gone_at = None;
+                t.closed_at = None;
+                t.since = Some(now.to_string());
+                t.slept = true;
+                let ids: HashSet<String> = t.claudes().map(|c| c.session_id.clone()).collect();
+                snap.dormant.iterm.retain(|c| !ids.contains(&c.session_id));
+                snap.dormant.tmux.retain(|d| d.name != t.name);
+                snap.closed.drop_ids(&ids);
+                snap.dormant.tmux.push(t);
+            }
+            Target::Claude(id) => {
+                let mut c = entries
+                    .claude
+                    .into_iter()
+                    .find(|c| c.session_id == id)
+                    .unwrap_or_default();
+                fresh(&mut c);
+                c.since = Some(now.to_string());
+                c.slept = true;
+                snap.dormant.iterm.retain(|d| d.session_id != id);
+                snap.closed.drop_ids(&HashSet::from([id]));
+                snap.dormant.iterm.push(c);
+            }
+        }
+        let view = dormant_views(snap)
+            .into_iter()
+            .find(|v| v.sessions.iter().any(|s| s.session_id == session_id))
+            .ok_or_else(|| Error::Other("not dormant after all".into()));
+        Ok((true, view))
     }
 }
 
@@ -2047,23 +2245,47 @@ fn restore_from(snap: &Snapshot, pool: Pool, target: &Target, launcher: &str) ->
         }),
     };
     match built {
-        Ok((launched, windows, panes, renamed)) => Ok(Restored {
-            kind,
-            from: from.clone(),
-            renamed,
-            session: name,
-            windows,
-            panes,
-            launched,
-            warnings,
-            commands: ex.log,
-            dry_run: dry,
-        }),
+        Ok((launched, windows, panes, renamed)) => {
+            if !dry {
+                rejoin_runs(&entry, &name, &launched);
+            }
+            Ok(Restored {
+                kind,
+                from: from.clone(),
+                renamed,
+                session: name,
+                windows,
+                panes,
+                launched,
+                warnings,
+                commands: ex.log,
+                dry_run: dry,
+            })
+        }
         Err(e) => {
             if let Some(t) = taken {
                 put_back(pool, t);
             }
             Err(e)
+        }
+    }
+}
+
+/// Put the resumed bot sessions back in their runs' records, under the tmux session they now
+/// live in, so `overmind bots` shows them again and `keep` / `overmind done` can close them.
+fn rejoin_runs(entry: &Taken, session: &str, launched: &[Launched]) {
+    let back: HashSet<&str> = launched.iter().map(|l| l.session_id.as_str()).collect();
+    let (old, claudes): (String, Vec<&ClaudeSnap>) = match entry {
+        Taken::Tmux(t) => (t.name.clone(), t.claudes().collect()),
+        Taken::Claude(c) => (c.tmux_session.clone().unwrap_or_else(|| c.label()), vec![c]),
+    };
+    let mut done = HashSet::new();
+    for c in claudes {
+        if let Some(run) = &c.job_run
+            && back.contains(c.session_id.as_str())
+            && done.insert(run.clone())
+        {
+            crate::core::jobs::rejoin_session(run, &old, session);
         }
     }
 }
@@ -2101,8 +2323,10 @@ fn reopen_in(
         ],
         "%new",
     )?;
-    let line = resume_line(launcher, &dir, c);
+    tag_job(ex, &pane, c, warnings);
+    let line = restore_line(launcher, &dir, c)?;
     ex.type_line(&pane, &line)?;
+    tag_identity(ex, &pane, c, warnings);
     Ok(vec![Launched {
         session_id: c.session_id.clone(),
         title: c.title.clone(),
@@ -2267,6 +2491,87 @@ mod tests {
     }
 
     #[test]
+    fn sleep_keeps_a_whole_tmux_session_dormant_until_restored() {
+        let s = transition(
+            Snapshot::default(),
+            live(vec![tmux("api", &["aaaa1111"])], vec![]),
+            Some("boot1"),
+            "laptop",
+            at(0),
+        );
+        // `overmind sleep` killed it: the tmux session went with it and lingers.
+        let mut s = transition(s, Live::default(), Some("boot1"), "laptop", at(5));
+        let (changed, view) = sleep_in(&mut s, "aaaa1111", &iso(at(6))).unwrap();
+        let view = view.unwrap();
+        assert!(changed);
+        assert_eq!(
+            (view.kind, view.target.as_str(), view.slept),
+            ("tmux", "api", true)
+        );
+        assert!(s.tmux.is_empty() && closed_entries(&s).is_empty());
+        let t = &s.dormant.tmux[0];
+        assert!(t.slept && t.gone_at.is_none());
+        assert!(t.claudes().all(|c| c.gone_at.is_none()));
+        // Long past the grace period, and across a reboot, it stays dormant — never closed.
+        let s = transition(s, Live::default(), Some("boot1"), "laptop", at(3600));
+        let s = transition(s, Live::default(), Some("boot2"), "laptop", at(7200));
+        assert_eq!(dormant_ids(&s), HashSet::from(["aaaa1111".to_string()]));
+        assert!(s.dormant.tmux[0].slept && closed_entries(&s).is_empty());
+    }
+
+    #[test]
+    fn sleep_takes_a_lone_session_out_of_a_tmux_session_that_lives_on() {
+        let s = transition(
+            Snapshot::default(),
+            live(vec![tmux("work", &["aaaa1111", "bbbb2222"])], vec![]),
+            Some("boot1"),
+            "laptop",
+            at(0),
+        );
+        let mut rest = tmux("work", &["bbbb2222"]);
+        rest.windows[0].panes[0].claude = None;
+        rest.windows[0].panes.push(PaneSnap {
+            index: 1,
+            cwd: "/tmp".into(),
+            claude: Some(claude("bbbb2222")),
+            ..Default::default()
+        });
+        let mut s = transition(
+            s,
+            live(vec![rest.clone()], vec![]),
+            Some("boot1"),
+            "laptop",
+            at(5),
+        );
+        let (_, view) = sleep_in(&mut s, "aaaa1111", &iso(at(6))).unwrap();
+        let view = view.unwrap();
+        assert_eq!((view.kind, view.target.as_str()), ("claude", "aaaa1111"));
+        assert_eq!(s.dormant.iterm[0].tmux_session.as_deref(), Some("work"));
+        assert!(s.tmux[0].claudes().all(|c| c.session_id == "bbbb2222"));
+        let s = transition(
+            s,
+            live(vec![rest], vec![]),
+            Some("boot1"),
+            "laptop",
+            at(3600),
+        );
+        assert!(s.dormant.iterm[0].slept && closed_entries(&s).is_empty());
+    }
+
+    #[test]
+    fn sleep_refuses_a_session_that_has_not_ended() {
+        let mut s = transition(
+            Snapshot::default(),
+            live(vec![tmux("api", &["aaaa1111"])], vec![]),
+            Some("boot1"),
+            "laptop",
+            at(0),
+        );
+        let (changed, view) = sleep_in(&mut s, "aaaa1111", &iso(at(1))).unwrap();
+        assert!(!changed && view.is_err() && s.dormant.is_empty());
+    }
+
+    #[test]
     fn only_replay_safe_flags_survive() {
         let a = argv(
             "--dangerously-skip-permissions --model opus -n my-name --resume abc \
@@ -2304,11 +2609,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resume_line("claude", "/w/app", &c),
+            resume_line("claude", "/w/app", &c).unwrap(),
             "cd '/w/app' && claude --dangerously-skip-permissions --model opus --add-dir /a --resume abcd-1234"
         );
         assert_eq!(
-            resume_line("cl --dangerously-skip-permissions --model=x", "/w", &c),
+            resume_line("cl --dangerously-skip-permissions --model=x", "/w", &c).unwrap(),
             "cd '/w' && cl --dangerously-skip-permissions --model=x --add-dir /a --resume abcd-1234"
         );
     }

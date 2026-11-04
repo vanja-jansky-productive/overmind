@@ -25,7 +25,7 @@ export function QuestionCard({ m, actions }: { m: Message; actions?: QuestionAct
           open && actions ? 'border-status-waiting/60 shadow-[0_0_0_3px] shadow-status-waiting/10' : 'border-border/70',
         )}
       >
-        {open && actions ? <AnswerForm id={m.id ?? ''} questions={questions} actions={actions} /> : <Record m={m} questions={questions} />}
+        {open && actions ? <AnswerForm key={m.id} id={m.id ?? ''} questions={questions} actions={actions} /> : <Record m={m} questions={questions} />}
       </div>
     </div>
   )
@@ -140,31 +140,33 @@ function AnswerForm({ id, questions, actions }: { id: string; questions: Questio
                 </button>
               )
             })}
-            <input
-              value={drafts[i].text}
-              onChange={(e) => set(i, typeOther(q, drafts[i], e.target.value))}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing && ready) {
-                  e.preventDefault()
-                  void run('answer')
-                }
-              }}
-              placeholder="Something else…"
-              aria-label={`Other answer: ${q.question}`}
-              className={cn(
-                'min-h-11 w-full rounded-xl border bg-background/40 px-3 py-2 text-base outline-none placeholder:text-dimmer focus-visible:border-ring md:text-[0.95em]',
-                drafts[i].text.trim() ? 'border-primary' : 'border-border',
-              )}
-            />
+            {q.noOther ? null : (
+              <input
+                value={drafts[i].text}
+                onChange={(e) => set(i, typeOther(q, drafts[i], e.target.value))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing && ready) {
+                    e.preventDefault()
+                    void run('answer')
+                  }
+                }}
+                placeholder="Something else…"
+                aria-label={`Other answer: ${q.question}`}
+                className={cn(
+                  'min-h-11 w-full rounded-xl border bg-background/40 px-3 py-2 text-base outline-none placeholder:text-dimmer focus-visible:border-ring md:text-[0.95em]',
+                  drafts[i].text.trim() ? 'border-primary' : 'border-border',
+                )}
+              />
+            )}
           </div>
         </fieldset>
       ))}
       <div className="flex items-center justify-end gap-2 pt-0.5">
-        <Button variant="ghost" size="sm" className="h-9 rounded-full text-muted-foreground" disabled={!!busy} onClick={() => run('dismiss')}>
+        <Button variant="ghost" size="lg" className="text-muted-foreground" disabled={!!busy} onClick={() => run('dismiss')}>
           {busy === 'dismiss' ? <Loader2Icon className="animate-spin" /> : <XIcon />}
           Dismiss
         </Button>
-        <Button size="sm" className="h-9 rounded-full px-4" disabled={!ready || !!busy} onClick={() => run('answer')}>
+        <Button size="lg" disabled={!ready || !!busy} onClick={() => run('answer')}>
           {busy === 'answer' ? <Loader2Icon className="animate-spin" /> : <SendHorizontalIcon />}
           {questions.length > 1 ? 'Submit answers' : 'Answer'}
         </Button>

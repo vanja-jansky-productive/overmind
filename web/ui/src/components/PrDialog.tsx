@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CodeXmlIcon, ExternalLinkIcon, FolderGit2Icon, GitBranchIcon, Loader2Icon, PlayIcon } from 'lucide-react'
+import { CodeXmlIcon, ExternalLinkIcon, FileDiffIcon, FolderGit2Icon, GitBranchIcon, Loader2Icon, PlayIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocation } from 'wouter'
 
@@ -22,6 +22,7 @@ import { editorLabel } from '@/lib/brief'
 import { copyText } from '@/lib/clipboard'
 import { shortCwd } from '@/lib/format'
 import { CHECKS_LABEL, checksTone, prRef, promptChips } from '@/lib/prs'
+import { prReviewHref } from '@/lib/review'
 import { sessionHref } from '@/lib/sessions'
 import { isMacPlatform, isSubmitChord } from '@/lib/shortcuts'
 
@@ -165,7 +166,7 @@ export function PrDialog({
                 </button>
                 {/* A desktop editor link makes no sense on a phone: hidden on touch-first screens. */}
                 {editorText && editorUrl ? (
-                  <Button asChild variant="outline" size="sm" className="-my-1 ml-auto h-6 shrink-0 px-2 text-xs pointer-coarse:hidden">
+                  <Button asChild variant="outline" size="xs" className="-my-1 ml-auto pointer-coarse:hidden">
                     <a href={editorUrl} title={editorText}>
                       <CodeXmlIcon /> {editorText.replace(/^Open in /, '')}
                     </a>
@@ -240,6 +241,19 @@ export function PrDialog({
               <ExternalLinkIcon /> GitHub
             </a>
           </Button>
+          {pr.local ? (
+            <Button
+              variant="outline"
+              size="sm"
+              title={`The diff from the clone on ${host} — no session, no worktree. Notes stay in Overmind; post them to GitHub or hand them to a session.`}
+              onClick={() => {
+                onClose()
+                navigate(prReviewHref(host, pr))
+              }}
+            >
+              <FileDiffIcon /> Review
+            </Button>
+          ) : null}
           {!worktree && pr.local ? (
             <Button variant="outline" size="sm" onClick={() => void checkout()} disabled={!!busy}>
               {busy === 'checkout' ? <Loader2Icon className="animate-spin" /> : <FolderGit2Icon />} Check out

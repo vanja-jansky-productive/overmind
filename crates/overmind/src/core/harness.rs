@@ -106,6 +106,88 @@ impl Harness {
         }
     }
 
+    /// Reasoning-effort levels it takes, lowest first. Codex: the union of its model cache's
+    /// `supported_reasoning_levels`, else a fixed list.
+    pub fn efforts(self) -> Vec<String> {
+        let fixed: &[&str] = match self {
+            Harness::Claude => &["low", "medium", "high", "xhigh", "max"],
+            Harness::Codex => &["minimal", "low", "medium", "high", "xhigh"],
+            Harness::Pi => &["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        };
+        if self == Harness::Codex {
+            let cached = codex_efforts(&codex_home());
+            if !cached.is_empty() {
+                return cached;
+            }
+        }
+        fixed.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The launcher arguments that set the reasoning effort.
+    pub fn effort_args(self, level: &str) -> String {
+        let l = crate::core::tools::shq_min(level);
+        match self {
+            Harness::Claude => format!("--effort {l}"),
+            Harness::Codex => format!("-c model_reasoning_effort={l}"),
+            Harness::Pi => format!("--thinking {l}"),
+        }
+    }
+
+    /// The configured default model (`harnesses.<id>.model`), when it is a safe id.
+    pub fn default_model(self) -> Option<String> {
+        crate::core::config::get()
+            .harness_default(self.id(), "model")
+            .filter(|m| is_model_id(m))
+    }
+
+    /// The configured default effort (`harnesses.<id>.effort`), when it is a level this
+    /// harness takes.
+    pub fn default_effort(self) -> Option<String> {
+        crate::core::config::get()
+            .harness_default(self.id(), "effort")
+            .filter(|e| is_level(e))
+    }
+
+    /// The launcher a spawn types: `--model` (the picked one, else the default) and the default
+    /// effort appended. A launcher that already sets one (a job's own command, a wrapper with
+    /// flags) keeps its own: the default is not added on top.
+    pub fn with_defaults(self, launcher: &str, model: Option<&str>) -> String {
+        self.with(launcher, model, self.default_model(), self.default_effort())
+    }
+
+    fn with(
+        self,
+        launcher: &str,
+        model: Option<&str>,
+        def_model: Option<String>,
+        def_effort: Option<String>,
+    ) -> String {
+        let words: Vec<&str> = launcher.split_whitespace().collect();
+        let has = |flags: &[&str]| {
+            words.iter().any(|w| {
+                flags
+                    .iter()
+                    .any(|f| w == f || w.starts_with(&format!("{f}=")))
+            })
+        };
+        let mut out = launcher.to_string();
+        let model = model.map(str::to_string).or_else(|| {
+            let sets_model = has(&["--model"]) || (self == Harness::Codex && has(&["-m"]));
+            def_model.filter(|_| !sets_model)
+        });
+        if let Some(m) = model.filter(|m| !m.is_empty()) {
+            out.push_str(" --model ");
+            out.push_str(&crate::core::tools::shq(&m));
+        }
+        let sets_effort =
+            has(&["--effort", "--thinking"]) || launcher.contains("model_reasoning_effort");
+        if let Some(e) = def_effort.filter(|_| !sets_effort) {
+            out.push(' ');
+            out.push_str(&self.effort_args(&e));
+        }
+        out
+    }
+
     /// The resume command line: `<launcher> [--model m] <resume args>`.
     pub fn resume_command(self, launcher: &str, model: Option<&str>, session_id: &str) -> String {
         let mut cmd = launcher.to_string();
@@ -203,8 +285,56 @@ pub fn codex_models(home: &Path) -> Vec<ModelOption> {
     out
 }
 
+/// A model id safe to type into a shell (the `--model` rule: letters, digits, `._[]-/:`).
+pub fn is_model_id(m: &str) -> bool {
+    !m.is_empty()
+        && m.len() <= 100
+        && m.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._[]-/:".contains(c))
+}
+
+/// An effort level: a short lowercase word.
+pub fn is_level(e: &str) -> bool {
+    !e.is_empty() && e.len() <= 20 && e.chars().all(|c| c.is_ascii_lowercase())
+}
+
+/// Codex's effort levels: every `supported_reasoning_levels[].effort` of its model cache, in
+/// first-seen order (models list them lowest first).
+pub fn codex_efforts(home: &Path) -> Vec<String> {
+    let cache: Value = std::fs::read_to_string(home.join("models_cache.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null);
+    let mut out: Vec<String> = Vec::new();
+    for m in cache
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for l in m
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(e) = l
+                .get("effort")
+                .and_then(Value::as_str)
+                .filter(|e| is_level(e))
+                && !out.iter().any(|o| o == e)
+            {
+                out.push(e.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// pi's picker: `pi --list-models` (the providers it has credentials for) after the
-/// default from its `settings.json`. Ids are `provider/model`.
+/// default from its `settings.json`, narrowed to its `enabledModels` patterns when set
+/// (pi lists every model of a provider, also ones its login cannot use). Ids are
+/// `provider/model`.
 pub fn pi_models(home: &Path, launcher: &str) -> Vec<ModelOption> {
     let settings: Value = std::fs::read_to_string(home.join("settings.json"))
         .ok()
@@ -214,6 +344,16 @@ pub fn pi_models(home: &Path, launcher: &str) -> Vec<ModelOption> {
         .get("defaultModel")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let enabled: Vec<String> = settings
+        .get("enabledModels")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let mut out = vec![opt("", &default_label(default.as_deref()))];
     let bin = launcher.split_whitespace().next().unwrap_or("pi");
     let bin = crate::core::tools::resolve_binary(bin, None);
@@ -224,7 +364,11 @@ pub fn pi_models(home: &Path, launcher: &str) -> Vec<ModelOption> {
             .env("PATH", crate::core::tools::search_path()),
         Duration::from_secs(15),
     ) {
-        out.extend(parse_pi_models(&text));
+        out.extend(
+            parse_pi_models(&text)
+                .into_iter()
+                .filter(|m| pi_model_enabled(&m.id, &enabled)),
+        );
     }
     out
 }
@@ -236,22 +380,73 @@ fn default_label(model: Option<&str>) -> String {
     }
 }
 
-/// `provider  model  context …` table rows → `provider/model`.
+/// `provider  model  context …` table rows → `provider/model`. Only rows under the
+/// header count: without a login pi prints a "No models available …" message instead.
 fn parse_pi_models(text: &str) -> Vec<ModelOption> {
-    text.lines()
+    let mut lines = text.lines();
+    if !lines.any(|l| {
+        let mut cols = l.split_whitespace();
+        cols.next() == Some("provider") && cols.next() == Some("model")
+    }) {
+        return Vec::new();
+    }
+    lines
         .filter_map(|l| {
             let mut cols = l.split_whitespace();
             let provider = cols.next()?;
             let model = cols.next()?;
-            if provider == "provider" {
-                return None;
-            }
             Some(opt(
                 &format!("{provider}/{model}"),
                 &format!("{model} ({provider})"),
             ))
         })
         .collect()
+}
+
+/// pi's `enabledModels` semantics, enough for the picker: a pattern matches
+/// `provider/model` or the bare model, case-insensitively, `*` and `?` as globs, a
+/// `:<thinking>` suffix ignored. No patterns: everything is enabled.
+fn pi_model_enabled(id: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return true;
+    }
+    let id = id.to_lowercase();
+    let bare = id.split_once('/').map_or(id.as_str(), |(_, m)| m);
+    patterns.iter().any(|p| {
+        let p = p.to_lowercase();
+        let p = match p.rsplit_once(':') {
+            Some((base, level))
+                if ["off", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&level) =>
+            {
+                base.to_string()
+            }
+            _ => p,
+        };
+        glob_match(&p, &id) || glob_match(&p, bare)
+    })
+}
+
+/// `*` (any run) and `?` (one char) globbing.
+fn glob_match(pat: &str, s: &str) -> bool {
+    let (p, s): (Vec<char>, Vec<char>) = (pat.chars().collect(), s.chars().collect());
+    let (mut pi, mut si, mut star, mut mark) = (0, 0, None, 0);
+    while si < s.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
+            pi += 1;
+            si += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = si;
+            pi += 1;
+        } else if let Some(st) = star {
+            pi = st + 1;
+            mark += 1;
+            si = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
 }
 
 /// stdout of `cmd`, or `None` when it fails or outlives `timeout` (then it is killed).
@@ -295,6 +490,13 @@ pub struct HarnessInfo {
     /// Its first word resolves to an executable (PATH, the usual install dirs).
     pub installed: bool,
     pub models: Vec<ModelOption>,
+    /// Reasoning-effort levels it takes (`--effort`, `-c model_reasoning_effort=`, `--thinking`).
+    pub efforts: Vec<String>,
+    /// `harnesses.<id>.model` / `.effort`: what a spawn uses when it picks none.
+    #[serde(rename = "defaultModel")]
+    pub default_model: Option<String>,
+    #[serde(rename = "defaultEffort")]
+    pub default_effort: Option<String>,
 }
 
 pub fn info(h: Harness, with_models: bool) -> HarnessInfo {
@@ -317,6 +519,9 @@ pub fn info(h: Harness, with_models: bool) -> HarnessInfo {
         command,
         installed,
         models,
+        efforts: h.efforts(),
+        default_model: h.default_model(),
+        default_effort: h.default_effort(),
     }
 }
 
@@ -1001,6 +1206,72 @@ pub fn content_text(c: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn with_adds_the_picked_or_default_model_and_the_default_effort() {
+        use super::Harness::*;
+        let s = |o: &str| Some(o.to_string());
+        // picked model, no defaults: as before
+        assert_eq!(
+            Claude.with("claude", Some("claude-haiku-5-5"), None, None),
+            "claude --model 'claude-haiku-5-5'"
+        );
+        assert_eq!(Claude.with("cc", None, None, None), "cc");
+        // defaults fill in; a picked model wins over the default one
+        assert_eq!(
+            Claude.with("claude", None, s("claude-opus-5-5"), s("high")),
+            "claude --model 'claude-opus-5-5' --effort high"
+        );
+        assert_eq!(
+            Claude.with("claude", Some("x"), s("claude-opus-5-5"), None),
+            "claude --model 'x'"
+        );
+        assert_eq!(
+            Codex.with("codex", None, None, s("xhigh")),
+            "codex -c model_reasoning_effort=xhigh"
+        );
+        assert_eq!(
+            Pi.with("pi", None, s("anthropic/claude-opus-5-5"), s("medium")),
+            "pi --model 'anthropic/claude-opus-5-5' --thinking medium"
+        );
+        // a launcher that already sets them keeps its own
+        assert_eq!(
+            Claude.with("claude --model opus --effort low", None, s("y"), s("high")),
+            "claude --model opus --effort low"
+        );
+        assert_eq!(
+            Codex.with(
+                "codex -m gpt-6 -c model_reasoning_effort=low",
+                None,
+                s("y"),
+                s("high")
+            ),
+            "codex -m gpt-6 -c model_reasoning_effort=low"
+        );
+        assert_eq!(
+            Pi.with("pi --thinking=low", None, None, s("high")),
+            "pi --thinking=low"
+        );
+        // a picked model is still added to a launcher with its own --model (the CLI's last one wins)
+        assert_eq!(
+            Claude.with("claude --model opus", Some("x"), None, None),
+            "claude --model opus --model 'x'"
+        );
+    }
+
+    #[test]
+    fn codex_efforts_come_from_the_model_cache_in_order() {
+        let dir = std::env::temp_dir().join(format!("overmind-codex-eff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("models_cache.json"),
+            r#"{"models":[{"supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},{"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"BAD ONE"}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(super::codex_efforts(&dir), vec!["low", "high", "medium"]);
+        assert!(super::codex_efforts(&dir.join("missing")).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     use super::*;
 
     fn argv(s: &str) -> Vec<String> {
@@ -1247,5 +1518,24 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m[0].id, "openai/gpt-5.5");
         assert_eq!(m[1].label, "claude-x (anthropic)");
+    }
+
+    #[test]
+    fn pi_models_without_a_login_are_empty() {
+        let t = "No models available. Use /login to log into a provider. See:\n  /x/docs/providers.md\n";
+        assert!(parse_pi_models(t).is_empty());
+    }
+
+    #[test]
+    fn pi_enabled_models_narrow_the_picker() {
+        let pats = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(pi_model_enabled("openai/gpt-4o", &[]));
+        let p = pats(&["openai/gpt-6*", "gpt-5.6-sol:high", "Anthropic/claude-?"]);
+        assert!(pi_model_enabled("openai/gpt-6.1-sol", &p));
+        assert!(pi_model_enabled("openai/gpt-5.6-sol", &p));
+        assert!(pi_model_enabled("anthropic/claude-x", &p));
+        assert!(!pi_model_enabled("openai/gpt-4o", &p));
+        assert!(!pi_model_enabled("openai/gpt-5.6-sol-pro", &p));
+        assert!(!pi_model_enabled("other/gpt-6", &pats(&["openai/gpt-6"])));
     }
 }

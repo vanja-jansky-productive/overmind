@@ -1,5 +1,5 @@
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react'
-import { ArrowDownIcon, ArrowUpIcon, CornerDownLeftIcon, Loader2Icon, MicIcon, PaperclipIcon, SendHorizontalIcon, SquareIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowUpIcon, CornerDownLeftIcon, ListPlusIcon, Loader2Icon, MicIcon, PaperclipIcon, SendHorizontalIcon, SquareIcon } from 'lucide-react'
 
 import type { QuickReply, SessionKey } from '@/api/types'
 import { CompletionPopup } from '@/components/session/CompletionPopup'
@@ -64,6 +64,13 @@ export interface ComposerProps {
   sessionId?: string
   /** `/skill` autocomplete too (Claude sessions). */
   slashCommands?: boolean
+  /**
+   * The agent is working: Enter (and the button) queue the message for when the run ends;
+   * ⌘/Ctrl+Enter sends it now. Absent = always send.
+   */
+  onQueue?: ((text: string) => boolean) | null
+  /** Messages wait in the queue: ⌘/Ctrl+Enter in an empty composer sends the first one now. */
+  onSendQueued?: (() => void) | null
 }
 
 export interface ComposerApi {
@@ -88,6 +95,8 @@ export function Composer({
   voiceHint = '',
   sessionId,
   slashCommands = false,
+  onQueue = null,
+  onSendQueued = null,
 }: ComposerProps) {
   const [text, setText] = useState(() => takeDraft(draftKey))
   useEffect(() => saveDraft(draftKey, text), [draftKey, text])
@@ -180,12 +189,19 @@ export function Composer({
     else if (intent === 'tap' && onHandle) setChipsOpen((o) => !o)
   }
 
-  // Auto-grow up to ~5 rows, then scroll inside.
+  // Auto-grow up to ~5 rows, then scroll inside. Measuring needs `height: auto`, which collapses the
+  // textarea for a moment: hold its row's height meanwhile, or the chat above grows, clamps its
+  // scrollTop and reads that as the user scrolling up (follow lost); keep the textarea's own scroll too.
   useLayoutEffect(() => {
     const el = ta.current
     if (!el) return
+    const row = el.parentElement
+    const top = el.scrollTop
+    if (row) row.style.minHeight = `${row.offsetHeight}px`
     el.style.height = 'auto'
     el.style.height = `${Math.min(MAX_TEXTAREA_PX, Math.max(44, el.scrollHeight))}px`
+    if (row) row.style.minHeight = ''
+    el.scrollTop = top
     if (caretToEnd.current) {
       caretToEnd.current = false
       el.focus()
@@ -202,9 +218,9 @@ export function Composer({
     }
   }, [text])
 
-  const submit = () => {
+  const submit = (now = false) => {
     if (locked || empty || tooLong) return
-    if (onSend(text)) setText('')
+    if (onQueue && !now ? onQueue(text) : onSend(text)) setText('')
   }
 
   // Attach + mic: inline beside the input on desktop; on mobile they live in the chips drawer
@@ -389,11 +405,24 @@ export function Composer({
               if (isTouch && !desktop) return
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
-                submit()
+                if ((e.metaKey || e.ctrlKey) && !text.trim() && onSendQueued && !locked) return onSendQueued()
+                submit(e.metaKey || e.ctrlKey)
               }
             }}
             disabled={locked}
-            placeholder={locked ? 'Read-only' : desktop ? `Message ${agent}…  (Enter to send, Shift+Enter for a new line)` : `Message ${agent}…`}
+            placeholder={
+              locked
+                ? 'Read-only'
+                : onSendQueued && desktop
+                  ? `${onQueue ? `${agent} is working — Enter queues, ` : ''}⌘Enter sends the first queued message now`
+                : onQueue
+                  ? desktop
+                    ? `${agent} is working — Enter queues for when it finishes, ⌘Enter sends now`
+                    : `Queue for when ${agent} finishes…`
+                  : desktop
+                    ? `Message ${agent}…  (Enter to send, Shift+Enter for a new line)`
+                    : `Message ${agent}…`
+            }
             aria-label="Message"
             role="combobox"
             aria-autocomplete="list"
@@ -426,11 +455,12 @@ export function Composer({
           <Button
             type="submit"
             size="icon"
-            aria-label="Send"
+            aria-label={onQueue ? 'Queue' : 'Send'}
+            title={onQueue ? `Queue: goes in when ${agent} finishes this run` : undefined}
             disabled={locked || empty || tooLong}
             className="size-11 rounded-full [&_svg:not([class*='size-'])]:size-5"
           >
-            <SendHorizontalIcon />
+            {onQueue ? <ListPlusIcon /> : <SendHorizontalIcon />}
           </Button>
         </div>
         {voice.state !== 'idle' ? (

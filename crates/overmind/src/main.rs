@@ -5,8 +5,9 @@ use colored::Colorize;
 
 use overmind::cli::{
     brief as brief_cmd, commands, config_cmd, group, hosts as host_cmds, init, jobs as jobs_cmd,
-    mcp, prs as prs_cmd, repos as repos_cmd, restore, skill, stack as stack_cmds,
-    tasks as tasks_cmd, tmux as tmux_cmds, usage as usage_cmd, web,
+    mcp, prs as prs_cmd, repos as repos_cmd, restore, schedule as schedule_cmd, skill,
+    slack as slack_cmd, stack as stack_cmds, tasks as tasks_cmd, tmux as tmux_cmds,
+    usage as usage_cmd, web,
 };
 use overmind::core::config;
 use overmind::core::discovery::Backend;
@@ -22,7 +23,7 @@ use overmind::tui::watch;
     after_help = "Bare `overmind` opens the dashboard on a terminal (a one-shot `list` when piped).\n\
 Host: -H <name> runs the command on that host over ssh (it needs overmind installed there).\n\
 tmux-session and machine commands (tmux, enter, last, new, exec, ssh) default to `defaultHost`; everything else to this machine.\n\
-Env: OVERMIND_CONFIG OVERMIND_HOST OVERMIND_DRY_RUN OVERMIND_DEBUG OVERMIND_CONNECT_TIMEOUT OVERMIND_MUX OVERMIND_REMOTE_TIMEOUT OVERMIND_CMD OVERMIND_TMUX OVERMIND_SNAPSHOT NO_COLOR"
+Env: OVERMIND_CONFIG OVERMIND_HOST OVERMIND_DRY_RUN OVERMIND_DEBUG OVERMIND_CONNECT_TIMEOUT OVERMIND_MUX OVERMIND_REMOTE_TIMEOUT OVERMIND_CMD OVERMIND_GH_IDENTITY OVERMIND_TMUX OVERMIND_SNAPSHOT NO_COLOR"
 )]
 struct Cli {
     /// Target host (a configured name, or any ssh destination); env OVERMIND_HOST
@@ -40,6 +41,11 @@ struct Cli {
     /// The name the caller knows this machine by (set by remote dispatch)
     #[arg(long, global = true, hide = true, value_name = "NAME")]
     as_host: Option<String>,
+
+    /// Spawned sessions act on GitHub as this identity (`ghIdentities` in the config), not
+    /// as you; env OVERMIND_GH_IDENTITY, which a session passes on to everything it spawns
+    #[arg(long, global = true, value_name = "NAME")]
+    gh_identity: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -113,6 +119,12 @@ enum Commands {
         /// Every configured host, in parallel
         #[arg(long, short = 'a')]
         all_hosts: bool,
+        /// Only the user's own hosts (not `hosts.<name>.shared`); implies --all-hosts
+        #[arg(long, conflicts_with = "shared")]
+        mine: bool,
+        /// Only shared hosts (`hosts.<name>.shared: true`); implies --all-hosts
+        #[arg(long)]
+        shared: bool,
     },
 
     /// Read what a session is currently showing
@@ -130,6 +142,35 @@ enum Commands {
         target: String,
         /// The message to send
         text: String,
+    },
+
+    /// Run by an agent inside its session: its work is finished and nothing waits on the user.
+    /// Overmind shows the session as done (nothing closes it: the user does)
+    Done {
+        /// One line: what it did (kept with the mark)
+        #[arg(long)]
+        note: Option<String>,
+        /// Take the mark back
+        #[arg(long)]
+        cancel: bool,
+    },
+
+    /// Ask a session to report itself done once its work is finished (`overmind done`)
+    AskDone {
+        /// sessionId prefix, derived name, or pid
+        target: String,
+    },
+
+    /// Close a session but keep it dormant: its agent ends (and its tmux window, or the tmux
+    /// session when that was its only window), and `overmind restore <target>` resumes it later.
+    /// The app calls this Deactivate, and the dormant list Inactive
+    #[command(visible_alias = "deactivate")]
+    Sleep {
+        /// sessionId prefix, derived name, or pid
+        target: String,
+        /// `{ host, sessionId, title, process, terminal, dormant: DormantView, dryRun }`
+        #[arg(long)]
+        json: bool,
     },
 
     /// Rename a session: Claude's own /rename (the title), then its tmux session follows
@@ -278,6 +319,27 @@ enum Commands {
         /// Open a new window instead of a tab (iterm backend only)
         #[arg(long)]
         window: bool,
+        /// The session reports itself done once its work is finished (`overmind done`; tmux only)
+        #[arg(long)]
+        ask_done: bool,
+        /// Start linked to this Slack thread, channel or @person (tmux, on `slack.host` only):
+        /// the prompt goes in with the link's intro, so nothing runs before it knows
+        #[arg(long, value_name = "URL", conflicts_with = "from")]
+        slack: Option<String>,
+        /// How long the --slack link lasts: minutes, or like 30m, 2h, 2d, 1w (max 1 week), or `forever`
+        #[arg(
+            long,
+            value_name = "DURATION",
+            default_value = "2h",
+            requires = "slack"
+        )]
+        slack_for: String,
+        /// The --slack link's instructions: what it may help with (default: the work of this session)
+        #[arg(long, value_name = "TEXT", requires = "slack")]
+        slack_task: Option<String>,
+        /// The --slack link sees every message and steps in when it should (default: woken when mentioned)
+        #[arg(long, requires = "slack")]
+        slack_proactive: bool,
     },
 
     /// Coding-agent harnesses on this host (claude, codex, pi): installed, command, models
@@ -286,13 +348,26 @@ enum Commands {
         cmd: HarnessCmd,
     },
 
+    /// GitHub identities spawned sessions can act as (`ghIdentities` in the config)
+    GhIdentity {
+        #[command(subcommand)]
+        cmd: GhIdentityCmd,
+    },
+
     /// Session stacks: sessions sharing one context file (the StackBrief); spawn siblings
     Stack {
         #[command(subcommand)]
         cmd: StackCmd,
     },
 
-    /// Claude subscription usage limits: session (5h), weekly, per-model weekly, extra usage
+    /// Slack links: a session talks, for a while, with the people in one Slack thread (`slack.host`)
+    Slack {
+        #[command(subcommand)]
+        cmd: Option<SlackCmd>,
+    },
+
+    /// Subscription usage limits: Claude (session, weekly, per-model weekly, extra usage) and
+    /// the ChatGPT plan Codex is logged in with (session, weekly, credits)
     Usage {
         /// Machine-readable output (the web API's shape)
         #[arg(long)]
@@ -502,6 +577,15 @@ enum Commands {
         all: bool,
     },
 
+    /// One-off sessions started later on this host: at a set time, or on a Productive task's start date
+    Schedule {
+        #[command(subcommand)]
+        cmd: Option<ScheduleCmd>,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Bots: agent sessions started from a recipe (prompt + schedule) on this host (config `bots`)
     #[command(visible_alias = "jobs")]
     Bots {
@@ -577,6 +661,123 @@ enum HarnessCmd {
         /// Skip the model lists (pi's needs a `pi --list-models` run)
         #[arg(long)]
         no_models: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SlackCmd {
+    /// The bridge (connected?) and the active links
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Link a session to a Slack thread, channel or DM for a while (default: this session)
+    Link {
+        /// A Slack link: a message (its thread), or a channel / DM (all of it); or a person
+        /// (@name or their user id): the app's DM with them
+        url: String,
+        /// How long: minutes, or like 30m, 2h, 1h30m, 2d, 1w (max 1 week), or `forever` (until unlinked)
+        #[arg(long = "for", value_name = "DURATION")]
+        duration: String,
+        /// The session to link (default: the one this command runs in, by $TMUX_PANE)
+        #[arg(long, value_name = "TARGET")]
+        session: Option<String>,
+        /// Your instructions: what it may help with, tone, when to step in (default: the work
+        /// of this session)
+        #[arg(long)]
+        task: Option<String>,
+        /// See every message and step in when it should (default: woken only when someone
+        /// mentions the app or DMs it, or writes in a thread it posted in; the rest goes along as
+        /// context)
+        #[arg(long)]
+        proactive: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// End a link now
+    Unlink {
+        /// The link id (sl-xxxxxx)
+        link: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Post in a linked thread — what a linked session runs to answer there
+    Reply {
+        /// The link id (sl-xxxxxx)
+        link: String,
+        /// The message (Slack mrkdwn)
+        text: String,
+        /// For a channel link: the thread to answer in (a message ts)
+        #[arg(long, value_name = "TS")]
+        thread: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the linked conversation, a page at a time (a thread link: its thread) — what a linked
+    /// session runs to catch up; lists each message's ts, replies and files
+    History {
+        /// The link id (sl-xxxxxx)
+        link: String,
+        /// Messages per page (1–200, default 50)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// The next page: the cursor the previous page printed
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Only messages from this ts on
+        #[arg(long, value_name = "TS")]
+        oldest: Option<String>,
+        /// Only messages up to this ts
+        #[arg(long, value_name = "TS")]
+        latest: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read one thread of the linked conversation
+    Thread {
+        /// The link id (sl-xxxxxx)
+        link: String,
+        /// The thread's first message ts
+        ts: String,
+        /// Messages per page (1–200, default 50)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// The next page: the cursor the previous page printed
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Claude Code PreToolUse hook (matcher `AskUserQuestion`): deny the prompt while this
+    /// session is linked to Slack, where it cannot be answered (reads the hook JSON on stdin)
+    Guard,
+    /// Download a file shared in the linked conversation (its id from `history` / `thread`)
+    File {
+        /// The link id (sl-xxxxxx)
+        link: String,
+        /// The file id (F…)
+        file: String,
+        /// Where to save it: a file, or a directory (default: a temp dir; the path is printed)
+        #[arg(short, long, value_name = "PATH")]
+        out: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GhIdentityCmd {
+    /// Each identity: name, GitHub login, the gh wrapper it runs
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// The launch command of a session with this identity (writes its shim; the web server's)
+    Launcher {
+        name: String,
+        /// The launcher to wrap (default: the Claude launcher, `OVERMIND_CMD` / config `claude`)
+        #[arg(long)]
+        launcher: Option<String>,
     },
 }
 
@@ -850,6 +1051,18 @@ enum TaskCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Start a session on the task's start date (follows the date if it moves; = schedule add --task)
+    Schedule {
+        /// The task's id or its Productive URL
+        task: String,
+        /// The first prompt (after the task's context line)
+        prompt: Option<String>,
+        /// The time on the start date (HH:MM, default 08:00)
+        #[arg(long)]
+        time: Option<String>,
+        #[command(flatten)]
+        spawn: ScheduleSpawnArgs,
+    },
     /// Start a session that is told what the task is
     Spawn {
         /// The task's id or its Productive URL
@@ -878,6 +1091,56 @@ enum TaskCmd {
         #[arg(long)]
         window: bool,
     },
+}
+
+#[derive(Subcommand, Clone)]
+enum ScheduleCmd {
+    /// Pending sessions, then the latest finished ones — the default
+    List {
+        #[arg(long)]
+        json: bool,
+        /// Every finished one kept, not just the latest 5
+        #[arg(long)]
+        all: bool,
+    },
+    /// Start a session later: at a time (`--at`), or on a task's start date (`--task`)
+    Add {
+        /// The first prompt (after the task's context line with --task)
+        prompt: Option<String>,
+        /// When: 'YYYY-MM-DD HH:MM', 'HH:MM' (the next one), 'tomorrow 09:00', 'mon 09:00', 'in 2h'
+        #[arg(long, required_unless_present = "task")]
+        at: Option<String>,
+        /// A Productive task (id or URL): start on its start date, following it if it moves
+        #[arg(long, conflicts_with = "at")]
+        task: Option<String>,
+        /// With --task: the time on the start date (HH:MM, default 08:00)
+        #[arg(long, requires = "task")]
+        time: Option<String>,
+        #[command(flatten)]
+        spawn: ScheduleSpawnArgs,
+    },
+    /// Cancel a pending session (id, or a unique prefix of one)
+    #[command(visible_alias = "rm")]
+    Cancel { id: String },
+}
+
+/// How a scheduled session starts — as for `overmind spawn` (always in tmux).
+#[derive(clap::Args, Clone)]
+struct ScheduleSpawnArgs {
+    /// Directory to start in (default: the current one)
+    #[arg(short = 'C', long)]
+    dir: Option<String>,
+    /// Display name for the new session (default with a task: task-<number>)
+    #[arg(long)]
+    name: Option<String>,
+    /// Model for the new session (`<harness> --model <id>`)
+    #[arg(long, value_name = "ID")]
+    model: Option<String>,
+    /// Coding agent to run: claude (default), codex or pi
+    #[arg(long, value_enum)]
+    harness: Option<HarnessArg>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand, Clone)]
@@ -922,7 +1185,7 @@ enum ReposCmd {
 
 #[derive(Subcommand, Clone)]
 enum JobsCmd {
-    /// Every bot: schedule, next run, last run, live sessions — the default
+    /// Every bot: schedule or trigger, next run / last poll, last run, live sessions — the default
     List {
         #[arg(long)]
         json: bool,
@@ -939,6 +1202,10 @@ enum JobsCmd {
         /// Start even while a session of the bot is still working
         #[arg(long)]
         force: bool,
+        /// A task for this run, added after the recipe's prompt — dir, launcher, model, GitHub
+        /// identity and keep stay the recipe's
+        #[arg(long, value_name = "TEXT")]
+        prompt: Option<String>,
     },
     /// Fire due bots and close finished sessions (what the service runs every minute)
     Tick {
@@ -946,6 +1213,15 @@ enum JobsCmd {
         #[arg(long, short = 'q')]
         quiet: bool,
     },
+    /// GitHub bot: poll now and start runs for new branches; with --dry-run, only print what
+    /// it would start
+    Check {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// GitHub bot: forget a branch — if it still exists, the next poll starts a run for it again
+    Forget { name: String, branch: String },
     /// Resume a paused bot
     Enable { name: String },
     /// Pause a bot (its schedule stops firing; live sessions are left alone)
@@ -1015,6 +1291,31 @@ fn default_command() -> Commands {
         Commands::List {
             json: false,
             all_hosts: false,
+            mine: false,
+            shared: false,
+        }
+    }
+}
+
+impl ScheduleSpawnArgs {
+    fn into_opts(
+        self,
+        at: Option<String>,
+        task: Option<String>,
+        time: Option<String>,
+        prompt: Option<String>,
+        json: bool,
+    ) -> schedule_cmd::AddOpts {
+        schedule_cmd::AddOpts {
+            at,
+            task,
+            time,
+            prompt,
+            dir: self.dir,
+            name: self.name,
+            model: self.model,
+            harness: self.harness.map(Into::into).unwrap_or_default(),
+            json: json || self.json,
         }
     }
 }
@@ -1040,11 +1341,14 @@ fn placement(c: &Commands) -> Placement {
         Commands::List {
             all_hosts: true, ..
         }
+        | Commands::List { mine: true, .. }
+        | Commands::List { shared: true, .. }
         | Commands::Doctor
         | Commands::Install { .. }
         | Commands::Exec { .. }
         | Commands::Ssh { .. }
         | Commands::Mcp { .. }
+        | Commands::Done { .. }
         | Commands::Probe => Placement::Here,
         _ => Placement::Dispatch(Scope::SelfHost),
     }
@@ -1064,6 +1368,9 @@ fn run(cli: Cli) -> Result<i32> {
     }
     if let Some(h) = &cli.as_host {
         hosts::set_as_host(h);
+    }
+    if let Some(id) = &cli.gh_identity {
+        overmind::core::gh_identity::adopt(id)?;
     }
     let command = cli.command.unwrap_or_else(default_command);
 
@@ -1139,16 +1446,83 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
     }
 
     match command {
-        Commands::List { json, all_hosts } => {
-            if all_hosts {
-                host_cmds::list_all_hosts(json)?;
+        Commands::List {
+            json,
+            all_hosts,
+            mine,
+            shared,
+        } => {
+            if all_hosts || mine || shared {
+                let only = match (mine, shared) {
+                    (true, _) => Some(false),
+                    (_, true) => Some(true),
+                    _ => None,
+                };
+                host_cmds::list_all_hosts(json, only)?;
             } else {
                 commands::list(json)?;
             }
         }
         Commands::Peek { target, lines } => commands::peek(&target, lines)?,
         Commands::Usage { json, refresh } => usage_cmd::run(json, refresh)?,
+        Commands::Slack { cmd } => match cmd.unwrap_or(SlackCmd::List { json: false }) {
+            SlackCmd::List { json } => slack_cmd::list(json)?,
+            SlackCmd::Link {
+                url,
+                duration,
+                session,
+                task,
+                proactive,
+                json,
+            } => slack_cmd::link(
+                &url,
+                &duration,
+                session.as_deref(),
+                task.as_deref(),
+                proactive,
+                json,
+            )?,
+            SlackCmd::Unlink { link, json } => slack_cmd::unlink(&link, json)?,
+            SlackCmd::Reply {
+                link,
+                text,
+                thread,
+                json,
+            } => slack_cmd::reply(&link, &text, thread.as_deref(), json)?,
+            SlackCmd::History {
+                link,
+                limit,
+                cursor,
+                oldest,
+                latest,
+                json,
+            } => slack_cmd::history(
+                &link,
+                limit,
+                cursor.as_deref(),
+                oldest.as_deref(),
+                latest.as_deref(),
+                json,
+            )?,
+            SlackCmd::Thread {
+                link,
+                ts,
+                limit,
+                cursor,
+                json,
+            } => slack_cmd::thread(&link, &ts, limit, cursor.as_deref(), json)?,
+            SlackCmd::File {
+                link,
+                file,
+                out,
+                json,
+            } => slack_cmd::file(&link, &file, out.as_deref(), json)?,
+            SlackCmd::Guard => slack_cmd::guard()?,
+        },
         Commands::Send { target, text } => commands::send(&target, &text)?,
+        Commands::Done { note, cancel } => commands::done(note, cancel)?,
+        Commands::AskDone { target } => commands::ask_done(&target)?,
+        Commands::Sleep { target, json } => commands::sleep(&target, json)?,
         Commands::Rename {
             target,
             name,
@@ -1260,6 +1634,11 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
             harness,
             tmux_session,
             window,
+            ask_done,
+            slack,
+            slack_for,
+            slack_task,
+            slack_proactive,
         } => commands::spawn(
             prompt,
             from,
@@ -1271,10 +1650,23 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 harness: harness.map(Into::into).unwrap_or_default(),
                 tmux_session,
                 window,
+                ask_done,
+                slack: slack.map(|url| slack_cmd::SpawnLink {
+                    url,
+                    duration: slack_for,
+                    task: slack_task,
+                    proactive: slack_proactive,
+                }),
             },
         )?,
         Commands::Harness { cmd } => match cmd {
             HarnessCmd::List { json, no_models } => commands::harness_list(json, !no_models)?,
+        },
+        Commands::GhIdentity { cmd } => match cmd {
+            GhIdentityCmd::List { json } => commands::gh_identity_list(json)?,
+            GhIdentityCmd::Launcher { name, launcher } => {
+                commands::gh_identity_launcher(&name, launcher.as_deref())?
+            }
         },
         Commands::Stack { cmd } => match cmd {
             StackCmd::List { json } => stack_cmds::list(json)?,
@@ -1320,6 +1712,8 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                     harness: harness.map(Into::into).unwrap_or_default(),
                     tmux_session,
                     window,
+                    ask_done: false,
+                    slack: None,
                 },
                 wait: !no_wait,
                 json,
@@ -1372,6 +1766,8 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 tmux_session,
                 // A handoff means "over there, out of my way" — a window unless told otherwise.
                 window: !tab,
+                ask_done: false,
+                slack: None,
             },
             !no_wait,
         )?,
@@ -1516,6 +1912,8 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                     harness: harness.map(Into::into).unwrap_or_default(),
                     tmux_session,
                     window,
+                    ask_done: false,
+                    slack: None,
                 },
             )?,
         },
@@ -1540,6 +1938,12 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
             TaskCmd::Status { task, status, json } => {
                 tasks_cmd::status(&task, status.as_deref(), json)?
             }
+            TaskCmd::Schedule {
+                task,
+                prompt,
+                time,
+                spawn,
+            } => schedule_cmd::add(spawn.into_opts(None, Some(task), time, prompt, false))?,
             TaskCmd::Spawn {
                 task,
                 prompt,
@@ -1561,9 +1965,24 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                     harness: harness.map(Into::into).unwrap_or_default(),
                     tmux_session,
                     window,
+                    ask_done: false,
+                    slack: None,
                 },
             )?,
         },
+        Commands::Schedule { cmd, json } => {
+            match cmd.unwrap_or(ScheduleCmd::List { json, all: false }) {
+                ScheduleCmd::List { json: j, all } => schedule_cmd::list(json || j, all)?,
+                ScheduleCmd::Add {
+                    prompt,
+                    at,
+                    task,
+                    time,
+                    spawn,
+                } => schedule_cmd::add(spawn.into_opts(at, task, time, prompt, json))?,
+                ScheduleCmd::Cancel { id } => schedule_cmd::cancel(&id)?,
+            }
+        }
         Commands::Repos { cmd, json, all } => match cmd.unwrap_or(ReposCmd::Status { json, all }) {
             ReposCmd::Status { json: j, all: a } => repos_cmd::status(json || j, all || a)?,
             ReposCmd::Sync {
@@ -1592,8 +2011,16 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
         Commands::Bots { cmd, json } => match cmd.unwrap_or(JobsCmd::List { json }) {
             JobsCmd::List { json: j } => jobs_cmd::list(json || j)?,
             JobsCmd::Show { name, json: j } => jobs_cmd::show(&name, json || j)?,
-            JobsCmd::Run { name, force } => jobs_cmd::run_now(&name, force)?,
+            JobsCmd::Run {
+                name,
+                force,
+                prompt,
+            } => jobs_cmd::run_now(&name, force, prompt)?,
             JobsCmd::Tick { quiet } => jobs_cmd::tick(quiet)?,
+            JobsCmd::Check { name, json: j } => {
+                jobs_cmd::check(&name, hosts::dry_run(), json || j)?
+            }
+            JobsCmd::Forget { name, branch } => jobs_cmd::forget(&name, &branch)?,
             JobsCmd::Enable { name } => jobs_cmd::set_enabled(&name, true)?,
             JobsCmd::Disable { name } => jobs_cmd::set_enabled(&name, false)?,
             JobsCmd::InstallService {

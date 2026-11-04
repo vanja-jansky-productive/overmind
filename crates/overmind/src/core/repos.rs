@@ -173,7 +173,8 @@ fn is_repo(dir: &Path) -> bool {
     dir.join(".git").exists()
 }
 
-/// Every repo directly under the configured roots, in root order then by name. A repo
+/// Every repo directly under the configured roots (a root that is a repo: itself), in root
+/// order then by name. A repo
 /// reachable from two roots (or via a symlink) is listed once. Excluded repos are left out.
 pub fn discover(s: &Settings) -> Vec<Repo> {
     discover_all(s)
@@ -188,16 +189,23 @@ pub fn discover_all(s: &Settings) -> Vec<(Repo, bool)> {
     let mut out = Vec::new();
     for root in &s.roots {
         let root = PathBuf::from(tools::expand_tilde(root));
-        let Ok(rd) = std::fs::read_dir(&root) else {
-            continue;
+        // A root that is a checkout itself is that one repo (e.g. `~/work`); its subdirectories
+        // are not looked at — list them as their own root (`~/work/repos`).
+        let dirs: Vec<PathBuf> = if is_repo(&root) {
+            vec![root]
+        } else {
+            let Ok(rd) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            let mut dirs: Vec<PathBuf> = rd
+                .filter_map(|e| e.ok())
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && is_repo(p))
+                .collect();
+            dirs.sort();
+            dirs
         };
-        let mut dirs: Vec<PathBuf> = rd
-            .filter_map(|e| e.ok())
-            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-            .map(|e| e.path())
-            .filter(|p| p.is_dir() && is_repo(p))
-            .collect();
-        dirs.sort();
         for path in dirs {
             let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
             if !seen.insert(canon) {
@@ -915,5 +923,18 @@ mod tests {
             .map(|r| (r.name, r.every))
             .collect();
         assert_eq!(names, vec![("one".into(), 86_400), ("three".into(), 1800)]);
+    }
+
+    #[test]
+    fn a_root_that_is_a_repo_is_that_repo() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        for p in ["work/.git", "work/repos/api/.git", "work/sub/.git"] {
+            std::fs::create_dir_all(d.join(p)).unwrap();
+        }
+        let root = |p: &str| d.join(p).display().to_string();
+        let s = Settings::from_value(&json!({ "roots": [root("work"), root("work/repos")] }));
+        let names: Vec<String> = discover(&s).into_iter().map(|r| r.name).collect();
+        assert_eq!(names, vec!["work".to_string(), "api".to_string()]);
     }
 }

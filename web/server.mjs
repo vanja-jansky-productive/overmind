@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { configPath, overmindStateDir, loadConfig, ensurePath, ensureUtf8Locale, resolveBinary } from './lib/config.mjs';
+import { DEFAULT_VOICE_FAILED_DIR, configPath, createSlackSettingsReloader, expandHome, overmindStateDir, loadConfig, ensurePath, ensureUtf8Locale, resolveBinary } from './lib/config.mjs';
 import { run } from './lib/run.mjs';
 import { createOvermindCli } from './lib/overmind-cli.mjs';
 import { createFocus } from './lib/focus.mjs';
@@ -25,6 +25,8 @@ import { createOperator } from './lib/operator.mjs';
 import { createCompleter } from './lib/complete.mjs';
 import { createDiffer } from './lib/diff.mjs';
 import { createReviews } from './lib/reviews.mjs';
+import { createAsks } from './lib/asks.mjs';
+import { createPrNotes } from './lib/pr-notes.mjs';
 import { createFiles } from './lib/files.mjs';
 import { createNotes } from './lib/notes.mjs';
 import { createSpawnDirsEditor } from './lib/spawn-dirs.mjs';
@@ -35,7 +37,9 @@ import { createBriefExtractor } from './lib/brief-extract.mjs';
 import { createBriefStore, createBriefs, createClaudeAsk, gitInfo } from './lib/briefs.mjs';
 import { createStacks } from './lib/stacks.mjs';
 import { createAgentAsk, createInbox } from './lib/inbox.mjs';
-import { fetchPeerHost } from './lib/peers.mjs';
+import { createPromptQueue } from './lib/queue.mjs';
+import { TOKEN_NAMES, createSlackApi, createSlackBridge, createSlackDownload, createSocketClient } from './lib/slack.mjs';
+import { fetchPeerHost, proxyToPeer, setPeerConnects, setPeerProxies } from './lib/peers.mjs';
 import { createDormant } from './lib/dormant.mjs';
 import { createMemos } from './lib/memos.mjs';
 import { createApi } from './lib/api.mjs';
@@ -59,6 +63,9 @@ try {
   process.stderr.write(`[overmind-web] ${err.message}\n`);
   process.exit(2);
 }
+
+setPeerProxies(config.peerProxies);
+setPeerConnects(config.peerConnects);
 
 const cli = createOvermindCli({ run, bin: config.overmindBin });
 const overmind = createOvermind({ cli, self: config.self, ttlMs: 2000 });
@@ -97,6 +104,7 @@ const grouper = config.grouping.enabled
       log,
     })
   : null;
+const ghBin = resolveBinary('gh');
 const claudeBin = resolveBinary('claude', { extraDirs: [path.join(os.homedir(), '.local', 'bin'), path.join(os.homedir(), '.claude', 'local')] });
 // Session briefs: GET/PUT always work; background generation only with web.briefs.enabled.
 const briefs = createBriefs({
@@ -142,6 +150,80 @@ const inbox = config.inbox.enabled
       log,
     })
   : null;
+// Slack links: the bridge runs on the `slack.host` server only (the others proxy /api/slack there).
+let slack = null;
+if (config.slack.enabled) {
+  const getBotToken = createKeySource({ name: TOKEN_NAMES.bot, run });
+  const call = createSlackApi({ getToken: getBotToken });
+  const socket = createSocketClient({
+    getAppToken: createKeySource({ name: TOKEN_NAMES.app, run }),
+    onEvent: (event) => slack.handleEvent(event),
+    log,
+  });
+  slack = createSlackBridge({
+    settings: config.slack,
+    call,
+    socket,
+    self: config.self,
+    // A link's session may run on any host: a peer is asked through its web server.
+    listSessions: async (host) => {
+      if (!host || host === config.self) {
+        const local = await overmind.localHost({ force: true });
+        return local.ok ? local.sessions : null;
+      }
+      const peerUrl = config.peers[host];
+      if (!peerUrl) return null;
+      const h = await fetchPeerHost(host, peerUrl, { timeoutMs: 8000 });
+      return h.ok ? h.sessions : null;
+    },
+    send: async (session, text, host) => {
+      if (!host || host === config.self) return backend.send(session, text);
+      const peerUrl = config.peers[host];
+      if (!peerUrl) throw new Error(`${host} is not a peer with a web url`);
+      const r = await proxyToPeer(peerUrl, {
+        method: 'POST',
+        pathname: `/api/hosts/${encodeURIComponent(host)}/sessions/${encodeURIComponent(session.session_id)}/send`,
+        body: JSON.stringify({ text }),
+        timeoutMs: 15000,
+      });
+      if (r.status !== 200) throw new Error(r.body?.error ?? `HTTP ${r.status} from ${host}`);
+    },
+    // slack.spawn: a mention opens a session on `host` — this server, else that peer's (a spawn
+    // linked to Slack answers once the session is linked, ≤ ~1 min).
+    spawn: async (host, body) => {
+      const local = !host || host === config.self;
+      const loopback = ['0.0.0.0', '::', '', undefined, null].includes(config.bind) ? '127.0.0.1' : config.bind;
+      const base = local ? `http://${loopback.includes(':') ? `[${loopback}]` : loopback}:${config.port}` : config.peers[host];
+      if (!base) throw new Error(`${host} is not a peer with a web url`);
+      const r = await proxyToPeer(base, {
+        method: 'POST',
+        pathname: `/api/hosts/${encodeURIComponent(local ? config.self : host)}/spawn`,
+        body: JSON.stringify(body),
+        timeoutMs: 120000,
+      });
+      if (r.status !== 200) throw new Error(r.body?.error ?? `HTTP ${r.status} from ${host}`);
+      return r.body;
+    },
+    file: path.join(overmindStateDir(process.env), 'slack-links.json'),
+    download: createSlackDownload({ getToken: getBotToken }),
+    // The owner's DM about a blocked session links to it in the web UI of the session's host.
+    sessionUrl: (host, id) => {
+      const base = host === config.self ? config.selfWeb : config.peers[host];
+      return base ? `${base}/#/s/${encodeURIComponent(host)}/${encodeURIComponent(id)}` : null;
+    },
+    log,
+  });
+}
+// Prompt queue: messages typed while a session works go in one per run, once it is idle again.
+const queue = createPromptQueue({
+  file: path.join(overmindStateDir(process.env), 'prompt-queue.json'),
+  listSessions: async () => {
+    const host = await overmind.localHost({ force: true });
+    return host.ok ? host.sessions : null;
+  },
+  send: (session, text) => backend.send(session, text),
+  log,
+});
 // Session recovery: dormant sessions after a reboot (`overmind --local restore … --json`).
 const dormant = createDormant({ cli, log });
 // Voice: an OpenAI key for speech-to-text (voice prompts) and one for text-to-speech (the
@@ -149,10 +231,18 @@ const dormant = createDormant({ cli, log });
 const transcribeKey = createKeySource({ run });
 const ttsKey = createKeySource({ name: SPEECH_KEY_NAME, run });
 const speechKey = async () => (await ttsKey()) ?? (await transcribeKey());
-const transcriber = createTranscriber({ getKey: transcribeKey, log });
+const transcriber = createTranscriber({ getKey: transcribeKey, keepDir: expandHome(DEFAULT_VOICE_FAILED_DIR), log });
 // Voice memos: segments transcribed with the same key, titled by `claude -p`.
 const memos = createMemos({ ...config.memos, transcriber, ask: createClaudeAsk({ bin: claudeBin, run }), log });
-const spawner = createSpawner({ run, tmux: config.tmux, launcher: config.claude, launchers: config.launchers });
+const spawner = createSpawner({
+  run,
+  tmux: config.tmux,
+  launcher: config.claude,
+  launchers: config.launchers,
+  ghIdentities: config.ghIdentities,
+  ghIdentityLauncher: (name, launcher) => cli.ghIdentityLauncher(name, launcher),
+  harnessDefaults: () => config.harnessDefaults,
+});
 const operator = createOperator({ config, overmind, spawner, backend, log });
 // One transcript reader: the chat and the review threads (their replies) share its cache.
 const transcripts = createTranscriptReader();
@@ -180,6 +270,10 @@ const handleApi = createApi({
   touched,
   completer: createCompleter({ home: os.homedir(), run }),
   differ: createDiffer({ run }),
+  // Diff reviewer side questions: a read-only `claude -p` fork of the session, kept in memory only.
+  asks: createAsks({ bin: claudeBin }),
+  // PR review notes (the reviewer on a PR without a session); posting one runs this host's gh.
+  prNotes: createPrNotes({ dir: path.join(overmindStateDir(process.env), 'pr-notes'), gh: (args, opts) => run(ghBin, args, opts) }),
   // Diff reviewer threads: typed into the session like a send, answers read from its transcript.
   reviews: createReviews({
     dir: path.join(overmindStateDir(process.env), 'reviews'),
@@ -198,6 +292,8 @@ const handleApi = createApi({
   dormant,
   grouper,
   inbox,
+  slack,
+  queue,
   name: NAME,
   version: VERSION,
   logError,
@@ -251,6 +347,18 @@ server.listen(config.port, config.bind, () => {
   } else if (config.inbox.host) {
     log(`[overmind-web] inbox: served by ${config.inbox.host}`);
   }
+  queue.start();
+  if (slack) {
+    slack.start();
+    // slack.owner / slack.spawn: live from the config file (`overmind config set`), no restart.
+    const reloadSlack = createSlackSettingsReloader({ config, log });
+    setInterval(() => {
+      if (reloadSlack()) log(`[slack] settings reloaded: owner=${config.slack.owner ?? '(none)'}`);
+    }, 5000).unref();
+    log(`[overmind-web] slack links on (Socket Mode; ${TOKEN_NAMES.bot} + ${TOKEN_NAMES.app} from env or Keychain)`);
+  } else if (config.slack.host) {
+    log(`[overmind-web] slack links: served by ${config.slack.host}`);
+  }
   // The sync judges members on other hosts with the merged overmind (the warm snapshot when someone
   // is watching, else one fresh build); a sibling started on a peer is found in that peer's list.
   stacks.attach({
@@ -284,6 +392,8 @@ function shutdown(signal) {
   grouper?.stop();
   briefs.stop();
   inbox?.stop();
+  queue.stop();
+  slack?.stop();
   stacks.stop();
   operator.stop();
   uploader.stop();

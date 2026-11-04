@@ -10,6 +10,7 @@ explains the model and the semantics behind them.
 | `-H, --host <name>` | run against that host from the config (see [dispatch](#host-dispatch)) |
 | `--local` | run on this machine, never over ssh |
 | `-n, --dry-run` | print what would run, run nothing (also `OVERMIND_DRY_RUN=1`) |
+| `--gh-identity <name>` | sessions this command spawns act on GitHub as that [GitHub identity](#github-identities), not as you (also `OVERMIND_GH_IDENTITY`) |
 | `--json` | machine-readable output, where the command supports it |
 | `-h, --help`, `-V, --version` | |
 
@@ -28,7 +29,7 @@ as-is, so `overmind -H some-ssh-alias tmux list` works before `overmind init`.
 On the remote, `overmind` is looked up as `hosts.<name>.overmindBin`, then `~/.local/bin/overmind` (where
 `overmind install` puts it), then `PATH`. `--dir` / `-C` values under your `$HOME` are rewritten to
 `~/…` so they mean the same place on the other machine; relative paths are refused.
-`OVERMIND_CMD`, `OVERMIND_DEBUG` and `OVERMIND_DRY_RUN` are forwarded (exported, single-quoted, in the
+`OVERMIND_CMD`, `OVERMIND_JOB_RUN`, `OVERMIND_GH_IDENTITY`, `OVERMIND_DEBUG` and `OVERMIND_DRY_RUN` are forwarded (exported, single-quoted, in the
 remote `sh -c`); `OVERMIND_CONFIG` is not — the remote uses its own config.
 
 ## Claude sessions
@@ -40,23 +41,26 @@ the first rung with hits wins. Two hits on the same rung is an error that lists 
 | command | does |
 | --- | --- |
 | `overmind` | `watch` on a terminal; a one-shot `list` when stdout is piped |
-| `overmind list [--json] [-a, --all-hosts]` (alias `ls`) | live sessions: title, status, age, context usage (`ctx 62%`), terminal, cwd. `--json` is an array whose rows all carry `host`; `-a` queries every configured host in parallel. The text view ends with `N dormant (overmind restore)` when a reboot left [dormant sessions](#session-recovery). Every local `list` also records the [snapshot](#session-recovery) |
+| `overmind list [--json] [-a, --all-hosts] [--mine \| --shared]` (alias `ls`) | live sessions: title, status, age, context usage (`ctx 62%`), terminal, cwd. `--json` is an array whose rows all carry `host`; `-a` queries every configured host in parallel (its JSON rows also carry `shared`: their host's `hosts.<name>.shared`); `--mine` / `--shared` do the same over only the own hosts / only the shared sheds. The text view ends with `N dormant (overmind restore)` when a reboot left [dormant sessions](#session-recovery). Every local `list` also records the [snapshot](#session-recovery) |
 | `overmind peek <target> [--lines N]` | what the session's terminal shows now (default 40 lines) |
 | `overmind send <target> <text>` | type text into the session and press Enter |
+| `overmind done [--note <text>] [--cancel]` | run by an agent **inside its own session** (by `$TMUX_PANE`; a Codex session by `$CODEX_THREAD_ID`, since Codex runs commands through a shared daemon whose `$TMUX_PANE` is another pane's; never sent over ssh): its work is finished and nothing waits on the user. Overmind shows the session as done (nothing closes it) — see [Ask done](#ask-done). `--cancel` takes the mark back |
+| `overmind sleep <target> [--json]` (alias `deactivate`) | close a session but keep it [dormant](#session-recovery) (Deactivate in the app, which lists dormant sessions as **Inactive**): SIGTERM (then SIGKILL) its agent, kill its tmux window (or its tmux session when that was the only window; an iTerm tab is left — the app closes it), and put it in the dormant list, marked `slept`, instead of recently closed. `overmind restore <target>` (or `enter`, or Resume in the app) brings it back with `--resume`; `--all` and `restore.onBoot` leave it be. `--json`: `{ host, sessionId, title, process, terminal, dormant: DormantView, dryRun }` |
+| `overmind ask-done <target>` | ask a tmux session to report itself done once finished: types the [instruction](#ask-done) into it. A session waiting on a prompt is refused |
 | `overmind rename <target> <title> [--no-tmux-sync] [--force] [--json]` | rename the session's one title: Claude's `/rename` (the source of truth), then its tmux session follows as a slug of it (`Fix Login` → `fix-login`, `-2` on a collision) when the tmux session is that Claude session's own (one window, one pane). A session **waiting on a prompt** is held (exit 1; `--json`: exit 3) — typed keys would be its answer; busy sessions are fine (Claude runs `/rename` mid-turn without disturbing the turn). Codex gets `/rename`, pi `/name`; a busy Codex / pi session is held too (`held: "busy"`) — they would queue the text as a message. `--force` overrides the hold. `--json` prints `{ ok, result: renamed\|sent\|held, session_id, pid, host, from, title, held, tmux: { renamed, from, to, note }, message }` |
 | `overmind name [<target> \| --all [--settled]] [--apply] [--refresh] [--no-tmux-sync]` | suggest a name from what the session is doing; only `--apply` sends it (through the same path as `rename`, tmux included). `--all` = every session with a derived (cwd+hash) name. A derived-name session alone in a tmux session somebody named (`overmind new fix-login`) adopts that name (`(tmux)`, no model call) instead of getting a generated one. `--settled` (with `--all`) skips sessions with one prompt and no brief yet — the model reads the brief's Summary and the first three prompts, and a lone first prompt is often just a link. `--refresh` ignores the cache |
 | `overmind group [-a, --all-hosts] [--json] [--apply] [--refresh] [--consolidate] [--input <file\|->] [--cached]` | sort sessions into work-stream groups (the web Board view) — see [Grouping](#grouping). Reads sessions and asks `claude -p`; never sends anything to a session |
 | `overmind group --rename <group id> --label <l>` / `--move <host/id> (--to <group id> \| --label <l>)` / `--create --label <l>` / `--delete <group id>` | edit the stored groups by hand (the Board's rename / drag'n'drop) — see [Grouping](#grouping) |
-| `overmind spawn [prompt] --dir <path> [--harness claude\|codex\|pi] [--name <n>] [--model <id>] [--backend iterm\|tmux] [--tmux-session <s>] [--window]` | start a new agent session in a new tab/pane. `--harness` picks the coding agent (default `claude`; see [Harnesses](#harnesses)). `--model <id>` runs `<harness> --model '<id>'` (letters, digits and `._[]-/:` only — pi's ids are `provider/model`; blank = the harness's default). `--name` is passed as `-n` to Claude and pi; Codex has no such flag (the tmux session carries the name). Default backend: tmux inside tmux, over ssh or off macOS; else iTerm. With tmux, each spawn gets its own tmux session (one session per job) named from `--name` or the dir's basename, sanitised like `overmind new`; a taken `--name` is an error, a taken basename is uniquified (`app-2`). `--tmux-session <s>` opens a window in `s` instead (created if missing) |
+| `overmind spawn [prompt] --dir <path> [--harness claude\|codex\|pi] [--name <n>] [--model <id>] [--backend iterm\|tmux] [--tmux-session <s>] [--window]` | start a new agent session in a new tab/pane. `--harness` picks the coding agent (default `claude`; see [Harnesses](#harnesses)). A Codex spawn in tmux answers "Trust this folder?" with "Trust and continue" (the directory was picked explicitly), as the web spawner does. `--model <id>` runs `<harness> --model '<id>'` (letters, digits and `._[]-/:` only — pi's ids are `provider/model`; blank = the harness's default). `--name` is passed as `-n` to Claude and pi; Codex has no such flag (the tmux session carries the name). Default backend: tmux inside tmux, over ssh or off macOS; else iTerm. With tmux, each spawn gets its own tmux session (one session per job) named from `--name` or the dir's basename, sanitised like `overmind new`; a taken `--name` is an error, a taken basename is uniquified (`app-2`). `--tmux-session <s>` opens a window in `s` instead (created if missing). `--ask-done`: the [instruction](#ask-done) goes below the prompt and the session runs in tmux. `--slack <slack-url \| @person> [--slack-for 2h] [--slack-task <instructions>] [--slack-proactive]`: start [linked to Slack](#slack-links) (tmux, any host whose web server reaches `slack.host`; checked before anything opens). The session starts with no prompt and is linked once it has registered (≤ ~45 s); the prompt goes in last in the link's intro, as the owner's request to start on — so it never works on it, or reaches Slack another way, before it knows it is linked. Max 4000 chars. If the link fails, the session stays, idle, and the prompt was not sent |
 | `overmind harness list [--json] [--no-models]` | the [harnesses](#harnesses) on this host: id, label, launch command, `installed`, and the models each offers for a picker. `-H <host>` asks another machine |
-| `overmind spawn --from <target> [prompt] [--name <n>] [--model <id>] [--backend …]` | continue a session's work in a new one: same host (with `-H`, the host the session is on) and its cwd (`--dir` overrides), first prompt = its [brief](#briefs)'s continue prompt, then a blank line and `prompt`. The prompt goes through a file under `~/.claude/overmind-handoffs/`, like a handoff. Errors when the session has no brief yet. `-n` prints the launch command and the prompt and writes nothing |
+| `overmind spawn --from <target> [prompt] [--name <n>] [--model <id>] [--backend …]` | continue a session's work in a new one: same host (with `-H`, the host the session is on) and its cwd (`--dir` overrides), first prompt = its [brief](#briefs)'s continue prompt (summary, origin, PRs, worktree, then a `---` line), then a blank line and `prompt` — the task (default: pick up where it left off). The prompt goes through a file under `~/.claude/overmind-handoffs/`, like a handoff. Errors when the session has no brief yet. `-n` prints the launch command and the prompt and writes nothing |
 | `overmind handoff [brief] [--file <f\|->] --dir <path> [--harness <h>] [--name <n>] [--model <id>] [--tmux-session <s>] [--tab] [--no-wait]` | start a new session in another window seeded with a brief (saved under `~/.claude/overmind-handoffs/`); waits until it registers. Same tmux placement as `spawn` |
 | `overmind brief <target> [--json \| --prompt]` | print the session's [brief](#briefs) — its body (Summary / Resources / Todos, no frontmatter); `--json` the parsed shape; `--prompt` only the continue prompt |
 | `overmind brief <target> --edit` / `--set [--expect-updated <iso>]` / `--regenerate` / `--open` | edit it in `$VISUAL`/`$EDITOR`; save markdown from stdin; ask the web server to regenerate it; open the session's checkout in VS Code — see [Briefs](#briefs) |
 | `overmind stack list\|show\|new\|ensure\|spawn\|add\|remove\|rename\|edit\|set\|sync\|rm …` | [session stacks](#stacks): sessions that share one context file (the StackBrief) |
 | `overmind stack spawn <target> [prompt] [--harness <h>] [--name <n>] [--model <id>] [--dir <path>] [--on <host>] [--no-wait]` | spawn a **sibling** of `<target>`: a new session in its cwd (`--on`: on another host), in its stack (created around it first when it has none), told where the StackBrief is — see [Stacks](#stacks) |
 | `overmind watch [--interval 5] [--stuck 300] [--quiet] [--rows 1\|2\|auto] [--no-mouse]` | live dashboard + notifications on finished/stuck sessions |
-| `overmind usage [--json] [--refresh]` | the Claude subscription's usage limits on this host's login — current session (5h), weekly all models, weekly per model (e.g. Fable), extra usage — as bars with reset times; the numbers Claude Code's `/usage` shows. Cached 60s (`--refresh` skips it); a failed read serves the last one marked stale and backs off 2 minutes. `--json`: see [architecture](architecture.md#subscription-usage). `-H <host>` reads another machine's login |
+| `overmind usage [--json] [--refresh]` | the Claude subscription's usage limits on this host's login — current session (5h), weekly all models, weekly per model (e.g. Fable), extra usage — as bars with reset times; the numbers Claude Code's `/usage` shows. Then the ChatGPT plan Codex (and pi) bill against — current session, weekly, credits — when Codex is logged in with ChatGPT, as Codex's `/status` shows it. Cached 60s (`--refresh` skips it); a failed read serves the last one marked stale and backs off 2 minutes. `--json`: see [architecture](architecture.md#subscription-usage). `-H <host>` reads another machine's login |
 | `overmind skill install [--force]\|show` | install / print the Claude Code skill (`~/.claude/skills/overmind/SKILL.md`; `--force` overwrites a different one) |
 
 `send`, `rename --force`, `name --apply` and `spawn` change a live agent's state — scripts and agents
@@ -79,11 +83,106 @@ Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are c
 
 ```json
 [{ "id": "codex", "label": "Codex", "command": "codex", "installed": true,
-   "models": [{ "id": "", "label": "Default (gpt-6.1-sol)" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1-Sol" }] }]
+   "models": [{ "id": "", "label": "Default (gpt-6.1-sol)" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1-Sol" }],
+   "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultModel": null, "defaultEffort": "high" }]
 ```
 
 Models: Claude's built-in list; Codex's from its `models_cache.json` (listed ones, its order);
-pi's from `pi --list-models` (ids `provider/model`). `id: ""` is the harness's own default.
+pi's from `pi --list-models` (ids `provider/model`), narrowed to the `enabledModels` patterns of
+pi's `settings.json` when set. `id: ""` is the harness's own default.
+Efforts: Claude `low…max`; Codex the levels its model cache lists; pi `off…max`.
+
+**Default model and effort.** Config `harnesses.<id>.model` / `harnesses.<id>.effort` (Settings →
+Models in the web writes them to every host) are what a spawn starts with when it picks no model:
+`spawn`, the web, bots, scheduled sessions and stack spawns alike. A picked model wins over the
+default one; the effort goes in as Claude `--effort <l>`, Codex `-c model_reasoning_effort=<l>`, pi
+`--thinking <l>`. A launcher that already sets one (a bot's own `command`, a wrapper with flags)
+keeps its own. Unset, the harness's own config decides. A resumed session keeps its own.
+
+### GitHub identities
+
+A session can act on GitHub as a GitHub App (a bot) instead of as you — for comments, reviews
+and approvals that come from automation. Two ways:
+
+- **On request, any session**: when you ask a session to act as one ("comment as the bot"), it
+  runs that identity's `command` (`overmind gh-identity list`) for those actions and plain `gh`,
+  as you, otherwise. It can switch at any point of the session; nothing is enforced.
+- **Enforced, from the spawn** (`--gh-identity <name>`, a bot's `ghIdentity`): the whole
+  session acts as the App and cannot act as you — decided by whoever spawns it, never by the
+  agent inside it. Used by bots; the web New session form no longer offers it.
+
+Identities are per machine, in the config:
+
+```json
+"ghIdentities": {
+  "bot": { "command": "gh-bot", "login": "my-app[bot]", "prompt": "(optional) replaces the default note" }
+}
+```
+
+`command` is a `gh` wrapper that authenticates as the App (mints an installation token and runs
+`gh` with it as `GH_TOKEN`); `login` is the App's login (default the name). A session spawned
+with the identity runs as
+
+```sh
+export OVERMIND_GH_IDENTITY=bot GH_CONFIG_DIR=<empty dir> PATH=<shim dir>:"$PATH" &&
+  claude --append-system-prompt "$(cat <note>)" …
+```
+
+- the note (system prompt) tells the agent it acts as `login` and to use `command`;
+- `gh` in that shell is a shim for `command`, so scripts and skills that call `gh` act as the App
+  too; the empty `GH_CONFIG_DIR` leaves a `gh` reached by absolute path without your credentials;
+- what the session spawns inherits the identity (`OVERMIND_GH_IDENTITY`, forwarded to `-H` hosts);
+  asking for another one is an error. A [restore](#session-recovery) resumes it under the same
+  identity, and refuses when the identity is no longer configured.
+
+`overmind gh-identity list [--json]` shows the configured ones (`[{ name, login, command }]`);
+`overmind gh-identity launcher <name> [--launcher <cmd>]` prints the launch command a session with
+that identity starts with (writing its shim) — the web server's spawn uses it. The pane carries the option `@overmind_gh_identity`; `overmind list --json` reports it as
+`gh_identity` (`null` = yours). Claude sessions only, for now. (Likewise `@overmind_embed` → `embed`:
+the app whose embedded Overmind panel started the session — see [Embed view](architecture.md#embed-view).) `git push` is untouched — it uses
+the machine's own credentials. Shim, empty config dir and note live in
+`${XDG_STATE_HOME:-~/.local/state}/overmind/gh-identities/<name>/`.
+
+### Slack links
+
+For a while, a session talks with the people in one Slack thread (or a whole channel or DM): what
+they write there is typed into it, and it answers there. You decide which session, which thread,
+for how long and what it may help with — the web UI's **Link to Slack** (session Details), or:
+
+| Command | What |
+|---|---|
+| `overmind slack [list] [--json]` | the bridge (connected?) and the active links |
+| `overmind slack link <slack-url \| @person> --for <30m\|2h\|1w\|90\|forever> [--session <target>] [--task <instructions>] [--proactive] [--json]` | link a session (default: the one this runs in, by `$TMUX_PANE`). A message link is its thread; a channel / DM link is all of it; a person (`@name`, a name or their user id `U…` — instead of a link) is the app's DM with them, opened if new (several matches: an error with the candidates). Needs the `im:write` scope and the app's Messages tab on. `--task`: your instructions (what it may help with, tone, when to step in). `--proactive`: it sees every message and steps in when it judges it should; default: it is woken only when someone mentions the app, DMs it or writes in a thread it has posted in (then it judges itself whether the message is for it), and gets what was said in between as context. Linking the same session to the same thread again renews it (new time limit, instructions, mode). Up to a week, or `forever`: no end, until unlinked. An ended link can be relinked in one click from the web UI (Details → Slack → **Link again**) |
+| `overmind slack unlink <sl-xxxxxx>` | end a link now |
+| `overmind slack reply <sl-xxxxxx> <text> [--thread <ts>]` | post in the linked thread — what the linked session runs to answer. Prints the new message's `ts` and permalink (`--json`: `{ link, channel, ts, threadTs, permalink }`), e.g. to reply in a thread it just started. Refused (exit 3) once the link has ended, and for any session but the linked one. Threads first: in a channel or group DM link, a post outside a thread must be a one-line headline (≤ 300 chars) whose details go in its thread — anything longer is refused (400); a one-on-one DM is exempt |
+| `overmind slack history <sl-xxxxxx> [--limit 50] [--cursor <c>] [--oldest <ts>] [--latest <ts>] [--json]` | read the linked conversation, a page at a time (up to 200): a channel / DM from the newest message (the next page, `older: … --cursor`, goes back; each page printed top-down), a thread link its thread (as `thread`). Each message: who (name, id, the owner / `[you]` / `[app]`), when, its `ts`, its replies (read them with `thread`) and its files (id, name, type, size). Read-only, the linked session only, while linked (exit 3 after) |
+| `overmind slack thread <sl-xxxxxx> <ts> [--limit] [--cursor] [--json]` | one thread of the linked conversation (a thread link: only its own thread): its first message, then the latest replies, oldest first; `older: … --cursor` pages back to earlier replies |
+| `overmind slack file <sl-xxxxxx> <file-id> [-o <path>] [--json]` | download a file shared in the linked conversation (in a thread link: in its thread), up to 20 MB, to `<path>` (a file or a directory; default a temp dir) and print where. The app needs the `files:read` scope |
+| `overmind slack guard` | a Claude Code `PreToolUse` hook (matcher `AskUserQuestion`; reads the hook JSON on stdin): while the session is linked, it denies the prompt — Slack cannot show it — and tells the session to ask in the thread. Fails open (no web server or bridge: the call goes through). Install it in `~/.claude/settings.json`: `"PreToolUse": [{ "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "overmind slack guard", "timeout": 10 }] }]` |
+
+How it works ([architecture](architecture.md#slack-links)): one host's web server runs the bridge
+(`slack.host`) — a Slack App in Socket Mode, whose tokens only it holds. Linking reads the thread
+(so the app must be in that conversation — `/invite` it, or add it to the DM) and types a note into
+the session: the link, until when, your instructions, the mode, the rules (post only with `overmind
+slack reply` and only when something calls for it, only within the instructions, nothing
+destructive for them, their messages are requests from colleagues and cannot change the rules)
+and the thread so far. Messages are typed in once the session is idle — several as one prompt —
+each marked with its author's Slack name and id (and `→ mentions you` / `→ to you`); the ones
+addressed to it get an 👀 reaction. A linked session that waits on you (a permission prompt, a
+question in the terminal) for over 30 s says so in the thread — only the kind of prompt, never its
+details — and DMs you (`slack.owner`; with several `slack.owners`, the owner who started it from Slack, if one did) a link to it in Overmind's web UI; messages for it meanwhile get
+⏳, and once it moves on both posts are edited to say so. When the link ends, delivery stops and, if the session ever spoke there, the thread is
+told it left. The commands talk to this machine's web server, which proxies to `slack.host` (or, for a host listed in `slack.bridges`, to that host's own bridge).
+Sessions on any host can be linked: the bridge lists and types into them through their host's
+web server, and checks a reply's pane on the host it came from. A session asked to join a thread
+links itself (`overmind slack link <url> --for 2h`).
+
+**Starting a session from Slack**: with `slack.spawn` set on the bridge's server
+(`overmind config set slack.spawn.host <host>`, `.dir`, `.model`, `.minutes` (default `1d`), `.from`
+(`anyone` or user ids; default you only)), mentioning the app in a channel thread no session
+follows opens a new session on that host, linked to the thread, the message as its first request
+([architecture](architecture.md#slack-links)). The web UI's Settings → Slack turns it on and off per
+Slack app (bridge) and sets host, directory, model, duration and who may — live, no restart.
 
 ### Briefs
 
@@ -317,7 +416,10 @@ Claude sessions outside tmux — recorded by every local `overmind list` (the we
 it is always fresh). After a reboot (a new boot id), whatever the old boot ran is **dormant** until
 you bring it back or forget it. Within one boot, a session you close is closed — never dormant
 (except in the last 5 minutes before a reboot: a restart quits the terminals before the daemons,
-and those sessions must survive that). The `watch` header shows `· N dormant` while there are any.
+and those sessions must survive that) — unless you put it to sleep: `overmind sleep <target>`
+(Deactivate in the app — the Close button offers it) ends it and keeps it dormant, marked `slept`, until you restore or forget it. A slept
+session is restored only by name (never by `--all` / `restore.onBoot`) and keeps its group and stack
+membership meanwhile. The `watch` header shows `· N dormant` while there are any.
 
 Sessions closed within a boot are kept separately as **recently closed** (`--closed`) for config
 `restore.keepClosedDays` (default 7, `0` = off; newest 50): a closed tmux session (one that had a
@@ -330,7 +432,7 @@ makes them dormant instead.
 | --- | --- |
 | `overmind restore [--list] [--json]` | the dormant sessions on this host: tmux name (or the Claude title), windows/panes, Claude sessions, how long ago |
 | `overmind restore <target> [-n] [--json]` | bring one back. `<target>`: a dormant tmux name (exact > prefix > substring, like `enter`), a session id (whole, or a prefix of 4+ characters — a session inside a dormant tmux session restores that tmux session) or a Claude title (exact > prefix > substring) |
-| `overmind restore --all [-n] [--json]` | bring every dormant session back (a failure is reported and the rest still go) |
+| `overmind restore --all [-n] [--json]` | bring every dormant session a reboot left back (a failure is reported and the rest still go); slept ones stay |
 | `overmind restore --forget <target> \| --forget-all [--json]` | drop dormant entries without restoring them |
 | `overmind restore --closed [--json]` | the recently closed sessions, newest first: title, cwd, `closed 2h ago` (text `overmind restore` ends with `N recently closed (overmind restore --closed)` when there are any) |
 | `overmind restore --closed <target> [-n] [--json]` | bring one closed session back (same targets and rules as above). A Claude session whose tmux session still exists comes back in a new window of it; otherwise as below. No `--closed --all` |
@@ -368,7 +470,7 @@ JSON shapes:
   `closedAt` (ISO; `since` is the same) + `tmuxSession?` (a Claude session's tmux session that
   outlived it), newest first, and DormantView =
   `{ kind: "tmux"|"claude", target, name, since, windows, panes, sessions: [{ sessionId, name,
-  title, cwd }] }`. `target` is what `overmind restore <target>` takes (the tmux name, or the full
+  title, cwd }], slept }` (`slept`: put to sleep with `overmind sleep`, not left by a reboot). `target` is what `overmind restore <target>` takes (the tmux name, or the full
   session id); `name` is the tmux name or the Claude title; `since` is when it went down (ISO).
 - `restore <target>|--all --json` — `{ host, restored: [{ kind, from, session, renamed, windows,
   panes, launched: [{ sessionId, title, line }], warnings, commands, dryRun }], failed: [{ target,
@@ -389,7 +491,7 @@ JSON shapes:
 | command | does |
 | --- | --- |
 | `overmind init` | wizard: this machine's name, hosts (name, ssh target, web URL — can suggest from `tailscale status --json`), spawn dirs, web port. Never overwrites an existing config without confirmation (`--force`) |
-| `overmind config path\|show\|get\|set\|edit` | where the config lives / print it (`--resolved` fills in defaults) / read or write one dotted key (`hosts.workstation.ssh`; values parse as JSON when they can) / open in `$VISUAL`/`$EDITOR` |
+| `overmind config path\|show\|get\|set\|edit` | where the config lives / print it (`--resolved` fills in defaults; its `spawnDirs` are this host's, a hidden one marked `"hidden": true`) / read or write one dotted key (`hosts.workstation.ssh`; values parse as JSON when they can) / open in `$VISUAL`/`$EDITOR` |
 | `overmind install --host <name>` | copy this binary to `~/.local/bin/overmind` and the web app to `~/.local/share/overmind/web` on the host (rsync, or tar over ssh) — the host needs no Rust toolchain. Refuses when `uname -sm` differs between the machines unless `--force`; `--no-web` skips the web app. Of `web/ui` only the built `ui/dist` is copied (sources and `node_modules` never); when it is not built you get a warning (build with `overmind web build`) and the host serves only the API and a "not built" page |
 
 Non-interactive `init` (scripts, tests):
@@ -464,6 +566,7 @@ integrations). Config: `tasks`.
 | `overmind task show <task> [--json]` | one task: project, task list, status, due date, todos, description. `<task>` is its id (`1234`, `#1234`) or its Productive URL. From the cache, else fetched (any task, open or not). `--json`: the `Task` plus `contextLine` (the first prompt `task spawn` gives) and `statuses` (its workflow's) |
 | `overmind task status <task> [status] [--json]` | without `status`, its workflow's statuses (`●` the current one). With one — an id, a name (any case) or a unique prefix of one; ambiguous or unknown → exit 2 with the candidates — moves the task there and updates the cache (a closed task leaves it). `-n` changes nothing. `--json`: `{ task, applied }` (the task as it is now) |
 | `overmind task spawn <task> [prompt] [-C DIR] [--name] [--model] [--harness] [--backend] [--tmux-session] [--window]` | `spawn` in `DIR` (default: here) with the first prompt `contextLine` + `prompt`: `Productive task #<number> <url> — “<title>” (<project>, <status>).` (the URL early: the web UI links a session to a task by it, and sees only the first ~300 characters of a first prompt) Starts an agent — confirm like `spawn` |
+| `overmind task schedule <task> [prompt] [--time HH:MM] [-C DIR] [--name] [--model] [--harness] [--json]` | = `overmind schedule add --task <task>`: a session on the task's start date at `--time` (default `08:00`) that follows the date if it moves — see [Scheduled sessions](#scheduled-sessions) |
 
 `--json`: `{ user: { id, name }, organization: { id, name, slug }, scope, fetchedAt, stale, error,
 truncated, columns: [{ id, title, count }], tasks: [Task…], statuses: { <workflowId>: [Status…] } }`
@@ -478,7 +581,7 @@ workflow's statuses are in position order, closed ones last. `column` is `closed
 
 ## Repos
 
-Keep the git checkouts under a few roots fresh, on every machine. Fetch, then fast-forward only:
+Keep the git checkouts under a few roots fresh, on every machine. A root that is a checkout itself (e.g. `~/work`) is that one repo; the repos inside it need their own root (`~/work/repos`). Fetch, then fast-forward only:
 nothing is ever stashed, reset, rebased or merged — a repo that can't fast-forward is reported and
 left alone. Config: `repos` in [the config](architecture.md#config), or the web UI's Settings → Git repos.
 
@@ -494,7 +597,8 @@ of `repos` the rows `{ name, path, every, excluded, due, branch, upstream, ahead
 ## Bots
 
 Agent sessions started from a recipe, like Claude Code routines but on your own machines: a prompt
-and a cron schedule that spawn a session on the host whose config lists the bot. Everything that
+and a cron schedule — or a [GitHub trigger](#github-triggers): a new branch matching a pattern —
+that spawn a session on the host whose config lists the bot. Everything that
 session spawns in turn (`overmind spawn`, `overmind stack spawn`, a handoff — on this host or, through
 `-H`, another) belongs to the same **run**. Config: `bots` in [the config](architecture.md#config).
 
@@ -520,11 +624,13 @@ section is still read (a name in both: the `bots` one wins), and the names below
 | --- | --- |
 | `schedule` | 5-field cron in local time: `*`, lists, ranges, steps (`*/15`, `5/20`), names (`mon-fri`, `jan`), `7` = Sunday, `@hourly` / `@daily` / `@weekly` / `@monthly`. Both day fields set → either matches (classic cron) |
 | `dir` | where the session starts (must exist) |
+| `pull` | `true`: bring the git checkout `dir` is in up to date before each run, as [`overmind repos sync`](#repos) does for one repo (fetch, then fast-forward only; never stash, reset or merge). When it can't (local changes, diverged, offline, not a checkout) the run starts anyway: the run records it (`pull: { outcome, pulled, warning }`, shown by `overmind bots show`) and the prompt starts with a line saying files there may be out of date. Default `false` |
 | `prompt` / `promptFile` | the first prompt, inline or read from a file at run time (one of them, or neither); a file's YAML frontmatter (`---` … `---`) is left out, so a note can be the prompt |
 | `command` | launcher for the bot's sessions **and everything they spawn** (it travels as `OVERMIND_CMD`); default config `claude` |
 | `harness`, `model` | as for `overmind spawn` |
+| `ghIdentity` | the [GitHub identity](#github-identities) the bot's sessions (and what they spawn) act as on GitHub; default none — yours |
 | `enabled` | `false` pauses the bot (`overmind bots disable`). `overmind config set bots.<name> null` removes it |
-| `keep` | default `24h`, or `"never"`: once a run is older than this, its sessions that are idle and quiet for an hour are closed (their tmux session is killed). A session waiting for input is never closed |
+| `keep` | default `72h`, or `"never"`: once a run is older than this, its sessions that are idle and quiet for an hour are closed (their tmux session is killed). A session waiting for input is never closed. A finished bot session shows as done before that: its prompt carries the [ask-done](#ask-done) instruction |
 
 A bot never fires on the tick that first sees it (a bot added at 08:00 with a 07:00 schedule first
 runs tomorrow). A slot more than 6 hours old when a tick sees it (the machine was off) is recorded
@@ -534,14 +640,15 @@ as `missed`; a slot that comes while a session of the bot is still working is `s
 | --- | --- |
 | `overmind bots [list] [--json]` | each bot: schedule, next run, last run, live sessions (working / needs you) |
 | `overmind bots show <name> [--json]` | settings and the latest runs, each with its sessions as a tree (`└` = spawned by a bot session) and their state (`busy` / `idle` / `waiting` / `closed` / `gone`) |
-| `overmind bots run <name> [--force]` | start a run now (`trigger: manual`); refuses while a session of the bot is working unless `--force` |
+| `overmind bots run <name> [--force] [--prompt <text>]` | start a run now (`trigger: manual`); refuses while a session of the bot is working unless `--force`. `--prompt` is added after the recipe's prompt — a task for this run, with the recipe's context; dir, launcher, model, `ghIdentity` and `keep` stay the recipe's: a bot's other task (acting on its own report, say) runs as the bot, with whatever GitHub identity this host gives it |
 | `overmind bots tick [-q]` | fire due bots, record missed / skipped slots, close sessions past `keep` — what the service runs. Exits 1 when a bot failed to start |
 | `overmind bots enable\|disable <name>` | set `<section>.<name>.enabled` (`bots`, or `jobs` for a bot still there) |
 | `overmind bots install-service` | macOS: a launchd agent `overmind.jobs` that runs `overmind --local jobs tick -q` every minute and at login (`--uninstall`, `--no-load`, `--print`); logs to `~/Library/Logs/overmind.jobs.log` |
 
 A run's first session is the tmux session `<bot>-<MMDD>-<HHMM>` (Claude `-n` the same). Every bot
 session has `OVERMIND_JOB_RUN=<bot>/<run>` in its tmux environment and the pane option
-`@overmind_job_run`; `overmind list` reports it as `origin: { job, run }`.
+`@overmind_job_run`; `overmind list` reports it as `origin: { job, run }`. A closed bot session that
+`overmind restore` brings back keeps both and its bot's launcher, and is open in its run's record again.
 
 `--json` of `bots` / `bots show` is `{ name, schedule, scheduleText (the schedule in plain English), enabled, dir, harness, model, command, keep,
 prompt: { inline } | { file } | null, nextRun, lastSlot, runs, live }` per bot (`runs`: the latest one
@@ -554,6 +661,142 @@ tmuxSession, status, title }`; times in ms epoch, `keep` in seconds). State:
 In the web UI, the **Bots** screen (`#/bots`; `#/jobs` still opens it) lists every host's bots with
 Run now and the enabled switch, and each run's sessions as a tree; bot sessions wear a bot chip and
 stay out of the session list unless they need you — the **Bots** status filter (bot icon) lists only them ([Web API](architecture.md#web-api)).
+
+## GitHub triggers
+
+A bot can start on GitHub instead of on a clock: with `on.github` in place of `schedule`, it
+starts one run for every new branch whose name matches a pattern — a release pipeline that
+creates `release/<n>` gets a session per release. The machines are not reachable from GitHub, so
+there is no webhook: the tick polls.
+
+```json
+"bots": {
+  "release-bot": {
+    "on": { "github": { "repo": "owner/repo", "branch": "release/*" } },
+    "sessionName": "release-bot {branch}",
+    "dir": "~/Code/project",
+    "promptFile": "~/notes/release-bot.md",
+    "ghIdentity": "bot",
+    "keep": "never"
+  }
+}
+```
+
+| key | meaning |
+| --- | --- |
+| `on.github.repo` | `owner/repo` |
+| `on.github.branch` | branch pattern: `*` matches within one `/` segment, `**` across them, `?` one character (`release/*`, `hotfix/**`) |
+| `on.github.every` | seconds between polls (`90`, `"90s"`, `"5m"`); default and minimum 60 |
+| `on.github.backfill` | `true`: the first poll starts runs for the branches already there too (default: it only remembers them) |
+| `sessionName` | the run's session name, a template; default `{bot} {branch}` (tmux: `release-bot-release-42`) |
+| `prompt` / `promptFile` | as for a scheduled bot, plus the variables `{branch}`, `{sha}` (its head when found), `{repo}`, `{url}` (the branch on github.com), `{bot}`; none set = `New branch {branch} in {repo} (head {sha}): {url}` |
+
+Everything else (`dir`, `command`, `harness`, `model`, `ghIdentity`, `enabled`, `keep`) is as
+for any bot. A bot has `schedule` or `on`, not both.
+
+**How it polls.** `overmind bots tick` (the `overmind.jobs` launchd agent, every minute — install it
+with `overmind bots install-service` on the host that lists the bot) polls each GitHub bot every
+`every` with one `gh api -i repos/<repo>/git/matching-refs/heads/<prefix>` (the pattern's literal
+leading directories, e.g. `release/`), matching the pattern on what comes back. It sends the
+previous answer's ETag (`If-None-Match`), so an unchanged answer is a `304` that GitHub does not
+count against the rate limit. It runs as the bot's `ghIdentity` (that identity's `command`, e.g. a
+GitHub App's `gh` wrapper) when it has one, else as the machine's `gh` (`$OVERMIND_GH`, config `gh`,
+PATH). A failed poll — auth (401/403), not found (404), rate limited (403/429 with
+`x-ratelimit-remaining: 0` or `retry-after`), gh missing — is logged and recorded, and the next one
+waits 5 minutes (a rate limit: until `retry-after` / `x-ratelimit-reset`); when fewer than 50
+requests remain, polling waits for the reset.
+
+**Exactly one run per branch.** Polling compares states, not events: each poll is the set of
+matching branches now, compared with the set the bot remembers (its state file, below).
+
+- A branch it does not know starts one run (`trigger: github`). The branch is written to the state
+  *before* the session is spawned, so a tick that dies halfway does not start it twice.
+- A branch it knows never starts another — through restarts of overmind, reboots, missed polls, a
+  new head (`sha` is updated, nothing runs).
+- When a session with the run's name is already open (state lost, or `forget` while it runs), no
+  second one starts: the branch is recorded as `adopted`.
+- The first poll (and the first after `enabled` goes back to `true`, or after `repo` / `branch`
+  change) only remembers what is there — like a scheduled bot, which never fires on the tick that
+  first sees it — unless `backfill`.
+- A branch that disappears is dropped from the state; its run gets `subject.goneAt`, its session is
+  **not** closed (only `keep` closes bot sessions; use `"keep": "never"` for sessions that must stay
+  until you close them). `overmind list` shows `[branch gone: release/42]` before its title,
+  `overmind list --json` has it as `origin.subject.goneAt`.
+- A run that fails to start (a missing `dir`, an unknown `ghIdentity`) is `failed` and is not
+  retried by itself: fix the cause, then `overmind bots forget <bot> <branch>`.
+
+| command | does |
+| --- | --- |
+| `overmind bots check <name> [--json]` | poll now, whatever `every` says, and act on it like a tick; then the branches it remembers. Exits 1 when the poll or a start failed |
+| `overmind bots check <name> --dry-run [--json]` | poll and show what a poll would do per matching branch — `start`, `adopt`, `remember` (first poll), `known` — and which remembered ones are gone; starts nothing, changes nothing |
+| `overmind bots forget <name> <branch>` | drop the branch from what the bot remembers: if it still exists, the next poll starts a run for it again (not while its session is open) |
+| `overmind bots run <name>` | refused for a GitHub bot — it runs per branch |
+
+`overmind bots` shows a GitHub bot's trigger, its last poll (or the error) and the branches it started
+runs for; `overmind bots show` all remembered branches with their sessions' state and the runs whose
+branch is gone. `overmind doctor` reports each enabled GitHub bot's last poll — failing on a poll
+error or on three missed polls in a row (the tick is not running) — and, on macOS, a missing tick
+service when any bot is enabled. The tick's log: `~/Library/Logs/overmind.jobs.log`.
+
+`--json` of `bots` / `bots show` adds `on` (`{ github: { repo, branch, every, backfill } }` or
+null), `sessionName` and `github` (the poll state: `{ watch, armed, lastPoll, lastOk, nextPoll,
+etag, error: { kind, message, at } | null, rateRemaining, branches: { "<branch>": { sha, firstSeen,
+outcome: spawned | existing | adopted | failed | starting, run, tmuxSession, reason } } }`); a GitHub
+bot's `schedule` is `""`, `scheduleText` the trigger in words, `nextRun` null. A triggered run has
+`subject: { kind: "branch", repo, branch, sha, url, goneAt }` and an id `YYYYMMDD-HHMMSS-<branch>`.
+The state is `github` in the bot's state file (`<bot>.json`, below). Tests poll a fixture instead
+of GitHub: `OVERMIND_GH_WATCH_FIXTURE` = a JSON file `{ "<owner/repo>": [{ "name", "sha" }] }`.
+
+## Ask done
+
+A session reports that its work is finished: the agent runs `overmind done --note "…"`, then ends with a
+short final message (what it did, what is worth checking). Nothing is closed: `overmind list` stamps
+`done: { at, note }` on the row and the views show it — a Done chip and the note in place of the
+first prompt in the session list and on the board, `done` in `overmind list`'s status column, and a
+Done card at the end of the conversation with **Close** (two taps). The user reads it and closes it.
+The mark counts while the session sits idle on it; a prompt from the user after it ends it (the
+conversation went on; the agent runs `overmind done` again when it is finished again), and `overmind bots
+tick` drops the marks of gone or re-prompted sessions.
+
+The agent is told so by one instruction (run `overmind done` when finished and nothing waits on the
+user, then the final message; otherwise say what it needs and stop). It goes below every
+[bot](#bots) prompt and the prompt of everything a bot session spawns, below `overmind spawn
+--ask-done`'s prompt, and into a running session with `overmind ask-done <target>`. A user-level
+`CLAUDE.md` / `AGENTS.md` can carry the same rule, so every agent reports itself done.
+
+Marks: `${XDG_STATE_HOME:-~/.local/state}/overmind/done.json` (`OVERMIND_DONE_STATE`),
+`{ marks: [{ sessionId, pane, tmuxSession, at, note }] }`.
+
+## Scheduled sessions
+
+One-off sessions started later on this host — at a set time, or on a Productive task's start date.
+No config: entries are state, added and cancelled with the commands below (or the web UI). The
+`overmind.jobs` launchd agent ([`bots install-service`](#bots)) fires them: every `bots tick` ends
+with the scheduled sessions, so a host needs that service for them to run.
+
+| command | does |
+| --- | --- |
+| `overmind schedule add [prompt] --at <when> [-C DIR] [--name] [--model] [--harness] [--json]` | a session in `DIR` (default: here; must exist) at `<when>`: `YYYY-MM-DD HH:MM` (or with a `T`), `YYYY-MM-DD` (08:00), `HH:MM` (the next one: today, else tomorrow), `today\|tomorrow\|<weekday> HH:MM`, `in 90m` / `in 2h` / `in 3d` (or `+2h`), local time. `--gh-identity` (global) is kept for the session. Starts an agent later — confirm like `spawn` |
+| `overmind schedule add [prompt] --task <task> [--time HH:MM] …` | task-linked: at `--time` (default `08:00`) on the task's start date. The tick re-reads the task every hour and right before firing: a moved start date moves the session, a closed task skips it (`skipped`), a task with no start date waits for one. The first prompt is `contextLine` + `prompt`, as with `task spawn`; the task's status is left alone. Session name default `task-<number>`. A closed task is refused; a start date already past fires on the next tick |
+| `overmind schedule [list] [--json] [--all]` | pending entries by time, then the latest 5 finished (`--all`: all kept) |
+| `overmind schedule cancel <id>` (`rm`) | cancel a pending entry (its id, or a unique prefix of a pending one) |
+
+An entry runs in tmux, like a bot. A timed entry more than 6 hours late when a tick sees it (the
+machine was off) is recorded as `missed`; a task-linked one fires late instead.
+
+`--json` of `schedule` is `{ host, entries: [Entry…] }`, of `schedule add` the new `Entry`:
+`{ id, at, time?, task?: { id, number, title, url, startDate, checkedAt }, dir, prompt, name,
+model, harness, ghIdentity, createdAt, state: "pending" | "started" | "skipped" | "missed" |
+"failed" | "cancelled", reason, firedAt, tmuxSession }` (times in ms epoch; `at` `null` while a
+task has no start date). State: `${XDG_STATE_HOME:-~/.local/state}/overmind/schedule.json`
+(`OVERMIND_SCHEDULE_FILE`): every pending entry and the latest 50 finished ones.
+
+In the web UI: **New session → When: Later** schedules a session on the chosen host
+(`datetime-local`, that host's clock); a task's dialog has **Now / On start date** (+ the time)
+and lists the task's pending entries; the **Bots** screen lists every host's pending entries with
+Cancel. Web API: `GET /api/hosts/:host/schedule`, `POST /api/hosts/:host/schedule` `{ at | task
+(+ time), dir, prompt?, name?, model?, harness?, ghIdentity? }` → `{ host, entry }`,
+`POST /api/hosts/:host/schedule/:id/cancel`.
 
 ## Web
 
@@ -569,8 +812,8 @@ stay out of the session list unless they need you — the **Bots** status filter
 stdio (newline-delimited JSON-RPC). Register it once:
 
 ```sh
-claude mcp add --scope user overmind -- overmind mcp    # this machine (tmux tools: defaultHost)
-claude mcp add --scope user overmind-ws -- overmind -H workstation mcp # every call defaults to that host
+claude mcp add --scope user overmind -- overmind mcp          # this machine (tmux tools: defaultHost)
+claude mcp add --scope user overmind-ws -- overmind -H workstation mcp   # every call defaults to that host
 ```
 
 - **One tool per subcommand**, generated from the CLI's own argument definitions, so it never
@@ -608,7 +851,8 @@ overmind mcp --http [--bind 127.0.0.1] [--port 7778] --token-file ~/.config/over
 - Listens on `127.0.0.1` by default: put a TLS reverse proxy (Caddy, `tailscale serve`/`funnel`)
   in front for anything that is not on this machine.
 - Without `--tools` it leaves out what changes the machine rather than its sessions: `exec`,
-  `install`, `init`, `config_set`, `web_build`, `skill_install` and every `*_install_service`.
+  `install`, `init`, `config_set`, `web_build`, `skill_install` and every `*_install_service` —
+  and `slack_link` (who may talk to a session is your call, not a remote agent's).
 - Tools with `no_wait` (`handoff`, `stack_spawn`) default it to `true`: remote runtimes give a call
   ~30 s, and waiting for a new session to register can take longer.
 
@@ -636,7 +880,9 @@ overmind mcp --http [--bind 127.0.0.1] [--port 7778] --token-file ~/.config/over
 | `OVERMIND_PRODUCTIVE_TOKEN` / `PRODUCTIVE_API_TOKEN` | Productive API token for [`overmind tasks`](#productive-tasks) (the first over config `tasks.token`, the second under it) |
 | `OVERMIND_TASKS_CACHE` | the [`overmind tasks`](#productive-tasks) cache file |
 | `OVERMIND_CURL`, `OVERMIND_PRODUCTIVE_API` | `curl` binary and API base URL for [`overmind tasks`](#productive-tasks) (tests) |
+| `OVERMIND_GH_IDENTITY` | the [GitHub identity](#github-identities) a session acts as — set in its shell; spawns inherit it (and it is forwarded to `-H` hosts). Same as `--gh-identity` |
 | `OVERMIND_JOB_RUN` | `<bot>/<run>`: the [bot](#bots) run a session belongs to — set in bot sessions; a spawn with it set joins that run (and is forwarded to `-H` hosts) |
+| `OVERMIND_SCHEDULE_FILE` | [scheduled sessions](#scheduled-sessions) state (default `${XDG_STATE_HOME:-~/.local/state}/overmind/schedule.json`) |
 | `OVERMIND_JOBS_DIR` | [bot](#bots) state (default `${XDG_STATE_HOME:-~/.local/state}/overmind/jobs`) |
 | `OVERMIND_STACKS_DIR` | where [stacks](#stacks) live (default `${XDG_STATE_HOME:-~/.local/state}/overmind/stacks`) |
 | `VISUAL`, `EDITOR` | the editor for `overmind brief --edit`, `overmind stack edit` and `overmind config edit` (default `vi`) |

@@ -27,9 +27,11 @@ export function conversation(messages: Message[]): Turn[] {
 /**
  * The reply to read aloud: the last assistant turn when it came after the user's last prompt
  * and the operator is done (not busy) — else null. `spoken`: the key of the reply already read.
+ * `final`: the turn's last message is known to end it (Claude writes a message only once it is
+ * complete, `stop_reason` included), so read it without waiting for the status to turn idle.
  */
-export function replyToSpeak(turns: Turn[], status: string | null | undefined, spoken: string | null): Turn | null {
-  if (status === 'busy') return null
+export function replyToSpeak(turns: Turn[], status: string | null | undefined, spoken: string | null, { final = false } = {}): Turn | null {
+  if (status === 'busy' && !final) return null
   const last = turns[turns.length - 1]
   if (!last || last.role !== 'assistant' || last.key === spoken) return null
   return last
@@ -70,6 +72,37 @@ export function plainSpeech(markdown: string): string {
     .replace(/(\*\*|__|\*|_|~~)(\S(?:.*?\S)?)\1/g, '$2')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+// The speech endpoint takes up to 4096 characters (the server reads at most 4000).
+const SPEAK_MAX_CHARS = 4000
+
+/**
+ * `text` as plain speech in pieces read one after another: a short first piece (one or two
+ * sentences) so the voice starts within a second, then pieces of up to ~500 characters, voiced
+ * while the first one plays. A short text stays one piece.
+ */
+export function speechChunks(text: string, { first = 200, rest = 500, min = 60 } = {}): string[] {
+  const plain = plainSpeech(text).slice(0, SPEAK_MAX_CHARS)
+  if (!plain) return []
+  if (plain.length <= first) return [plain]
+  const sentences = plain.split(/(?<=[.!?…])\s+/)
+  // A long first sentence is cut at its last comma before `first`, so the voice still starts soon.
+  const head = sentences[0]
+  const comma = head.length > first ? head.lastIndexOf(', ', first) : -1
+  if (comma >= min) sentences.splice(0, 1, head.slice(0, comma + 1), head.slice(comma + 2))
+  const out: string[] = []
+  let cur = ''
+  for (const s of sentences) {
+    // The first piece: at least `min` characters (a lone "Done." would play and stall), then cut.
+    const limit = out.length || cur.length < min ? rest : first
+    if (cur && (cur.length + 1 + s.length > limit || (!out.length && cur.length >= min))) {
+      out.push(cur)
+      cur = s
+    } else cur = cur ? `${cur} ${s}` : s
+  }
+  if (cur) out.push(cur)
+  return out
 }
 
 /** The language to read `text` in with the browser's voice: Croatian when it looks Croatian. */

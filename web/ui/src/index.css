@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Suite palette: generated from the shared design system (literal tokens, like the blocks below). */
+@import "./suite/palette-suite.css";
 
 /* shadcn convention: dark mode = `.dark` on <html>, set by ThemeProvider (and index.html pre-paint). */
 @custom-variant dark (&:is(.dark *));
@@ -130,10 +132,11 @@
 }
 
 /* Palettes (Settings → Theme, lib/palettes.ts): `data-palette` on <html>, orthogonal to light/dark.
-   No attribute = the default tokens above. Each palette overrides every token for both modes:
+   No attribute = the base tokens above (Graphite; the default palette is Suite). Each palette overrides every token for both modes:
    light is `:root[data-palette=…]` (0,2,0 — it beats plain `.dark`, which is why the palette's
    dark variant is `:root[data-palette=…].dark`, 0,3,0). Keep lib/palettes.ts THEME_COLORS / swatches in
-   sync (palettes.test.ts checks them against this file). */
+   sync (palettes.test.ts checks them against this file). The Suite palette's blocks are generated
+   into suite/palette-suite.css (imported at the top) and must not be edited by hand. */
 
 /* Earth: warm paper / espresso, terracotta primary, olive-leaning status greens. */
 :root[data-palette="earth"] {

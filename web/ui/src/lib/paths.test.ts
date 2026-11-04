@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 
-import { basename, dirname, isPathLike, normalizePath, parsePathRef, pathCandidates, pathTokens, resolveFrom, splitPaths } from './paths'
+import { basename, dirname, isPathLike, normalizePath, parsePathRef, pathCandidates, pathTokens, resolveFrom, splitPaths, textPathCandidates } from './paths'
 
 describe('parsePathRef', () => {
   test('line / col / #L suffixes', () => {
@@ -79,6 +79,12 @@ describe('pathTokens', () => {
     expect(raws('ends with a colon: a/b.md:')).toEqual(['a/b.md'])
     expect(raws('[a/b.md]')).toEqual(['a/b.md'])
   })
+  test('a Claude Code @-mention loses its @', () => {
+    const s = 'read @web/ui/src/a.ts and fix it'
+    const [t] = pathTokens(s)
+    expect(t.raw).toBe('web/ui/src/a.ts')
+    expect(s.slice(t.start, t.end)).toBe('web/ui/src/a.ts')
+  })
   test('offsets point at the trimmed token', () => {
     const s = 'x (docs/a.md).'
     const [t] = pathTokens(s)
@@ -87,6 +93,12 @@ describe('pathTokens', () => {
   test('URLs and noise excluded', () => {
     expect(raws('open https://x.dev/a/b.md or C:\\x\\y.md now, e.g. 1.2.3 and v2.0')).toEqual([])
     expect(raws('run npm --prefix web/ui test')).toEqual(['web/ui'])
+  })
+})
+
+describe('textPathCandidates', () => {
+  test('plain prompt text, unique, in order', () => {
+    expect(textPathCandidates('Look at ~/Code/x/report.md and /tmp/a.json, then ~/Code/x/report.md again')).toEqual(['~/Code/x/report.md', '/tmp/a.json'])
   })
 })
 

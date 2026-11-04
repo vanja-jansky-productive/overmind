@@ -16,6 +16,9 @@ export interface OvermindState {
   refresh: () => void
   /** Record a fresh /api/overmind body fetched elsewhere (e.g. a spawn watcher). */
   applyOvermind: (data: OvermindResponse) => void
+  /** Drop a just-closed session now and keep it out of polls for a while (in-flight polls and
+   * server/peer caches can still list it for a few seconds). */
+  dropSession: (host: string, id: string) => void
 }
 
 export const OvermindContext = createContext<OvermindState | null>(null)

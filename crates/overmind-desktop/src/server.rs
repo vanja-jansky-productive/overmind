@@ -11,6 +11,8 @@ use overmind::core::{config, tools};
 use serde_json::Value;
 use tauri::Url;
 
+use crate::profile;
+
 /// The server the window opens, and where that choice came from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
@@ -56,6 +58,25 @@ pub fn resolve(env_url: Option<&str>, loaded: &config::Loaded) -> Result<Target,
         url: parse(&raw, "web.port")?,
         source: "web.port".into(),
         local: true,
+    })
+}
+
+/// A profile's server (see `profile`): its env var when set, else the URL baked into
+/// the bundle. Always remote — the app never starts it.
+pub fn resolve_remote(env_url: Option<&str>, r: &profile::Remote) -> Result<Target, String> {
+    let (raw, source) = env_url
+        .filter(|u| !u.trim().is_empty())
+        .map(|u| (u, r.url_env.clone().unwrap_or_default()))
+        .or_else(|| r.url.as_deref().map(|u| (u, "built-in".to_string())))
+        .filter(|(u, _)| !u.trim().is_empty())
+        .ok_or_else(|| match &r.url_env {
+            Some(env) => format!("no URL: set {env} or rebuild the app with --url"),
+            None => "no URL: rebuild the app with --url".to_string(),
+        })?;
+    Ok(Target {
+        url: parse(raw, &source)?,
+        source,
+        local: false,
     })
 }
 
@@ -107,6 +128,31 @@ pub fn probe(url: &Url, timeout: Duration) -> Result<(), String> {
         Err(format!(
             "/api/health answered {status:?}, not 200 — is this an Overmind server?"
         ))
+    }
+}
+
+/// Like `probe`, but an https target must answer `GET /api/health` with 200 too
+/// (checked with `/usr/bin/curl`, so no TLS stack in the app): a proxy such as
+/// `tailscale serve` accepts connections even when the app behind it is down.
+pub fn probe_strict(url: &Url, timeout: Duration) -> Result<(), String> {
+    if url.scheme() != "https" {
+        return probe(url, timeout);
+    }
+    let health = url.join("/api/health").map_err(|e| e.to_string())?;
+    let out = Command::new("/usr/bin/curl")
+        .args(["-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time"])
+        .arg(format!("{:.1}", timeout.as_secs_f64()))
+        .arg(health.as_str())
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run curl: {e}"))?;
+    let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    match status.as_str() {
+        "200" => Ok(()),
+        "000" | "" if !err.is_empty() => Err(err),
+        "000" | "" => Err(format!("{health}: no answer")),
+        s => Err(format!("{health} answered {s}, not 200")),
     }
 }
 
@@ -260,6 +306,41 @@ mod tests {
         let l = loaded("{}");
         assert!(resolve(Some("not a url"), &l).is_err());
         assert!(resolve(Some("file:///etc/passwd"), &l).is_err());
+    }
+
+    #[test]
+    fn remote_profiles_use_env_then_built_in_url_and_never_start_a_server() {
+        let r = profile::Remote {
+            name: "Example".into(),
+            identifier: "dev.example".into(),
+            url: Some("https://app.example.com:4443".into()),
+            url_env: Some("EXAMPLE_URL".into()),
+            title_bar: profile::TitleBar::Native,
+            frame_origins: vec![],
+        };
+        let t = resolve_remote(None, &r).unwrap();
+        assert_eq!(t.url.as_str(), "https://app.example.com:4443/");
+        assert_eq!((t.source.as_str(), t.local), ("built-in", false));
+        let t = resolve_remote(Some("http://127.0.0.1:5173"), &r).unwrap();
+        assert_eq!((t.source.as_str(), t.local), ("EXAMPLE_URL", false));
+        assert_eq!(resolve_remote(Some(" "), &r).unwrap().source, "built-in");
+
+        let none = profile::Remote { url: None, ..r };
+        assert!(
+            resolve_remote(None, &none)
+                .unwrap_err()
+                .contains("EXAMPLE_URL")
+        );
+        assert!(resolve_remote(Some("file:///etc/passwd"), &none).is_err());
+    }
+
+    #[test]
+    fn probe_strict_reports_an_unreachable_https_server() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        let u = Url::parse(&format!("https://127.0.0.1:{port}/")).unwrap();
+        assert!(probe_strict(&u, Duration::from_secs(2)).is_err());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 /// AppleScript helper: locate an iTerm session by its `id` (the GUID that also
 /// appears in ITERM_SESSION_ID).
 const ITERM_FIND: &str = r#"on findSession(theId)
-  tell application "iTerm2"
+  tell application id "com.googlecode.iterm2"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with s in sessions of t
@@ -24,14 +24,20 @@ end findSession"#;
 
 /// Run a static AppleScript, passing dynamic values as argv (injection-safe).
 fn osa(script: &str, args: &[&str]) -> Result<String> {
-    let file = std::env::temp_dir().join(format!("overmind-{}.applescript", std::process::id()));
+    // One file per call: Overmind.app runs several scripts at once from one process.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file =
+        std::env::temp_dir().join(format!("overmind-{}-{seq}.applescript", std::process::id()));
     std::fs::write(&file, script)?;
     let mut cmd = Command::new("osascript");
     cmd.arg(&file);
     for a in args {
         cmd.arg(a);
     }
-    let out = cmd.output()?;
+    let out = cmd.output();
+    let _ = std::fs::remove_file(&file);
+    let out = out?;
     if !out.status.success() {
         return Err(Error::Other(format!(
             "osascript: {}",
@@ -76,7 +82,7 @@ pub fn peek(s: &Session) -> Result<String> {
 on run argv
   set s to findSession(item 1 of argv)
   if s is missing value then error "session not found"
-  tell application "iTerm2" to return text of s
+  tell application id "com.googlecode.iterm2" to return text of s
 end run"#
             ),
             &[handle],
@@ -184,7 +190,7 @@ pub fn send(s: &Session, text: &str) -> Result<()> {
 on run argv
   set s to findSession(item 1 of argv)
   if s is missing value then error "session not found"
-  tell application "iTerm2" to tell s
+  tell application id "com.googlecode.iterm2" to tell s
     write text (item 2 of argv) without newline
     delay 0.2
     write text ""
@@ -228,7 +234,7 @@ pub fn focus(s: &Session) -> Result<()> {
             osa(
                 r#"on run argv
   set theId to item 1 of argv
-  tell application "iTerm2"
+  tell application id "com.googlecode.iterm2"
     activate
     repeat with w in windows
       repeat with t in tabs of w
@@ -393,7 +399,7 @@ pub(crate) fn tmux_session_names() -> Vec<String> {
 }
 
 /// One `tmux display-message -p -t <target> <format>`, or why it didn't answer.
-fn tmux_query(target: &str, format: &str) -> std::result::Result<String, String> {
+pub(crate) fn tmux_query(target: &str, format: &str) -> std::result::Result<String, String> {
     let out = crate::core::tools::tmux_cmd()
         .args(["display-message", "-p", "-t", target, format])
         .output()
@@ -601,6 +607,30 @@ pub fn attach_command(host: &str, tmux_session: &str) -> String {
     format!("overmind -H {} enter -- {}", shq(host), shq(tmux_session))
 }
 
+/// The host's tmux, not one session: `overmind -H <host> new` attaches to (or creates) `main`.
+pub fn host_shell_command(host: &str) -> String {
+    format!("overmind -H {} new", shq(host))
+}
+
+/// Open a new iTerm tab (a window when none is open) with a plain shell.
+pub fn iterm_open() -> Result<()> {
+    deny_fixture()?;
+    osa(
+        r#"on run argv
+  tell application id "com.googlecode.iterm2"
+    activate
+    if (count of windows) is 0 then
+      create window with default profile
+    else
+      tell current window to create tab with default profile
+    end if
+  end tell
+end run"#,
+        &[],
+    )?;
+    Ok(())
+}
+
 /// Open a new iTerm tab (a window with `window`, or when none is open) and run `line` in it.
 pub fn iterm_run(line: &str, window: bool) -> Result<()> {
     deny_fixture()?;
@@ -613,7 +643,7 @@ pub fn iterm_run(line: &str, window: bool) -> Result<()> {
         r#"on run argv
   set theCmd to item 1 of argv
   set makeWindow to (item 2 of argv is "1")
-  tell application "iTerm2"
+  tell application id "com.googlecode.iterm2"
     activate
     if makeWindow or (count of windows) is 0 then
       create window with default profile
@@ -665,6 +695,20 @@ pub fn spawn(
     harness: Harness,
 ) -> Result<String> {
     let tag = crate::core::jobs::Tag::from_env();
+    // What a bot session spawns closes itself when finished, like the bot session.
+    let file = match (&tag, prompt) {
+        (Some(_), Prompt::Inline(p)) if !p.trim().is_empty() => {
+            Some(write_prompt_file(&crate::core::done::with_instruction(p))?)
+        }
+        (Some(_), Prompt::File(f)) => Some(write_prompt_file(
+            &crate::core::done::with_instruction(&std::fs::read_to_string(f)?),
+        )?),
+        _ => None,
+    };
+    let prompt = match &file {
+        Some(f) => Prompt::File(f),
+        None => prompt,
+    };
     spawn_tagged(
         backend,
         dir,
@@ -739,6 +783,9 @@ pub fn spawn_tagged(
                 )));
             }
             let win = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if let Some(id) = crate::core::gh_identity::in_launcher(launcher) {
+                crate::core::gh_identity::tag_pane(&win, id);
+            }
             if let Some(t) = tag {
                 tag_pane(&win, t, &session, exists, name);
             }
@@ -750,6 +797,9 @@ pub fn spawn_tagged(
             crate::core::tools::tmux_cmd()
                 .args(["send-keys", "-t", &win, "Enter"])
                 .status()?;
+            if harness == Harness::Codex {
+                accept_codex_trust(&win);
+            }
             let desc = if exists {
                 format!("spawned tmux window {win}  (attach: tmux attach -t {session})")
             } else {
@@ -758,6 +808,74 @@ pub fn spawn_tagged(
             Ok((desc, Some(session)))
         }
         Backend::Unknown => Err(Error::Other("unknown backend".into())),
+    }
+}
+
+/// What a Codex pane shows right after launch.
+#[derive(Debug, PartialEq)]
+enum CodexStart {
+    /// "Trust this folder?"; `selected`: "› 1. Trust and continue" is highlighted.
+    Trust {
+        selected: bool,
+    },
+    /// Codex is up (its banner or prompt).
+    Up,
+    Starting,
+}
+
+fn codex_start(screen: &str) -> CodexStart {
+    if screen.contains("Trust this folder?") {
+        let selected = screen.lines().any(|l| {
+            let t = l.trim_start();
+            t.starts_with('›') && t.contains("1. Trust and continue")
+        });
+        return CodexStart::Trust { selected };
+    }
+    if ["OpenAI Codex", "Ask Codex", "for shortcuts"]
+        .iter()
+        .any(|m| screen.contains(m))
+    {
+        return CodexStart::Up;
+    }
+    CodexStart::Starting
+}
+
+fn capture(win: &str) -> Option<String> {
+    let out = crate::core::tools::tmux_cmd()
+        .args(["capture-pane", "-p", "-t", win])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Codex stops a new session at "Trust this folder?" in a directory it was never told to trust,
+/// and `overmind list` does not see it until someone answers. The spawn's directory was picked
+/// explicitly, so answer "Trust and continue" (preselected: Enter), as the web spawner does.
+/// Polls the pane for up to ~10 s; best effort. (Trusting by a `-c projects.…` override instead
+/// broke Codex's code-mode host on some machines: every shell command timed out.)
+fn accept_codex_trust(win: &str) {
+    use std::time::Duration;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(500));
+        let Some(screen) = capture(win) else { return };
+        match codex_start(&screen) {
+            CodexStart::Up => return,
+            CodexStart::Starting => {}
+            CodexStart::Trust { .. } => {
+                // The dialog is drawn before it listens for keys: settle, then check again.
+                std::thread::sleep(Duration::from_millis(1200));
+                if capture(win).map(|s| codex_start(&s))
+                    == Some(CodexStart::Trust { selected: true })
+                {
+                    let _ = crate::core::tools::tmux_cmd()
+                        .args(["send-keys", "-t", win, "Enter"])
+                        .status();
+                }
+                return;
+            }
+        }
     }
 }
 
@@ -880,6 +998,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_start_reads_the_trust_dialog() {
+        let dialog = "  Folder access\n  Trust this folder? Codex can read …\n› 1. Trust and continue\n  2. Back\n";
+        assert_eq!(codex_start(dialog), CodexStart::Trust { selected: true });
+        let moved = "  Trust this folder?\n  1. Trust and continue\n› 2. Back\n";
+        assert_eq!(codex_start(moved), CodexStart::Trust { selected: false });
+        assert_eq!(
+            codex_start(">_ OpenAI Codex (v0.166.0)\n› Ask Codex to do anything"),
+            CodexStart::Up
+        );
+        assert_eq!(codex_start("~/Code/project $ "), CodexStart::Starting);
+    }
+
+    #[test]
     fn attach_command_quotes_both_words() {
         assert_eq!(
             attach_command("workstation", "api"),
@@ -888,6 +1019,14 @@ mod tests {
         assert_eq!(
             attach_command("laptop", "it's"),
             r"overmind -H 'laptop' enter -- 'it'\''s'"
+        );
+    }
+
+    #[test]
+    fn host_shell_command_quotes_the_host() {
+        assert_eq!(
+            host_shell_command("workstation"),
+            "overmind -H 'workstation' new"
         );
     }
 

@@ -30,15 +30,27 @@ export function defaultFlyoutWidth(container: number): number {
 
 /** A flyout width within bounds for this board; non-numeric or ≤ 0 (= "no preference") is the default. */
 export function clampFlyoutWidth(w: number, container: number): number {
-  if (!Number.isFinite(w) || w <= 0) return defaultFlyoutWidth(container)
+  // A 0-wide board (unmounted) makes the default share 0 too: bound it directly, no recursion.
+  if (!Number.isFinite(w) || w <= 0) w = container * FLYOUT_DEFAULT_FRACTION
   const max = flyoutMaxWidth(container)
   return Math.round(Math.max(Math.min(FLYOUT_MIN_W, max), Math.min(max, w)))
 }
 
-/** Below this width (in rem: the details column is rem-sized too) a flyout lays its details column over the chat. */
-export const FLYOUT_DETAILS_BESIDE_REM = 54
+// The session pane's Details column: always beside the chat, resizable (`overmind.detailsWidth`).
+export const DETAILS_MIN_W = 260
+export const DETAILS_MAX_W = 560
+export const DETAILS_DEFAULT_W = 320
+/** The chat keeps at least this much beside the Details column. */
+export const DETAILS_CHAT_MIN_W = 380
 
-/** Does a `width` px pane leave room for the details column beside the chat? */
-export function detailsFitBeside(width: number, remPx: number): boolean {
-  return width >= FLYOUT_DETAILS_BESIDE_REM * (remPx > 0 ? remPx : 16)
+/** A Details width pref within bounds; anything non-numeric is the default. */
+export function clampDetailsWidth(w: number): number {
+  if (!Number.isFinite(w)) return DETAILS_DEFAULT_W
+  return Math.round(Math.max(DETAILS_MIN_W, Math.min(DETAILS_MAX_W, w)))
+}
+
+/** The Details column in a `pane` px wide pane: the pref, less what the chat needs; 0 = no room (the ⋯ drawer instead). */
+export function detailsWidth(pref: number, pane: number): number {
+  const room = pane - DETAILS_CHAT_MIN_W
+  return room < DETAILS_MIN_W ? 0 : Math.min(clampDetailsWidth(pref), room)
 }

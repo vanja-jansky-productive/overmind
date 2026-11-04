@@ -15,8 +15,8 @@ drops). A plain WKWebView app in Swift would be smaller still but a second langu
 On a Mac with the repo's Rust toolchain (arm64 builds an arm64 app):
 
 ```sh
-crates/overmind-desktop/bundle.sh          # → target/release/bundle/Overmind.app and Overmind.zip
-crates/overmind-desktop/bundle.sh --install # ...and copy it to ~/Applications
+crates/overmind-desktop/bundle.sh             # → target/release/bundle/Overmind.app and Overmind.zip
+crates/overmind-desktop/bundle.sh --install   # ...and copy it to ~/Applications
 ```
 
 The script runs `cargo build --release -p overmind-desktop`, writes the bundle (Info.plist, an
@@ -29,7 +29,7 @@ test it with `-p overmind-desktop`.
 bundle over and put it in Applications.
 
 ```sh
-rsync -a target/release/bundle/Overmind.app laptop:Applications/ # or scp the Overmind.zip and unzip it
+rsync -a target/release/bundle/Overmind.app laptop:Applications/   # or scp the Overmind.zip and unzip it
 ```
 
 The app is not notarized. Copied with rsync/scp it has no quarantine flag and just opens; if it
@@ -55,7 +55,7 @@ says so. Put the server behind Tailscale HTTPS on that machine (tailnet only, a 
 
 ```sh
 tailscale serve --bg --https=7443 http://localhost:7878       # on the workstation
-overmind config set desktop.url https://workstation.<tailnet>.ts.net:7443 # on the laptop
+overmind config set desktop.url https://workstation.<tailnet>.ts.net:7443   # on the laptop
 ```
 
 The server takes the browser's address from `X-Forwarded-For` when the request comes from this
@@ -85,12 +85,12 @@ within 30 s — shows "Overmind server is not running" with the error, the log t
 | ⌘[ / ⌘] | back / forward (the app's hash routes) |
 | ⌘W, close button | hide the window; the Dock icon brings it back; ⌘Q quits |
 | links | the server's own pages stay in the window; other http(s) pages and every `target="_blank"` link open in the default browser; `vscode://`, `vscode-insiders://`, `cursor://`, `mailto:` go to macOS (**Open in VS Code / Cursor** works); other schemes are dropped |
-| attach | `overmind://attach?host=<host>&session=<tmux session>` opens an iTerm tab (a window when none is open) running `overmind -H <host> enter -- <session>`, both words shell-quoted; any other `overmind://` link is dropped. The session details' **Attach** button and the palette's *Attach in iTerm* use it (shown only when the init script sets `data-attach="iterm"`, so an older app keeps just **Copy**). The first use asks for permission to control iTerm (Info.plist `NSAppleEventsUsageDescription`) |
+| attach | `overmind://attach?host=<host>&session=<tmux session>` opens an iTerm tab (a window when none is open) running `overmind -H <host> enter -- <session>`, both words shell-quoted; `overmind://shell?host=<host>` opens one running `overmind -H <host> new` (the host's tmux: attach to, or create, `main`; the Mac the app runs on — config `self` — gets a plain iTerm tab) — the top bar's ▣ per host, links only when the init script sets `data-host-shell="iterm"` (else it copies the command); any other `overmind://` link is dropped. The session details' **Attach** button and the palette's *Attach in iTerm* use it (shown only when the init script sets `data-attach="iterm"`, so an older app keeps just **Copy**). The first use asks for permission to control iTerm (Info.plist `NSAppleEventsUsageDescription`) |
 | downloads | the preview's Download saves to `~/Downloads` (no overwrite: `name (1).ext`) and reveals the file in Finder |
 | files | dropping files on a session / the New session form, pasting images and the paperclip picker work as in the browser (Tauri's own drop handler is off, so the page gets the drop) |
 | clipboard | Copy path and ⌘C/⌘V/⌘X/⌘A work (Edit menu); on a plain-http tailnet URL the UI uses its non-secure-context copy fallback |
 | title bar | none: the traffic lights sit over the UI's own top bar (vertically centred on its 56 px row), the page's headers leave room for them and collapse that room in full screen, where macOS hides them |
-| dragging | drag the window by the empty parts of any top bar (sidebar / board / session / settings / notes header, the empty pane, the collapsed rail); double-click there zooms. Buttons, fields, toggles and links don't drag |
+| dragging | drag the window by the empty parts of any top bar (the top bar, session / settings / notes header, the empty pane); double-click there zooms. Buttons, fields, toggles and links don't drag |
 | window | size, position and maximized/fullscreen state are remembered; the title follows the page (`(2) session · Overmind`, shown in the Window menu and Mission Control) |
 | single instance | opening the app again focuses the running one |
 
@@ -104,7 +104,7 @@ notification permission.
 The window uses Tauri's `titleBarStyle: Overlay` with a hidden title, so the page draws under the
 traffic lights. The page learns it is inside the app without IPC: the window's initialization
 script (it runs on every page, the server's too) sets `data-shell="desktop"` (and the class
-`shell-desktop`), `data-attach="iterm"`, `data-fullscreen`, `--titlebar-inset-left` (88px; 0 in full screen) and
+`shell-desktop`), `data-attach="iterm"`, `data-host-shell="iterm"`, `data-fullscreen`, `--titlebar-inset-left` (88px; 0 in full screen) and
 `--titlebar-height` (56px) on `<html>`. On a page load and whenever the window resizes into or
 out of full screen, the app evaluates the same script again with the current state. The web UI's
 rules for these live in `web/ui/src/index.css` (→ "Desktop app"); without `data-shell` — any
@@ -126,18 +126,71 @@ can do: no file, shell, navigation or settings access, and a drag follows the mo
 button is released. Native dragging without IPC would mean hit-testing the page's layout from Rust,
 duplicating the UI's layout knowledge in the app; the narrow grant is the smaller risk.
 
+## Other apps (profiles)
+
+The same crate bundles other web apps as their own Mac app — one binary, no second Tauri
+shell. `bundle.sh --profile <name>` writes `Contents/Resources/profile.json`; the binary reads
+it at launch, and without one it is Overmind.app, unchanged. A profile app gets:
+
+- its own name, icon and bundle identifier (Info.plist, and Tauri's identifier is overridden at
+  launch), so its single-instance lock, remembered window, WebKit storage and macOS prefs are
+  separate from Overmind.app's;
+- a fixed remote URL: the profile's env var when set (for a run from a shell), else the URL
+  baked in at bundle time. It never reads Overmind's config and never starts a server; when
+  `GET /api/health` does not answer 200 (an https URL is checked end to end with `curl`, since
+  a proxy such as `tailscale serve` accepts connections while the app behind it is down), the
+  start page says "<App> server is not running" with Retry;
+- the native title bar, or with `"titleBar": "overlay"` Overmind's chrome (Overlay title bar, the
+  page script without `data-attach`, the `window-drag` grant on its URL's origin — the page must
+  handle `data-shell="desktop"` and `--titlebar-inset-left` itself, see
+  [Window chrome](#window-chrome-and-the-one-ipc-grant)); no `overmind://` links, no File →
+  New Session. The rest is shared: the link policy, downloads, the Edit menu, ⌘R / ⌘⇧R,
+  ⌘[ / ⌘], ⌘W hides, the remembered window, single instance.
+
+Profiles live in `bundle.sh` (name, identifier, icon, category, URL env var, title bar). Today:
+
+| profile | app | identifier | title bar | URL |
+| --- | --- | --- | --- | --- |
+| `fin` | `Fin.app` | `dev.overmind.desktop.fin` | overlay | `--url`, else `FIN_DESKTOP_URL` at build time; `FIN_DESKTOP_URL` at run time overrides it |
+| `brain` | `Brain.app` | `dev.overmind.desktop.brain` | overlay | `--url`, else `BRAIN_DESKTOP_URL` at build time; `BRAIN_DESKTOP_URL` at run time overrides it |
+
+```sh
+crates/overmind-desktop/bundle.sh --profile fin --url https://workstation.<tailnet>.ts.net:4443 --install
+crates/overmind-desktop/bundle.sh --profile brain --url https://workstation.<tailnet>.ts.net:5443 --install
+```
+
+The URL is passed at build time, not committed: it is a private tailnet address.
+
+**Frames.** A navigation inside the page's frames goes through the same link policy, so an
+`<iframe>` on another origin would open in the browser instead. `--frame-origin <origin>`
+(repeatable) bundles `"frameOrigins": […]` into the profile: those origins load in the window,
+frames included. Fin uses it for its assistant panel, which frames Overmind's
+[embed view](architecture.md#embed-view) — pass the Overmind web server's origin (same reason as
+the URL: not committed). Brain does the same for its assistant panel. Both profiles also ask for the microphone (voice input in that panel).
+
+```sh
+crates/overmind-desktop/bundle.sh --profile fin --url https://workstation.<tailnet>.ts.net:4443 \
+  --frame-origin https://workstation.<tailnet>.ts.net:7443 --install
+```
+
 ## Develop
 
 ```sh
-cargo run -p overmind-desktop                                # debug build, the config's server
-OVERMIND_DESKTOP_URL=http://127.0.0.1:7796 cargo run -p overmind-desktop # a test server of your own
+cargo run -p overmind-desktop                                   # debug build, the config's server
+OVERMIND_DESKTOP_URL=http://127.0.0.1:7796 cargo run -p overmind-desktop   # a test server of your own
 cargo test -p overmind-desktop
 cargo clippy -p overmind-desktop --all-targets -- -D warnings
+# another profile, from a profile file instead of the bundle's
+OVERMIND_DESKTOP_PROFILE=./profile.json cargo run -p overmind-desktop
 ```
 
-Layout: `src/server.rs` (URL resolution, health probe, starting the server), `src/links.rs` (the
+`profile.json`: `{"name": "…", "identifier": "…", "url": "https://…", "urlEnv": "…"}`.
+
+Layout: `src/profile.rs` (Overmind or another app), `src/server.rs` (URL resolution, health probe, starting the server), `src/links.rs` (the
 navigation / new-window policy), `src/shell.rs` (traffic-light position, the page's
 initialization script, the drag capability's URL pattern), `src/main.rs` (window, menu, plugins), `start/index.html` (the
 start page), `tauri.conf.json`, `icons/` (`icon.svg` is the web icon on the macOS icon grid;
-`icon.png` is rendered from it). Every icon — these and `web/ui/public`'s — comes from
+`icon.png` is rendered from it). The Overmind icon — these and `web/ui/public`'s — comes from
 `node scripts/icon/generate.mjs` (an SVG Overmind drawn in code, rendered with headless Chrome).
+`fin.*` and `brain.*`, for `Fin.app` and `Brain.app`, come from a shared design system kept
+outside this repo — replace them as a set, don't edit by hand).

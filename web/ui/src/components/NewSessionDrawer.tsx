@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRightIcon, CheckIcon, FolderIcon, GitForkIcon, LayersIcon, Loader2Icon, MicIcon, PaperclipIcon, PlayIcon, SquareIcon } from 'lucide-react'
+import { ArrowRightIcon, CalendarClockIcon, FolderIcon, GitForkIcon, LayersIcon, Loader2Icon, MessagesSquareIcon, MicIcon, PaperclipIcon, PlayIcon, SquareIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api, ApiError } from '@/api/client'
 import { watchForSpawned } from '@/api/spawnWatch'
+import type { SlackMinutes } from '@/api/types'
 import { DropOverlay } from '@/components/DropOverlay'
 import { HostDot } from '@/components/HostBadge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -11,20 +12,24 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
-import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useAttach, useFileDrop } from '@/hooks/useAttach'
 import { useOvermind } from '@/hooks/useOvermind'
-import { useHarnesses } from '@/hooks/useHarnesses'
+import { prefetchHarnesses, useHarnesses } from '@/hooks/useHarnesses'
 import { useSettings } from '@/hooks/useSettings'
+import { refreshSlack, SLACK_DURATIONS, toSlackMinutes, useSlack } from '@/hooks/useSlack'
 import { useVoice } from '@/hooks/useVoice'
 import type { SiblingTarget } from '@/hooks/useStackUi'
+import { withContinueTask } from '@/lib/brief'
 import { copyText } from '@/lib/clipboard'
 import { shortCwd } from '@/lib/format'
 import { harnessLabel, modelKey, offeredHarnesses, pickHarness } from '@/lib/harness'
 import { pickModel } from '@/lib/models'
+import { localInputValue, scheduleWhen } from '@/lib/schedule'
 import { storage } from '@/lib/storage'
 import { sessionHref, spawnTargets } from '@/lib/sessions'
 import { isMacPlatform, isSubmitChord } from '@/lib/shortcuts'
@@ -55,6 +60,14 @@ function saveDraft(prompt: string) {
   else storage.remove(DRAFT_KEY)
 }
 /** A started session registered: drop the draft it came from (not a newer one typed since). */
+/** Tomorrow 08:00 local, in ms — the first suggestion for Later. */
+function tomorrowAt8(): number {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  d.setHours(8, 0, 0, 0)
+  return d.getTime()
+}
+
 function clearDraftIf(sent: string) {
   if (loadDraft() === sent) storage.remove(DRAFT_KEY)
 }
@@ -85,6 +98,10 @@ export interface SpawnPrefill {
   /** Absolute on `host` (a session's cwd); must be one of its spawnDirs or beneath one, else the spawn is a 400. */
   dir?: string | null
   prompt?: string
+  /** Host and dir are given, not chosen (the embed view): no Host / Directory field. */
+  fixed?: boolean
+  /** The embed view's app: the new session is labelled with it (`embed`, set aside in the Apps filter). */
+  embed?: string
   /** Offer Sibling beside Hand off: the same prompt, spawned into this session's stack instead. */
   sibling?: SiblingTarget | null
 }
@@ -181,8 +198,10 @@ function NewSessionForm({
   const hostDirs = hosts.find((h) => h.name === host)?.dirs ?? []
   // A prefilled dir (the session's cwd) is offered first when it is not one of the spawnDirs, and preselected.
   const prefillDir = prefill?.dir && host === prefill.host ? prefill.dir : null
-  const dirs =
-    prefillDir && !hostDirs.some((d) => samePath(d.path, prefillDir)) ? [{ label: PREFILL_DIR_LABEL, path: prefillDir }, ...hostDirs] : hostDirs
+  const fixed = !!prefill?.fixed && !!prefillDir
+  const dirs = fixed && prefillDir
+    ? [{ label: prefillDir.replace(/\/+$/, '').split('/').pop() || prefillDir, path: prefillDir }]
+    : prefillDir && !hostDirs.some((d) => samePath(d.path, prefillDir)) ? [{ label: PREFILL_DIR_LABEL, path: prefillDir }, ...hostDirs] : hostDirs
   const [dirLabels, setDirLabels] = useState<Record<string, string | null>>({})
   // A sibling on the source's host starts in its directory (no choice); on another host the user
   // picks one of that host's directories — the same repo (by folder name) is preselected.
@@ -193,7 +212,12 @@ function NewSessionForm({
   const dir = dirs.find((d) => d.label === rememberedLabel) ?? dirs[0] ?? null
 
   const { models: claudeModels, voice: voiceEnabled } = useSettings()
-  const offered = offeredHarnesses(useHarnesses(host), claudeModels)
+  // Every host's harnesses are asked for when the form opens; until this host's answer is in, the
+  // Agent and Model rows show placeholders of the same height (the form never changes height).
+  const hostNames = hosts.map((h) => h.name).join(' ')
+  useEffect(() => prefetchHarnesses(hostNames.split(' ')), [hostNames])
+  const { harnesses: hostHarnesses, loading: harnessesLoading } = useHarnesses(host)
+  const offered = offeredHarnesses(hostHarnesses, claudeModels)
   const [harnessChoice, setHarnessChoice] = useState<string | null>(() => storage.get(HARNESS_KEY))
   const harness = pickHarness(offered, harnessChoice)
   const who = harnessLabel(harness)
@@ -210,6 +234,14 @@ function NewSessionForm({
   }, [draftable, prompt])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Start linked to Slack (any host: the bridge on `slack.host` reaches the others). The prompt goes
+  // in with the link's intro, so the session never works on it before it knows it is in Slack.
+  const slack = useSlack()
+  const [slackUrl, setSlackUrl] = useState('')
+  const [slackMinutes, setSlackMinutes] = useState<SlackMinutes>(240)
+  const [slackMode, setSlackMode] = useState<'mention' | 'proactive'>('mention')
+  // Later: a local `YYYY-MM-DDTHH:MM` the session is scheduled for (`overmind schedule`); null = now.
+  const [laterAt, setLaterAt] = useState<string | null>(null)
   // Files dropped on the form / pasted / picked: uploaded to the chosen host, paths go into the prompt.
   const promptRef = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
@@ -266,13 +298,13 @@ function NewSessionForm({
   }
 
   // ⌘/Ctrl+Enter submits from any field (the prompt included; plain Enter there stays a newline).
-  const canStart = !busy && (sibling ? siblingSameHost || !!dir : !!dir) && progress == null && voice.state === 'idle'
+  const canStart = !busy && !harnessesLoading && (sibling ? siblingSameHost || !!dir : !!dir) && progress == null && voice.state === 'idle'
 
   const startSibling = async (sib: SiblingTarget) => {
     setBusy(true)
     setError(null)
     try {
-      const sent = prompt
+      const sent = withContinueTask(prompt)
       const body = {
         prompt: sent.trim() ? sent : undefined,
         title: title.trim() || undefined,
@@ -315,18 +347,23 @@ function NewSessionForm({
     if (!dir) return setError('This host advertises no directories.')
     setBusy(true)
     setError(null)
+    if (laterAt) return scheduleLater(host, dir.path, laterAt)
     try {
-      const sent = prompt
+      const sent = withContinueTask(prompt)
+      const linkTo = slackOffered ? slackUrl.trim() : ''
       const res = await api.spawn(host, {
         dir: dir.path,
         prompt: sent.trim() ? sent : undefined,
         title: title.trim() || undefined,
         model: model || undefined,
         harness: harness === 'claude' ? undefined : harness,
+        embed: prefill?.embed || undefined,
+        ...(linkTo ? { slack: { url: linkTo, minutes: slackMinutes, mode: slackMode } } : {}),
       })
+      if (res.slack) void refreshSlack()
       // The draft stays until the session registers: a spawn that never shows up must not lose the prompt.
       onDone()
-      const id = toast.loading(`Starting ${res.name} on ${host}…`, { description: `Waiting for ${who} to register` })
+      const id = toast.loading(`Starting ${res.name} on ${host}…`, { description: res.slack ? 'Linked to Slack' : `Waiting for ${who} to register` })
       watchForSpawned(
         { host, name: res.name, tmuxSession: res.tmuxSession },
         {
@@ -347,9 +384,120 @@ function NewSessionForm({
     }
   }
 
-  const harnessField =
-    offered.length > 1 ? (
-      <Field label="Agent">
+  const scheduleLater = async (host: string, dirPath: string, at: string) => {
+    try {
+      const sent = withContinueTask(prompt)
+      const res = await api.scheduleAdd(host, {
+        at,
+        dir: dirPath,
+        prompt: sent.trim() ? sent : undefined,
+        model: model || undefined,
+        harness: harness === 'claude' ? undefined : harness,
+      })
+      clearDraftIf(sent)
+      onDone()
+      toast.success(`Scheduled on ${res.host}`, { description: `${scheduleWhen(res.entry)} — listed on the Bots screen` })
+    } catch (err) {
+      setError((err as Error)?.message || 'Could not schedule it')
+      setBusy(false)
+    }
+  }
+
+  // Shown until the bridge says it is off (`null` = not asked yet), so the row does not pop in.
+  const slackOffered = slack?.enabled !== false && !laterAt && !prefill?.embed
+  const slackField = slackOffered ? (
+    <Field label="Slack" hint={slackUrl.trim() ? 'starts linked: the prompt goes in with the link' : 'optional'}>
+      <Input
+        value={slackUrl}
+        onChange={(e) => setSlackUrl(e.target.value)}
+        placeholder="Slack link (a message's thread, a channel) or @person for a DM"
+        aria-label="Slack link"
+        className="h-10 text-sm"
+      />
+      {slackUrl.trim() ? (
+        <div className="flex flex-col gap-2 pt-1">
+          <ToggleGroup type="single" value={String(slackMinutes)} onValueChange={(v) => v && setSlackMinutes(toSlackMinutes(v))} aria-label="How long" className="no-scrollbar w-full justify-start overflow-x-auto">
+            {SLACK_DURATIONS.map((d) => (
+              <ToggleGroupItem
+                key={d.minutes}
+                value={String(d.minutes)}
+                className="h-8 shrink-0 rounded-full border border-border bg-card px-3 text-xs data-[state=on]:border-primary/50 data-[state=on]:bg-accent"
+              >
+                {d.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <ToggleGroup type="single" value={slackMode} onValueChange={(v) => v && setSlackMode(v as 'mention' | 'proactive')} aria-label="When it speaks" className="justify-start">
+            {(
+              [
+                ['mention', 'When mentioned', 'Woken when someone mentions the app or DMs it, and by messages in threads it has posted in'],
+                ['proactive', 'Proactive', 'Sees every message and steps in when it judges it should'],
+              ] as const
+            ).map(([v, label, hint]) => (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                title={hint}
+                className="h-8 rounded-full border border-border bg-card px-3 text-xs data-[state=on]:border-primary/50 data-[state=on]:bg-accent"
+              >
+                <MessagesSquareIcon className="size-3" /> {label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+      ) : null}
+    </Field>
+  ) : null
+
+  const whenField = (
+    <Field label="When" hint={laterAt ? `starts on ${host} then, from its own clock` : undefined}>
+      <div className="flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="single"
+          value={laterAt ? 'later' : 'now'}
+          onValueChange={(v) => v && setLaterAt(v === 'later' ? (laterAt ?? localInputValue(tomorrowAt8())) : null)}
+          spacing={0}
+          aria-label="When"
+          className="rounded-lg bg-muted p-1"
+        >
+          {(['now', 'later'] as const).map((v) => (
+            <ToggleGroupItem
+              key={v}
+              value={v}
+              className="h-8 rounded-md px-3 text-[0.8125rem] text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-accent"
+            >
+              {v === 'now' ? 'Now' : 'Later'}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        {laterAt ? (
+          <input
+            type="datetime-local"
+            value={laterAt}
+            onChange={(e) => setLaterAt(e.target.value || laterAt)}
+            aria-label="Start at"
+            className="h-10 rounded-lg border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+        ) : null}
+      </div>
+    </Field>
+  )
+
+  const chipClass =
+    'h-10 shrink-0 rounded-full border border-border bg-card px-4 text-sm data-[state=on]:border-primary/50 data-[state=on]:bg-accent'
+  const loadingChips = (widths: string[], label: string) => (
+    <div className="flex gap-2" aria-busy="true" aria-label={label}>
+      {widths.map((w, i) => (
+        <Skeleton key={i} className={cn('h-10 rounded-full', w)} />
+      ))}
+    </div>
+  )
+  // Always one row, also with a single harness: switching hosts never moves the fields below.
+  const harnessField = (
+    <Field label="Agent">
+      {harnessesLoading ? (
+        loadingChips(['w-20', 'w-20', 'w-14'], 'Loading agents')
+      ) : (
         <ToggleGroup
           type="single"
           value={harness}
@@ -358,56 +506,48 @@ function NewSessionForm({
           className="no-scrollbar w-full justify-start overflow-x-auto"
         >
           {offered.map((h) => (
-            <ToggleGroupItem
-              key={h.id}
-              value={h.id}
-              title={h.command}
-              className="h-10 shrink-0 rounded-full border border-border bg-card px-4 text-sm data-[state=on]:border-primary/50 data-[state=on]:bg-accent"
-            >
+            <ToggleGroupItem key={h.id} value={h.id} title={h.command} className={chipClass}>
               {h.label}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
-      </Field>
-    ) : null
-  const modelField =
-    models.length > MODEL_CHIPS_MAX ? (
-      <Field label="Model">
-        <select
-          value={model}
-          onChange={(e) => chooseModel(e.target.value)}
-          aria-label="Model"
-          className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        >
-          {models.map((m) => (
-            <option key={m.id || DEFAULT_MODEL_VALUE} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </Field>
-    ) : models.length > 1 ? (
-      <Field label="Model">
-        <ToggleGroup
-          type="single"
-          value={model || DEFAULT_MODEL_VALUE}
-          onValueChange={(v) => v && chooseModel(v === DEFAULT_MODEL_VALUE ? '' : v)}
-          aria-label="Model"
-          className="no-scrollbar w-full justify-start overflow-x-auto"
-        >
-          {models.map((m) => (
-            <ToggleGroupItem
-              key={m.id || DEFAULT_MODEL_VALUE}
-              value={m.id || DEFAULT_MODEL_VALUE}
-              title={m.id || `${who}'s default model`}
-              className="h-10 shrink-0 rounded-full border border-border bg-card px-4 text-sm data-[state=on]:border-primary/50 data-[state=on]:bg-accent"
-            >
-              {m.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </Field>
-    ) : null
+      )}
+    </Field>
+  )
+  const modelField = harnessesLoading ? (
+    <Field label="Model">{loadingChips(['w-24', 'w-20', 'w-20', 'w-16'], 'Loading models')}</Field>
+  ) : models.length > MODEL_CHIPS_MAX ? (
+    <Field label="Model">
+      <select
+        value={model}
+        onChange={(e) => chooseModel(e.target.value)}
+        aria-label="Model"
+        className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        {models.map((m) => (
+          <option key={m.id || DEFAULT_MODEL_VALUE} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+    </Field>
+  ) : (
+    <Field label="Model">
+      <ToggleGroup
+        type="single"
+        value={model || DEFAULT_MODEL_VALUE}
+        onValueChange={(v) => v && chooseModel(v === DEFAULT_MODEL_VALUE ? '' : v)}
+        aria-label="Model"
+        className="no-scrollbar w-full justify-start overflow-x-auto"
+      >
+        {models.map((m) => (
+          <ToggleGroupItem key={m.id || DEFAULT_MODEL_VALUE} value={m.id || DEFAULT_MODEL_VALUE} title={m.id || `${who}'s default model`} className={chipClass}>
+            {m.label}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </Field>
+  )
   const promptField = (
     <Field label="First prompt" hint="optional">
       <Textarea
@@ -502,33 +642,27 @@ function NewSessionForm({
   const dirField = (
     <Field label="Directory">
       {dirs.length ? (
-        <div role="radiogroup" aria-label="Directory" className="grid grid-cols-1 gap-1.5">
-          {dirs.map((d) => {
-            const on = d === dir
-            return (
-              <button
-                key={d.label}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => pickDir(d.label)}
-                className={cn(
-                  'flex min-h-12 items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors',
-                  on ? 'border-primary/50 bg-accent' : 'border-border bg-card active:bg-muted',
-                )}
-              >
-                <FolderIcon className={cn('size-4 shrink-0', on ? 'text-primary' : 'text-dimmer')} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium">{d.label}</span>
-                  <span className="block truncate font-mono text-[0.6875rem] text-dimmer">{shortCwd(d.path, 60)}</span>
-                </span>
-                {on ? <CheckIcon className="size-4 shrink-0 text-primary" /> : null}
-              </button>
-            )
-          })}
-        </div>
+        <ToggleGroup
+          type="single"
+          value={dir?.label ?? ''}
+          onValueChange={(v) => v && pickDir(v)}
+          aria-label="Directory"
+          className="no-scrollbar w-full justify-start overflow-x-auto"
+        >
+          {dirs.map((d) => (
+            <ToggleGroupItem
+              key={d.label}
+              value={d.label}
+              title={shortCwd(d.path, 60)}
+              className="group h-10 shrink-0 gap-2 rounded-full border border-border bg-card px-4 text-sm data-[state=on]:border-primary/50 data-[state=on]:bg-accent"
+            >
+              <FolderIcon className="size-4 shrink-0 text-dimmer group-data-[state=on]:text-primary" />
+              {d.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       ) : (
-        <p className="text-sm text-dimmer">{host} advertises no directories.</p>
+        <p className="flex h-10 items-center text-sm text-dimmer">{host} advertises no directories.</p>
       )}
     </Field>
   )
@@ -552,8 +686,8 @@ function NewSessionForm({
     ) : null
   const submitButton = (
     <Button type="submit" className="h-11 w-full rounded-xl text-[0.9375rem]" disabled={!canStart}>
-      {busy ? <Loader2Icon className="animate-spin" /> : sibling ? <GitForkIcon /> : <PlayIcon />}
-      {busy ? (sibling?.creates ? 'Creating stack…' : 'Starting…') : sibling ? 'Spawn sibling' : `Start on ${host}`}
+      {busy ? <Loader2Icon className="animate-spin" /> : sibling ? <GitForkIcon /> : laterAt ? <CalendarClockIcon /> : <PlayIcon />}
+      {busy ? (sibling?.creates ? 'Creating stack…' : 'Starting…') : sibling ? 'Spawn sibling' : laterAt ? `Schedule on ${host}` : `Start on ${host}`}
       {dialog && !busy ? (
         <Kbd aria-hidden className="ml-1 bg-primary-foreground/15 text-primary-foreground/80">
           {isMacPlatform() ? '⌘↵' : 'Ctrl↵'}
@@ -582,13 +716,16 @@ function NewSessionForm({
       }}
     >
       <Header className="px-0 pt-3 pb-2 text-left">
-        <Title className="text-left text-base font-semibold">{offersSibling ? 'New session from here' : sibling ? 'Spawn sibling' : prefill ? 'Continue in new session' : 'New session'}</Title>
-        <Description className="text-left text-xs">
+        <Title className="text-left text-base font-semibold">{offersSibling ? 'New session from here' : sibling ? 'Spawn sibling' : fixed ? 'New session' : prefill ? 'Continue in new session' : 'New session'}</Title>
+        {/* A plain New session needs no explanation on screen: kept for screen readers only. */}
+        <Description className={cn('text-left text-xs', !sibling && !fixed && !offersSibling && 'sr-only')}>
           {sibling
             ? sibling.creates
               ? `This starts a new stack around this session (one Sonnet call), then a sibling session${siblingSameHost ? ' in the same directory' : ` on ${host}`} that reads the shared StackBrief first.`
               : `A new session in the stack ${sibling.label ? `“${sibling.label}”` : ''}${siblingSameHost ? ', in the same directory' : ` on ${host}`}. It reads the shared StackBrief first${siblingSameHost ? '' : ` (through overmind, from ${sibling.host})`}.`
-            : offersSibling
+            : fixed
+              ? `Starts ${who} in ${shortCwd(dir?.path ?? '', 60)} on ${host}.`
+              : offersSibling
               ? `A separate ${who} session that picks up where this one is, on its own.`
               : `Starts ${who} in a new tmux session. A first-run folder trust prompt is accepted for you.`}
         </Description>
@@ -650,15 +787,19 @@ function NewSessionForm({
         </Alert>
       ) : (
         <div className="space-y-4 pt-1">
-          {hostField}
+          {fixed ? null : hostField}
 
-          {dirField}
+          {fixed ? null : dirField}
 
           {harnessField}
 
           {modelField}
 
           {titleField}
+
+          {slackField}
+
+          {fixed || prefill?.embed ? null : whenField}
 
           {promptField}
 

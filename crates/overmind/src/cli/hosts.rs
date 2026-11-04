@@ -142,6 +142,17 @@ pub struct Probe {
     pub config_self: Option<String>,
     pub config_problems: Vec<String>,
     pub web_dir: Option<String>,
+    /// GitHub-triggered bots: their last poll, and whether the tick service runs them.
+    pub bots: Vec<BotHealth>,
+}
+
+/// One line of `doctor` about a bot that needs the tick service or polls GitHub.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BotHealth {
+    pub name: String,
+    pub ok: bool,
+    pub line: String,
 }
 
 fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
@@ -189,6 +200,7 @@ pub fn gather_probe() -> Probe {
         config_self: loaded.config.self_name.clone(),
         config_problems: problems,
         web_dir: config::web_dir(&loaded.config).map(|p| tools::tildify(&p.display().to_string())),
+        bots: crate::cli::jobs::health(),
     }
 }
 
@@ -244,6 +256,14 @@ fn report_probe(p: &Probe, compare: Option<&str>) -> usize {
             "{} web app: not found (only needed for `overmind web serve`)",
             "·".dimmed()
         )),
+    }
+    for b in &p.bots {
+        if b.ok {
+            ok(&b.line);
+        } else {
+            bad(&b.line);
+            failures += 1;
+        }
     }
     if p.config_exists {
         let who = p.config_self.as_deref().unwrap_or("(self unset)");
@@ -374,8 +394,17 @@ pub struct HostRows {
 /// `list --json` on every configured host, in parallel, rows tagged with the
 /// host name *this* config knows it by.
 pub fn gather_all_hosts() -> Vec<HostRows> {
+    gather_hosts(None)
+}
+
+/// [`gather_all_hosts`] limited to shared (`Some(true)`) or own (`Some(false)`) hosts.
+fn gather_hosts(only_shared: Option<bool>) -> Vec<HostRows> {
     let cfg = config::get();
-    let names = cfg.ssh_host_names();
+    let names: Vec<String> = cfg
+        .ssh_host_names()
+        .into_iter()
+        .filter(|n| only_shared.is_none_or(|want| cfg.is_shared(n) == want))
+        .collect();
     let handles: Vec<_> = names
         .into_iter()
         .map(|name| {
@@ -410,8 +439,11 @@ pub fn gather_all_hosts() -> Vec<HostRows> {
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
 
-pub fn list_all_hosts(json: bool) -> Result<()> {
-    let all = gather_all_hosts();
+/// `list --all-hosts` (`only_shared`: `--shared` → `Some(true)`, `--mine` → `Some(false)`).
+/// JSON rows carry `shared` (their host's `hosts.<name>.shared`).
+pub fn list_all_hosts(json: bool, only_shared: Option<bool>) -> Result<()> {
+    let cfg = config::get();
+    let all = gather_hosts(only_shared);
     let mut any_ok = false;
     let mut rows = Vec::new();
     for h in &all {
@@ -432,7 +464,21 @@ pub fn list_all_hosts(json: bool) -> Result<()> {
         }
     }
     if json {
+        let rows: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|s| {
+                let mut v = serde_json::to_value(s).unwrap_or_default();
+                if let Some(o) = v.as_object_mut() {
+                    let shared = s.host.as_deref().is_some_and(|h| cfg.is_shared(h));
+                    o.insert("shared".into(), shared.into());
+                }
+                v
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
+    }
+    if all.is_empty() {
+        return Ok(());
     }
     if !any_ok {
         return Err(Error::exit(hosts::EXIT_UNREACHABLE, "no host answered"));

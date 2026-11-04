@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Overmind</title>
+<title></title>
 <style>
   :root { color-scheme: dark; --bg: #0b0c0e; --card: #161b22; --fg: #e9ecef; --dim: #8b949e; --accent: #7fb7ff; --bad: #ff7b72; }
   @media (prefers-color-scheme: light) {
@@ -47,21 +47,31 @@
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args)
   let timer = null
 
+  // The app's name and whether it is Overmind.app come with each status (see `profile`).
+  let app = 'Overmind'
+  let overmind = true
   const TITLES = {
-    ok: 'Opening Overmind…',
-    starting: 'Starting overmind web serve…',
-    down: 'Overmind server is not running',
-    error: 'Overmind config problem',
+    ok: () => `Opening ${app}…`,
+    starting: () => 'Starting overmind web serve…',
+    down: () => `${app} server is not running`,
+    error: () => `${app} config problem`,
   }
 
   function show(s) {
+    if (s.app) {
+      app = s.app
+      overmind = !!s.overmind
+      document.title = app
+      // Only Overmind.app's frameless window drags by the page (and grants it).
+      if (!overmind) document.body.removeAttribute('data-tauri-drag-region')
+    }
     const busy = s.state === 'ok' || s.state === 'starting'
     $('dot').className = 'dot ' + (busy ? 'busy' : 'bad')
-    $('title').textContent = TITLES[s.state] || s.state
+    $('title').textContent = TITLES[s.state] ? TITLES[s.state]() : s.state
     $('where').textContent = s.url ? `${s.url} (${s.source})` : ''
     $('error').hidden = !s.error
     $('error').textContent = s.error || ''
-    $('help').hidden = s.state !== 'down'
+    $('help').hidden = s.state !== 'down' || !overmind
     $('actions').hidden = busy
     $('openlog').hidden = !s.logPath
     $('logbox').hidden = !s.log || s.state === 'ok'

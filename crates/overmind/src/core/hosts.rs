@@ -233,11 +233,12 @@ pub fn remote_overmind_command(r: &Remote, args: &[String]) -> String {
 }
 
 /// Env vars that carry over to the remote `overmind`: the launcher, the job run a spawn
-/// belongs to, and the debug/dry-run switches. Not `OVERMIND_CONFIG` — a local path means
-/// nothing on the other machine, which has its own config.
-pub const FORWARDED_ENV: [&str; 4] = [
+/// belongs to, its GitHub identity, and the debug/dry-run switches. Not `OVERMIND_CONFIG` — a
+/// local path means nothing on the other machine, which has its own config.
+pub const FORWARDED_ENV: [&str; 5] = [
     "OVERMIND_CMD",
     "OVERMIND_JOB_RUN",
+    "OVERMIND_GH_IDENTITY",
     "OVERMIND_DEBUG",
     "OVERMIND_DRY_RUN",
 ];

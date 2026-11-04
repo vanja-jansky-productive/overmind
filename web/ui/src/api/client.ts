@@ -3,51 +3,71 @@
 import type {
   BranchRequest,
   BranchResponse,
-  DiffResponse,
-  DiffsResponse,
-  ReviewAnchor,
-  ReviewState,
-  ReviewThread,
-  Memo,
-  MemoSegmentResponse,
-  MemosResponse,
   AutoNameRun,
   Brief,
   BriefRegenerateResponse,
   CompleteKind,
   CompleteResponse,
+  DiffResponse,
+  DiffsResponse,
   DormantResponse,
   FileOpenResponse,
-  FocusStatus,
-  ForgetResponse,
+  PlainModulesResponse,
   FileStatResponse,
   OvermindResponse,
+  FocusStatus,
+  ForgetResponse,
   GroupsResponse,
+  HarnessDefaults,
+  HarnessesResponse,
+  Health,
   InboxResponse,
   InboxSettings,
-  HarnessesResponse,
   Job,
   JobEnabledResponse,
   JobRunResponse,
   JobsResponse,
-  Health,
   KillResponse,
+  Memo,
+  MemoSegmentResponse,
+  MemosResponse,
   MessagesResponse,
   NoteFile,
   NotesSearch,
   NotesTree,
   OkResponse,
+  OperatorStatus,
   PeekResponse,
+  PrSpawnResponse,
+  PrWorktree,
+  PromptQueue,
+  PrsResponse,
   ScreenResponse,
   QuestionAnswer,
+  QueuedPrompt,
   RegenerateNameResponse,
   RenameResponse,
+  RepoSyncResult,
   ReposResponse,
   ReposSettings,
-  RepoSyncResult,
   RestoreResponse,
+  ReviewAnchor,
+  ReviewState,
+  ReviewThread,
+  SideAsk,
+  PrDiffResponse,
+  PrNote,
+  PrNotesState,
+  ScheduleAddBody,
+  ScheduleResponse,
+  ScheduledEntry,
   SessionKey,
   Settings,
+  SlackLink,
+  SlackMinutes,
+  SlackSpawn,
+  SlackStatus,
+  SleepResponse,
   SpawnDirEntry,
   SpawnDirsResponse,
   SpawnRequest,
@@ -56,17 +76,13 @@ import type {
   StackLinkResponse,
   StackSpawnRequest,
   StackSpawnResponse,
-  StacksResponse,
   StackView,
-  TranscribeResponse,
-  OperatorStatus,
-  UploadResponse,
-  PrSpawnResponse,
-  PrWorktree,
-  PrsResponse,
+  StacksResponse,
   Task,
-  TasksResponse,
   TaskSpawnResponse,
+  TasksResponse,
+  TranscribeResponse,
+  UploadResponse,
   UsageResponse,
 } from './types'
 import type { GroupEdit } from '@/lib/groups'
@@ -130,6 +146,13 @@ export async function request<T>(path: string, { signal, method = 'GET', body, f
 
 const enc = encodeURIComponent
 const hostPath = (host: string) => `/api/hosts/${enc(host)}`
+/** A PR by owner / repo / number. */
+export interface PrKey {
+  owner: string
+  repo: string
+  number: number
+}
+const prPath = (host: string, pr: PrKey) => `${hostPath(host)}/prs/${enc(pr.owner)}/${enc(pr.repo)}/${pr.number}`
 const sessionPath = (host: string, id: string, suffix: string) => `${hostPath(host)}/sessions/${enc(id)}/${suffix}`
 
 type Opts = { signal?: AbortSignal }
@@ -161,6 +184,19 @@ export const api = {
   /** Every checkout the session works in (cwd's + those of the files it worked on); `since` = the last fingerprint. */
   diffs: (host: string, id: string, since: string | null = null, o: Opts = {}) =>
     request<DiffsResponse>(`${sessionPath(host, id, 'diffs')}${since ? `?since=${enc(since)}` : ''}`, o),
+  // Prompt queue (server-side): sent one per run once the session is idle.
+  queueAdd: (host: string, id: string, text: string, o: Opts = {}) =>
+    request<PromptQueue & { item: QueuedPrompt }>(sessionPath(host, id, 'queue'), { ...o, method: 'POST', body: { text } }),
+  queueEdit: (host: string, id: string, item: string, text: string, o: Opts = {}) =>
+    request<PromptQueue>(sessionPath(host, id, `queue/${enc(item)}`), { ...o, method: 'PUT', body: { text } }),
+  queueDelete: (host: string, id: string, item: string, o: Opts = {}) =>
+    request<PromptQueue>(sessionPath(host, id, `queue/${enc(item)}`), { ...o, method: 'DELETE' }),
+  queueSend: (host: string, id: string, item: string, o: Opts = {}) =>
+    request<PromptQueue>(sessionPath(host, id, `queue/${enc(item)}/send`), { ...o, method: 'POST', body: {} }),
+  queueMove: (host: string, id: string, item: string, to: number, o: Opts = {}) =>
+    request<PromptQueue>(sessionPath(host, id, `queue/${enc(item)}/move`), { ...o, method: 'POST', body: { to } }),
+  queuePause: (host: string, id: string, paused: boolean, o: Opts = {}) =>
+    request<PromptQueue>(sessionPath(host, id, 'queue/pause'), { ...o, method: 'POST', body: { paused } }),
   review: (host: string, id: string, o: Opts = {}) => request<ReviewState>(sessionPath(host, id, 'review'), o),
   /** `draft: false` types the comment into the session now; `true` keeps it for `submitReview`. */
   reviewComment: (host: string, id: string, body: ReviewAnchor & { body: string; draft: boolean; base?: string | null }, o: Opts = {}) =>
@@ -174,6 +210,11 @@ export const api = {
   /** Every draft in one prompt, with an optional overall note. */
   submitReview: (host: string, id: string, body: string, o: Opts = {}) =>
     request<ReviewState>(sessionPath(host, id, 'review/submit'), { ...o, method: 'POST', body: { body } }),
+  /** A side question about lines of the diff, answered by a read-only fork of the session (nothing reaches its thread). */
+  ask: (host: string, id: string, body: Partial<ReviewAnchor> & { question: string }, o: Opts = {}) =>
+    request<{ host: string; ask: SideAsk }>(sessionPath(host, id, 'ask'), { ...o, method: 'POST', body }),
+  askGet: (host: string, askId: string, o: Opts = {}) => request<{ host: string; ask: SideAsk }>(`${hostPath(host)}/asks/${enc(askId)}`, o),
+  askCancel: (host: string, askId: string, o: Opts = {}) => request<{ cancelled: boolean }>(`${hostPath(host)}/asks/${enc(askId)}`, { ...o, method: 'DELETE' }),
 
   send: (host: string, id: string, text: string, o: Opts & { keepalive?: boolean } = {}) =>
     request<OkResponse>(sessionPath(host, id, 'send'), { ...o, method: 'POST', body: { text } }),
@@ -189,12 +230,17 @@ export const api = {
     request<RegenerateNameResponse>(sessionPath(host, id, 'autoname'), { ...o, method: 'POST', body: {} }),
   kill: (host: string, id: string, o: Opts = {}) =>
     request<KillResponse>(sessionPath(host, id, 'kill'), { ...o, method: 'POST', body: {} }),
+  sleep: (host: string, id: string, o: Opts = {}) =>
+    request<SleepResponse>(sessionPath(host, id, 'sleep'), { ...o, method: 'POST', body: {} }),
 
   spawn: (host: string, body: SpawnRequest, o: Opts = {}) =>
     request<SpawnResponse>(`${hostPath(host)}/spawn`, { ...o, method: 'POST', body }),
   /** The host's Start directories (config `spawnDirs`) and whether its own paths exist. */
   harnesses: (host: string, o: Opts = {}) => request<HarnessesResponse>(`${hostPath(host)}/harnesses`, o),
   spawnDirs: (host: string, o: Opts = {}) => request<SpawnDirsResponse>(`${hostPath(host)}/spawn-dirs`, o),
+  /** Settings → Models: the default model / effort a spawn of `harness` uses on `host` (null clears). */
+  saveHarnessDefaults: (host: string, body: HarnessDefaults, o: Opts = {}) =>
+    request<HarnessDefaults>(`${hostPath(host)}/harness-defaults`, { ...o, method: 'PUT', body }),
   /** Replace the host's list (400 `SpawnDirsError` when invalid); `dryRun` validates only. */
   saveSpawnDirs: (host: string, spawnDirs: SpawnDirEntry[], { dryRun = false, ...o }: Opts & { dryRun?: boolean } = {}) =>
     request<SpawnDirsResponse>(`${hostPath(host)}/spawn-dirs`, { ...o, method: 'PUT', body: { spawnDirs, ...(dryRun ? { dryRun } : {}) } }),
@@ -208,6 +254,14 @@ export const api = {
   /** Pause / resume a job (`jobs.<name>.enabled`). */
   setJobEnabled: (host: string, name: string, enabled: boolean, o: Opts = {}) =>
     request<JobEnabledResponse>(`${hostPath(host)}/jobs/${enc(name)}/enabled`, { ...o, method: 'POST', body: { enabled } }),
+  /** The host's scheduled sessions, pending and recent (`overmind schedule --json`). 404 / 501: an older server / CLI. */
+  schedule: (host: string, o: Opts = {}) => request<ScheduleResponse>(`${hostPath(host)}/schedule`, o),
+  /** Start a session later on `host` (an agent starts then, not now). */
+  scheduleAdd: (host: string, body: ScheduleAddBody, o: Opts = {}) =>
+    request<{ host: string; entry: ScheduledEntry }>(`${hostPath(host)}/schedule`, { ...o, method: 'POST', body }),
+  /** Cancel a pending scheduled session. */
+  cancelScheduled: (host: string, id: string, o: Opts = {}) =>
+    request<{ host: string; id: string; output: string }>(`${hostPath(host)}/schedule/${enc(id)}/cancel`, { ...o, method: 'POST', body: {} }),
   /** The host's git repos (`overmind repos --json --all`), its `repos` settings and its sync timer. */
   repos: (host: string, o: Opts = {}) => request<ReposResponse>(`${hostPath(host)}/repos`, o),
   /** Replace the host's `repos` settings (400 `{ error, errors }` when invalid). */
@@ -262,6 +316,9 @@ export const api = {
   /** Which of these paths (as written in chat, relative to the session cwd) exist on the session's host. */
   fileStat: (host: string, id: string, paths: string[], o: Opts = {}) =>
     request<FileStatResponse>(sessionPath(host, id, 'files/stat'), { ...o, method: 'POST', body: { paths } }),
+  /** The .plain modules beside a .plain file (its checkout's, else its directory's): term lookup across modules. */
+  filePlain: (host: string, id: string, path: string, o: Opts = {}) =>
+    request<PlainModulesResponse>(sessionPath(host, id, 'files/plain'), { ...o, method: 'POST', body: { path } }),
   /** Open the file with its default app — on `host`, not in this browser. */
   fileOpen: (host: string, id: string, path: string, o: Opts = {}) =>
     request<FileOpenResponse>(sessionPath(host, id, 'files/open'), { ...o, method: 'POST', body: { path } }),
@@ -343,6 +400,23 @@ export const api = {
   prSeen: (host: string, pr: string, o: Opts = {}) =>
     request<{ host: string; pr: string; seenAt: number | null }>(`${hostPath(host)}/prs/seen`, { ...o, method: 'POST', body: { pr } }),
   /** Check it out, then start a session in the worktree whose first prompt says what the PR is. */
+  /** The diff reviewer over a PR without a session: the diff from the host's clone (`refetch`: fetch now). */
+  prDiff: (host: string, pr: PrKey, since: string | null, refetch = false, o: Opts = {}) =>
+    request<PrDiffResponse>(`${prPath(host, pr)}/diff?${new URLSearchParams({ ...(since ? { since } : {}), ...(refetch ? { refetch: '1' } : {}) })}`, o),
+  prNotes: (host: string, pr: PrKey, o: Opts = {}) => request<PrNotesState>(`${prPath(host, pr)}/notes`, o),
+  prNoteCreate: (host: string, pr: PrKey, body: ReviewAnchor & { body: string; base?: string | null }, o: Opts = {}) =>
+    request<PrNotesState & { thread: PrNote }>(`${prPath(host, pr)}/notes`, { ...o, method: 'POST', body }),
+  prNoteUpdate: (host: string, pr: PrKey, note: string, patch: { body?: string; resolved?: boolean }, o: Opts = {}) =>
+    request<PrNotesState & { thread: PrNote }>(`${prPath(host, pr)}/notes/${enc(note)}`, { ...o, method: 'PUT', body: patch }),
+  prNoteDelete: (host: string, pr: PrKey, note: string, o: Opts = {}) => request<PrNotesState>(`${prPath(host, pr)}/notes/${enc(note)}`, { ...o, method: 'DELETE' }),
+  /** Post one note as a GitHub review comment on its lines (as the host's gh login). */
+  prNotePost: (host: string, pr: PrKey, note: string, headOid: string, o: Opts = {}) =>
+    request<PrNotesState & { thread: PrNote }>(`${prPath(host, pr)}/notes/${enc(note)}/post`, { ...o, method: 'POST', body: { headOid } }),
+  /** A session on the PR's worktree whose first prompt is the open notes. */
+  prHandoff: (host: string, pr: PrKey, summary: string, o: Opts = {}) =>
+    request<PrSpawnResponse>(`${prPath(host, pr)}/notes/handoff`, { ...o, method: 'POST', body: { summary } }),
+  prAsk: (host: string, pr: PrKey, body: Partial<ReviewAnchor> & { question: string; head?: string | null; base?: string | null }, o: Opts = {}) =>
+    request<{ host: string; ask: SideAsk }>(`${prPath(host, pr)}/ask`, { ...o, method: 'POST', body }),
   prSpawn: (host: string, body: { pr: string; prompt?: string; name?: string; model?: string; harness?: string }, o: Opts = {}) =>
     request<PrSpawnResponse>(`${hostPath(host)}/prs/spawn`, { ...o, method: 'POST', body }),
 
@@ -369,6 +443,18 @@ export const api = {
   runGroups: (o: Opts = {}) => request<GroupsResponse>('/api/groups/run', { ...o, method: 'POST', body: {} }),
   /** Rename a group / move a session (409: the id or label was refused). */
   editGroups: (edit: GroupEdit, o: Opts = {}) => request<GroupsResponse>('/api/groups/edit', { ...o, method: 'POST', body: edit }),
+  /** Slack links: the bridge's state, from the `slack.host` server (proxied). */
+  slack: (o: Opts = {}) => request<SlackStatus>('/api/slack', o),
+  /** Link a session to a Slack thread / channel / DM for `minutes`. */
+  slackLink: (body: { host: string; session: string; url: string; minutes: SlackMinutes; task?: string; mode?: 'mention' | 'proactive' }, o: Opts = {}) =>
+    request<SlackLink>('/api/slack/link', { ...o, method: 'POST', body }),
+  /** Settings → Slack: a bridge's `slack.spawn` (null = off), saved in its config and live at once. */
+  setSlackSpawn: (bridge: string, spawn: SlackSpawn | null, o: Opts = {}) =>
+    request<SlackStatus>('/api/slack/spawn', { ...o, method: 'PUT', body: { bridge, spawn } }),
+  slackUnlink: (id: string, o: Opts = {}) => request<SlackLink>(`/api/slack/links/${enc(id)}/unlink`, { ...o, method: 'POST', body: {} }),
+  /** Link the session of an ended link to the same place again (same instructions and mode); no `minutes` = as long as before. */
+  slackRelink: (id: string, minutes?: SlackMinutes, o: Opts = {}) =>
+    request<SlackLink>(`/api/slack/links/${enc(id)}/relink`, { ...o, method: 'POST', body: minutes === undefined ? {} : { minutes } }),
   /** The live inbox: brief + everything waiting on you, from the inbox host (proxied). */
   inbox: (o: Opts = {}) => request<InboxResponse>('/api/inbox', o),
   /** Scan now: the Slack & email scan starts in the background, every other source is re-read. */

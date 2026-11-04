@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useLocation } from 'wouter'
 import { AudioLinesIcon, InboxIcon, BotIcon, CircleDotIcon, GaugeIcon, GitPullRequestIcon, NotebookPenIcon, SquareCheckBigIcon, NotebookTextIcon, Settings2Icon } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -46,7 +47,7 @@ function useModules(): Module[] {
   return all.filter((m): m is Module => m !== null)
 }
 
-/** One icon button per module (the sidebar row, the rail). The scratchpad has none there: ⌘K or its shortcut. */
+/** One icon button per module (the top bar); the open one is highlighted. The scratchpad has none there: ⌘K or its shortcut. */
 export function ModuleButtons({
   size = 'icon',
   className,
@@ -59,15 +60,18 @@ export function ModuleButtons({
   /** Only this group (absent: all). */
   group?: Module['group']
 }) {
+  const [location] = useLocation()
   const modules = useModules().filter((m) => m.id !== 'scratchpad' && !exclude.includes(m.id) && (!group || m.group === group))
   return (
     <>
       {modules.map((m) => {
         const title = m.hint ? withHint(m.label, m.hint) : m.label
-        const cls = cn('text-dimmer hover:text-foreground', className)
+        const path = m.href?.slice(1)
+        const active = !!path && (location === path || location.startsWith(`${path}/`))
+        const cls = cn('text-dimmer hover:text-foreground', className, active && 'bg-accent text-accent-foreground')
         return m.href ? (
           <Button key={m.id} asChild variant="ghost" size={size} className={cls}>
-            <a href={m.href} aria-label={m.label} title={title}>
+            <a href={m.href} aria-label={m.label} aria-current={active ? 'page' : undefined} title={title}>
               {m.icon}
             </a>
           </Button>
@@ -81,21 +85,24 @@ export function ModuleButtons({
   )
 }
 
-/** The modules as dropdown items (the mobile ⋯ menu). */
-export function ModuleMenuItems({ exclude = [] }: { exclude?: ModuleId[] }) {
-  const modules = useModules().filter((m) => !exclude.includes(m.id))
+/** Finger-sized rows for the mobile ⋯ menu. */
+export const MENU_ITEM = 'min-h-11 gap-3 px-3 text-[0.9375rem] [&_svg:not([class*=size-])]:size-5'
+
+/** The modules as dropdown items (the mobile ⋯ menu); `group` picks one group. */
+export function ModuleMenuItems({ exclude = [], group }: { exclude?: ModuleId[]; group?: Module['group'] }) {
+  const modules = useModules().filter((m) => !exclude.includes(m.id) && (!group || m.group === group))
   return (
     <>
       {modules.map((m) =>
         m.href ? (
-          <DropdownMenuItem key={m.id} asChild>
+          <DropdownMenuItem key={m.id} asChild className={MENU_ITEM}>
             <a href={m.href}>
               {m.icon}
               {m.label}
             </a>
           </DropdownMenuItem>
         ) : (
-          <DropdownMenuItem key={m.id} onSelect={m.run}>
+          <DropdownMenuItem key={m.id} onSelect={m.run} className={MENU_ITEM}>
             {m.icon}
             {m.label}
           </DropdownMenuItem>

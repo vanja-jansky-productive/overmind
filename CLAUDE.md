@@ -7,13 +7,13 @@ app. Read [README.md](README.md) and [docs/architecture.md](docs/architecture.md
 
 ```
 Cargo.toml             workspace
-crates/overmind/       the `overmind` binary + library
+crates/overmind/          the `overmind` binary + library
   src/core/            discovery, backends (tmux/iTerm), naming, tmux sessions, hosts/config — no printing
   src/cli/             argument handling and text/JSON rendering
   src/tui/             the `watch` dashboard (ratatui)
   SKILL.md             Claude Code skill installed by `overmind skill install`
   tests/               integration tests
-crates/overmind-desktop/ Overmind.app: Tauri 2 shell around the web UI (not a default member — use -p overmind-desktop)
+crates/overmind-desktop/  Overmind.app: Tauri 2 shell around the web UI (not a default member — use -p overmind-desktop)
 web/                   web server (server.mjs, lib/), Node >= 22, no npm deps
   ui/                  React + shadcn/ui PWA (npm, Vite build → ui/dist, gitignored) — see web/ui/README.md
 docs/                  setup, architecture, CLI reference, migration
@@ -33,8 +33,8 @@ cargo build                       # from the repo root
 cargo test                        # Rust unit + integration tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-cargo run -q -p overmind -- --help # run the CLI from source
-cargo test -p overmind-desktop    # the desktop app (crates/overmind-desktop/bundle.sh builds Overmind.app)
+cargo run -q -p overmind -- --help   # run the CLI from source
+cargo test -p overmind-desktop       # the desktop app (crates/overmind-desktop/bundle.sh builds Overmind.app)
 
 cd web && node --test tests/      # web tests (no network, child processes mocked)
 cd web/ui && npm ci && npm run build && npm run lint && npm test   # React UI (overmind web build does ci+build)
@@ -53,7 +53,8 @@ never a real home directory, real config or live sessions.
 - Deploy every push to **all** hosts in the overmind config, not just the one serving the desktop
   app: each host runs its own web server and CLI, and a spawn or fix on one host may go
   through another's. Run `ssh <host> '~/Code/project/scripts/deploy.sh'` for each (they can run
-  in parallel) and check that each one ends with "web server up".
+  in parallel) and check that each one ends with "web server up". A host provisioned by other
+  tooling may keep its checkout elsewhere (e.g. `~/.local/src/overmind`): run that checkout's script.
 - Commit only your own files, because other sessions may have uncommitted work in the same tree.
 - If you hit a conflict because another session is changing the same thing (a rejected push, a
   rebase conflict, overlapping edits), move your work into a git worktree. Rebase it onto `main`

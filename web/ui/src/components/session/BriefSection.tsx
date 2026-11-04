@@ -4,6 +4,7 @@ import {
   CircleAlertIcon,
   CircleDotIcon,
   FileIcon,
+  FlagIcon,
   FolderGit2Icon,
   GitBranchIcon,
   GitPullRequestIcon,
@@ -32,6 +33,7 @@ import { pathCandidates } from '@/lib/paths'
 import { cn } from '@/lib/utils'
 
 const KIND_ICON: Record<string, typeof FileIcon> = {
+  Origin: FlagIcon,
   PR: GitPullRequestIcon,
   Issue: CircleDotIcon,
   Artifact: SparklesIcon,
@@ -42,6 +44,8 @@ const KIND_ICON: Record<string, typeof FileIcon> = {
   Worktree: FolderGit2Icon,
   Link: LinkIcon,
 }
+/** Resource groups shown as their own parts between the Summary and the Todos. */
+const TOP_KINDS = new Set(['Origin', 'PR'])
 /** Kinds whose `path` is a file the preview can show. */
 const FILE_KINDS = new Set(['File', 'Spec'])
 /** The Files group is collapsed until the viewer opens it (remembered per viewer). */
@@ -81,15 +85,20 @@ export function BriefSection({ host, brief: st, fileLinks, desktop = false, canc
     if (editing) textRef.current?.focus()
   }, [editing])
 
-  // Which file resources / summary paths exist on the host (same cache as the chat's links).
+  // Which file resources / paths in the summary, todos and notes exist on the host (same cache as the chat's links).
   const request = fileLinks.request
-  const summary = b?.parsed.summary ?? ''
-  const resources = b?.parsed.resources
+  const parsed = b?.parsed
+  const summary = parsed?.summary ?? ''
   useEffect(() => {
-    const paths = (resources ?? []).filter((r) => r.path && FILE_KINDS.has(String(r.kind))).map((r) => r.path as string)
-    if (summary) paths.push(...pathCandidates(summary))
+    const paths: string[] = []
+    for (const r of parsed?.resources ?? []) {
+      if (r.path && FILE_KINDS.has(String(r.kind))) paths.push(r.path)
+      else if (r.kind == null && r.text) paths.push(...pathCandidates(r.text))
+    }
+    if (parsed?.summary) paths.push(...pathCandidates(parsed.summary))
+    for (const t of briefTodos(parsed)) paths.push(...pathCandidates(t.text))
     if (paths.length) request(paths)
-  }, [resources, summary, request])
+  }, [parsed, request])
 
   const startEdit = () => b && setDraft(briefBody(b.markdown))
   const saveEdit = async () => {
@@ -104,11 +113,14 @@ export function BriefSection({ host, brief: st, fileLinks, desktop = false, canc
   const progress = todoProgress(todos)
   const worktrees = b?.worktrees ?? []
   // The Worktrees list includes the cwd's checkout: the Git line would say it twice.
-  const groups = groupResources(resources).filter((g) => !(worktrees.length && g.kind === 'Git'))
+  const groups = groupResources(parsed?.resources).filter((g) => !(worktrees.length && g.kind === 'Git'))
+  // Where the work came from and what it shipped sit under the Summary; the rest goes below the Todos.
+  const topGroups = groups.filter((g) => g.kind != null && TOP_KINDS.has(g.kind))
+  const restGroups = groups.filter((g) => !(g.kind != null && TOP_KINDS.has(g.kind)))
   const empty = !!b && !b.exists && !summary && !todos.length && !groups.length && !worktrees.length
 
   const regenerateButton = (label: string, className?: string) => (
-    <Button variant="outline" className={cn('h-9 px-3', className)} disabled={busy || !b} onClick={() => void st.regenerate()}>
+    <Button variant="outline" size="lg" className={className} disabled={busy || !b} onClick={() => void st.regenerate()}>
       {busy ? <Loader2Icon className="animate-spin" /> : <SparklesIcon />}
       {busy ? 'Generating…' : label}
     </Button>
@@ -142,10 +154,10 @@ export function BriefSection({ host, brief: st, fileLinks, desktop = false, canc
         />
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-dimmer">{desktop ? '⌘/Ctrl+Enter saves · Esc cancels' : 'Sections: Summary, Resources, Todos'}</span>
-          <Button variant="ghost" className="h-9 px-3" onClick={() => setDraft(null)} disabled={st.saving}>
+          <Button variant="ghost" size="lg" onClick={() => setDraft(null)} disabled={st.saving}>
             Cancel
           </Button>
-          <Button className="h-9 px-4" onClick={() => void saveEdit()} disabled={st.saving}>
+          <Button size="lg" onClick={() => void saveEdit()} disabled={st.saving}>
             {st.saving ? <Loader2Icon className="animate-spin" /> : null}
             Save
           </Button>
@@ -199,6 +211,16 @@ export function BriefSection({ host, brief: st, fileLinks, desktop = false, canc
             )}
           </Part>
 
+          {topGroups.map((g) => (
+            <Part key={g.kind} title={g.label} aside={g.items.length > 1 ? <span className="tabular-nums">{g.items.length}</span> : null}>
+              <ul className="space-y-1">
+                {g.items.map((r, i) => (
+                  <ResourceRow key={`${r.text}-${i}`} r={r} fileLinks={fileLinks} />
+                ))}
+              </ul>
+            </Part>
+          ))}
+
           {todos.length ? (
             <Part title="Todos" aside={progress ? <span className="tabular-nums">{`${progress.done}/${progress.total}`}</span> : null}>
               {progress ? (
@@ -226,11 +248,11 @@ export function BriefSection({ host, brief: st, fileLinks, desktop = false, canc
             </Part>
           ) : null}
 
-          {groups.length || worktrees.length ? (
+          {restGroups.length || worktrees.length ? (
             <Part title="Resources">
               <div className="space-y-3">
                 {worktrees.length ? <WorktreesGroup worktrees={worktrees} editor={b.editor} /> : null}
-                {groups.map((g) => (g.kind === 'File' ? <FilesGroup key="files" g={g} fileLinks={fileLinks} /> : <Group key={g.kind ?? 'notes'} g={g} fileLinks={fileLinks} />))}
+                {restGroups.map((g) => (g.kind === 'File' ? <FilesGroup key="files" g={g} fileLinks={fileLinks} /> : <Group key={g.kind ?? 'notes'} g={g} fileLinks={fileLinks} />))}
               </div>
             </Part>
           ) : null}
@@ -362,7 +384,7 @@ function WorktreesGroup({ worktrees, editor }: { worktrees: BriefWorktree[]; edi
               <span className="text-muted-foreground select-all">{w.display}</span>
             </span>
             {w.editorUrl ? (
-              <Button asChild variant="outline" size="sm" className="h-7 shrink-0 rounded-md px-2 text-xs pointer-coarse:hidden">
+              <Button asChild variant="outline" size="xs" className="pointer-coarse:hidden">
                 <a href={w.editorUrl} title={`Open ${w.display} in ${editor === 'cursor' ? 'Cursor' : 'VS Code'}`}>
                   {label}
                 </a>

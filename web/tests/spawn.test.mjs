@@ -269,6 +269,59 @@ test('spawner omits -n for an auto-generated name', async () => {
   assert.equal(res.tmuxSession, 'om-101010');
 });
 
+test('validateSpawnRequest takes a GitHub identity for Claude only', () => {
+  const opts = { spawnDirs: ['/tmp'] };
+  assert.equal(validateSpawnRequest({}, opts).ghIdentity, null);
+  assert.equal(validateSpawnRequest({ ghIdentity: '' }, opts).ghIdentity, null);
+  assert.equal(validateSpawnRequest({ ghIdentity: 'bot' }, opts).ghIdentity, 'bot');
+  assert.equal(validateSpawnRequest({ ghIdentity: 'a b;c' }, opts).ok, false);
+  assert.match(validateSpawnRequest({ ghIdentity: 'bot', harness: 'codex' }, opts).error, /only Claude/);
+});
+
+test('spawner launches under a GitHub identity: wrapped launcher, pane option, unknown refused', async () => {
+  const calls = [];
+  const run = async (bin, args) => {
+    calls.push([bin, ...args]);
+    if (args[0] === 'has-session') throw new Error('no such session');
+    return { stdout: '', stderr: '' };
+  };
+  const asked = [];
+  const sp = createSpawner({
+    run,
+    tmux: 'tmux',
+    launcher: 'claude',
+    sleep: async () => {},
+    ghIdentities: [{ name: 'bot', login: 'my-app[bot]' }],
+    ghIdentityLauncher: async (name, launcher) => {
+      asked.push([name, launcher]);
+      return `export OVERMIND_GH_IDENTITY=${name} && ${launcher} --append-system-prompt x`;
+    },
+  });
+  const res = await sp.spawn({ name: 'job', dir: '/tmp', prompt: 'go', ghIdentity: 'bot' });
+  assert.deepEqual(asked, [['bot', 'claude']]);
+  assert.deepEqual(calls.find((c) => c[1] === 'send-keys'), ['tmux', 'send-keys', '-t', 'job:', '-l', '--', "export OVERMIND_GH_IDENTITY=bot && claude --append-system-prompt x -n 'job' 'go'"]);
+  assert.ok(calls.some((c) => c.join(' ') === 'tmux set-option -p -t job: @overmind_gh_identity bot'));
+  assert.equal(res.ghIdentity, 'bot');
+  await assert.rejects(sp.spawn({ name: 'job2', dir: '/tmp', prompt: '', ghIdentity: 'nope' }), /no GitHub identity "nope"/);
+});
+
+test('validateSpawnRequest takes an embed label; the spawner puts it on the pane', async () => {
+  const opts = { spawnDirs: ['/tmp'] };
+  assert.equal(validateSpawnRequest({}, opts).embed, null);
+  assert.equal(validateSpawnRequest({ embed: 'fin' }, opts).embed, 'fin');
+  assert.equal(validateSpawnRequest({ embed: 'a b;c' }, opts).ok, false);
+  const calls = [];
+  const run = async (bin, args) => {
+    calls.push([bin, ...args]);
+    if (args[0] === 'has-session') throw new Error('no such session');
+    return { stdout: '', stderr: '' };
+  };
+  const sp = createSpawner({ run, tmux: 'tmux', launcher: 'claude', sleep: async () => {} });
+  const res = await sp.spawn({ name: 'emb', dir: '/tmp', prompt: '', embed: 'fin' });
+  assert.ok(calls.some((c) => c.join(' ') === 'tmux set-option -p -t emb: @overmind_embed fin'));
+  assert.equal(res.embed, 'fin');
+});
+
 test('a typed title names the session: the agent gets it as is, tmux a slug of it', () => {
   const v = validateSpawnRequest;
   const lc = launchCommand;

@@ -1,4 +1,4 @@
-import { BotIcon } from 'lucide-react'
+import { AppWindowIcon, BotIcon, MessagesSquareIcon } from 'lucide-react'
 
 import type { Session } from '@/api/types'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -34,14 +34,35 @@ export function JobChip({ session: s, className }: { session: Pick<Session, 'ori
 }
 
 /**
- * A status filter chip's label: the "Bots" filter is just the bot icon (the chip row is
+ * A session an app's embedded Overmind panel started (`embed`): app icon + the app's name. Nothing
+ * for any other session.
+ */
+export function EmbedChip({ session: s, className }: { session: Pick<Session, 'embed'>; className?: string }) {
+  if (!s.embed) return null
+  return (
+    <span
+      title={`Started from ${s.embed}'s Overmind panel`}
+      className={cn(
+        'inline-flex h-4.5 max-w-[40%] min-w-0 shrink items-center gap-1 rounded-[5px] border border-border px-1 text-[0.6875rem] text-muted-foreground',
+        className,
+      )}
+    >
+      <AppWindowIcon className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">{s.embed}</span>
+    </span>
+  )
+}
+
+/**
+ * A status filter chip's label: the Bots / Slack / Apps filters are just their icon (the chip row is
  * crowded), every other filter its name.
  */
 export function StatusFilterLabel({ filter }: { filter: StatusFilter }) {
-  if (filter.id !== 'scheduled') return <>{filter.label}</>
+  const Icon = filter.id === 'scheduled' ? BotIcon : filter.id === 'slack' ? MessagesSquareIcon : filter.id === 'embedded' ? AppWindowIcon : null
+  if (!Icon) return <>{filter.label}</>
   return (
     <>
-      <BotIcon className="size-3.5" aria-hidden />
+      <Icon className="size-3.5" aria-hidden />
       <span className="sr-only">{filter.label}</span>
     </>
   )

@@ -19,6 +19,9 @@ export const MAX_TOTAL_LINES = 50000;
 const GIT_TIMEOUT_MS = 20000;
 /** Checkouts diffed for one session at most (its cwd's first). */
 export const MAX_ROOTS = 12;
+/** PlainLang specs: the diff carries their whole text, up to this size per side. */
+export const MAX_PLAIN_BYTES = 512 * 1024;
+const PLAIN_RE = /\.plain$/i;
 const MAX_BUFFER = 64 * 1024 * 1024;
 /** `?base=`: a branch, tag or sha; never an option. */
 const REF_RE = /^(?!-)[A-Za-z0-9._/@{}~^-]{1,200}$/;
@@ -219,6 +222,19 @@ export function createDiffer({ run, tmpDir = os.tmpdir(), home = os.homedir() })
       total += hunks.reduce((s, h) => s + h.lines.length, 0);
       return { ...f, binary: p.binary, additions, deletions, truncated: cut, hunks };
     });
+    // A .plain spec is read as a whole (the UI's spec view diffs clauses, not lines): both texts ride along.
+    await mapLimit(files.filter((f) => !f.binary && PLAIN_RE.test(f.path)), 4, async (f) => {
+      const blob = (rev, p) =>
+        git(root, ['cat-file', 'blob', `${rev}:${p}`]).then(
+          (r) => (r.stdout.length > MAX_PLAIN_BYTES ? null : r.stdout),
+          () => null,
+        );
+      const [before, after] = await Promise.all([
+        f.status === 'added' || baseSha === EMPTY_TREE ? null : blob(baseSha, f.oldPath ?? f.path),
+        f.status === 'deleted' ? null : blob(tree, f.path),
+      ]);
+      f.plain = { old: before, new: after };
+    });
     return { files, stats, truncated };
   }
 
@@ -303,7 +319,43 @@ export function createDiffer({ run, tmpDir = os.tmpdir(), home = os.homedir() })
     return { fingerprint, unchanged: false, repos };
   }
 
-  return { diff, roots, diffAll };
+  const prFetched = new Map(); // `${root}#${number}` → when its refs were last fetched (ms)
+
+  /**
+   * A pull request's diff from a local clone, with no worktree and no checkout: its head and
+   * base are fetched into private refs (`refs/overmind/pr/<n>/head`, `…/base`) and diffed from
+   * their merge-base, like GitHub's "Files changed". Fetches at most every `fetchEveryMs` unless
+   * `refetch`. → the same shape as one checkout of diffAll: { root, branch, head, base, tree,
+   * fingerprint, unchanged, files, stats, truncated }
+   */
+  async function prDiff(root, { number, baseBranch, headBranch = null, since = null, refetch = false, fetchEveryMs = 60_000, now = Date.now() } = {}) {
+    if (!Number.isInteger(number) || number <= 0) throw new DiffError('invalid PR number', 400);
+    if (!validRef(baseBranch)) throw new DiffError('invalid base branch', 400);
+    const top = await revParse(root, ['--show-toplevel']);
+    if (!top) throw new DiffError('the local clone is not a git repository', 409);
+    const headRef = `refs/overmind/pr/${number}/head`;
+    const baseRef = `refs/overmind/pr/${number}/base`;
+    const key = `${top}#${number}`;
+    const have = await revParse(top, ['--verify', '--quiet', `${headRef}^{commit}`]);
+    if (refetch || !have || now - (prFetched.get(key) ?? 0) > fetchEveryMs) {
+      try {
+        await git(top, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', 'origin', `+refs/pull/${number}/head:${headRef}`, `+refs/heads/${baseBranch}:${baseRef}`], { timeout: 60_000 });
+        prFetched.set(key, now);
+      } catch (err) {
+        // Offline or no access: an earlier fetch still shows something.
+        if (!have) throw new DiffError(`could not fetch the PR: ${String(err?.message ?? err).split('\n').pop()}`, 502);
+      }
+    }
+    const head = await revParse(top, ['--verify', '--quiet', `${headRef}^{commit}`]);
+    const baseTip = await revParse(top, ['--verify', '--quiet', `${baseRef}^{commit}`]);
+    if (!head || !baseTip) throw new DiffError('the PR refs are missing after the fetch', 502);
+    const mb = await git(top, ['merge-base', baseTip, head]).then((r) => r.stdout.trim(), () => null);
+    const meta = { root: top, branch: headBranch, head, base: { ref: baseBranch, sha: mb || baseTip }, tree: head, fingerprint: `${mb || baseTip}:${head}` };
+    if (since && since === meta.fingerprint) return { ...meta, unchanged: true };
+    return { ...meta, unchanged: false, ...(await filesOf(meta)) };
+  }
+
+  return { diff, roots, diffAll, prDiff };
 }
 
 function cutHunks(hunks, max) {
