@@ -26,6 +26,7 @@ function isAlive(pid, killProcess) {
  *   keys         (session, key) => Promise — backends.keys (the Codex interrupt)
  *   listSessions () => Promise<rows|null> — a fresh `overmind list` of this host
  *   interruptMs  how long a Codex interrupt may take to land before SIGTERM anyway
+ *   now          () => ms — the interrupt's wall clock (injected for tests)
  */
 export function createKiller({
   run,
@@ -37,6 +38,7 @@ export function createKiller({
   keys = null,
   listSessions = null,
   interruptMs = 5000,
+  now = Date.now,
 }) {
   if (typeof run !== 'function') throw new TypeError('run must be a function');
   const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -45,7 +47,8 @@ export function createKiller({
    * A busy or waiting Codex row: Escape first (its menu's "No", the turn's interrupt), so the
    * rollout ends with `turn_aborted`. SIGTERM alone leaves an embedded turn open forever, and a
    * daemon-mode turn keeps running in the daemon. Waits until the row reads idle (or is gone),
-   * at most `interruptMs`; the kill goes ahead either way.
+   * at most `interruptMs` of wall clock — a list can take seconds (iTerm peeks), so the sleeps
+   * alone are no bound. The kill goes ahead either way.
    * @returns 'skipped' | 'interrupted' | 'timeout' | 'failed'
    */
   async function interrupt(session) {
@@ -57,7 +60,8 @@ export function createKiller({
       return 'failed';
     }
     const step = 250;
-    for (let waited = 0; waited < interruptMs; waited += step) {
+    const end = now() + interruptMs;
+    while (now() < end) {
       await wait(step);
       const rows = listSessions ? await listSessions().catch(() => null) : null;
       if (!rows) continue;

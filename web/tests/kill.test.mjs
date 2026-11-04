@@ -118,13 +118,35 @@ test('kill: a busy or waiting Codex row is interrupted with Escape first, then S
   }
 });
 
-test('kill: an interrupt that never lands still SIGTERMs; idle Codex and Claude rows get no Escape', async () => {
-  const keys = [];
+test('kill: the interrupt wait is bounded by the wall clock, slow lists included', async () => {
+  let clock = 0;
+  let listed = 0;
   const { sent, killProcess } = fakeProcess();
   const k = createKiller({
     run: noRun,
     killProcess,
-    sleep: async () => {},
+    sleep: async (ms) => void (clock += ms),
+    now: () => clock,
+    keys: async () => {},
+    // Each list takes 2 s (osascript peeks): 5 s fit two of them, not twenty.
+    listSessions: async () => ((listed += 1), (clock += 2000), [{ pid: 4242, status: 'busy' }]),
+  });
+  const res = await k.kill({ pid: 4242, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%7' });
+  assert.equal(res.interrupt, 'timeout');
+  assert.equal(listed, 3);
+  assert.ok(clock < 5000 + 2250 + 1, `${clock}`);
+  assert.ok(sent.includes('SIGTERM'));
+});
+
+test('kill: an interrupt that never lands still SIGTERMs; idle Codex and Claude rows get no Escape', async () => {
+  const keys = [];
+  const { sent, killProcess } = fakeProcess();
+  let clock = 0;
+  const k = createKiller({
+    run: noRun,
+    killProcess,
+    sleep: async (ms) => void (clock += ms),
+    now: () => clock,
     interruptMs: 1000,
     keys: async (s, key) => void keys.push(key),
     listSessions: async () => [{ pid: 4242, status: 'busy' }],
