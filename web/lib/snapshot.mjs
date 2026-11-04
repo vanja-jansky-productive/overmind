@@ -6,6 +6,10 @@
 // keeps the last merged result and refreshes it in the background every `refreshMs` for
 // as long as someone asked within `idleAfterMs`. Only the very first request (or the first
 // one after idling with no snapshot) waits for a build.
+//
+// A background tick builds with `force: false`: whether local discovery actually runs the CLI
+// is lib/overmind.mjs's call (on a file change, or after its age bound / TTL). A change signal
+// calls `poke(at)` so the rebuild lands when the change is due rather than on the next tick.
 
 export function createSnapshot({
   build,
@@ -21,6 +25,8 @@ export function createSnapshot({
   let refreshing = null;
   let lastAsked = 0;
   let timer = null;
+  let pokeTimer = null;
+  let pokeAt = Infinity;
   let stopped = false;
 
   function schedule() {
@@ -37,13 +43,13 @@ export function createSnapshot({
   /**
    * Rebuild now (de-duplicated). Resolves the new snapshot, or the old one if the build failed.
    * `fresh`: the build must start after this call (a change was just made) — an in-flight
-   * one may predate it, so a new build is chained behind it.
+   * one may predate it, so a new build is chained behind it. `force` goes to `build`.
    */
-  function refresh({ fresh = false } = {}) {
-    if (refreshing && fresh) return refreshing.then(() => refresh());
+  function refresh({ fresh = false, force = false } = {}) {
+    if (refreshing && fresh) return refreshing.then(() => refresh({ force }));
     if (refreshing) return refreshing;
     refreshing = Promise.resolve()
-      .then(build)
+      .then(() => build({ force }))
       .then((body) => {
         snapshot = { body, at: now() };
         return snapshot;
@@ -77,11 +83,30 @@ export function createSnapshot({
     return snapshot ? { ...snapshot.body, snapshotAt: snapshot.at } : null;
   }
 
+  /**
+   * A change is due at `at` (ms): build then, if someone is watching. Pokes coalesce — one
+   * pending build, at the earliest time asked. A build in flight when it fires may predate the
+   * change, so the poked one is chained behind it.
+   */
+  function poke(at) {
+    if (stopped || !snapshot || now() - lastAsked > idleAfterMs) return;
+    if (pokeTimer && pokeAt <= at) return;
+    clearTimer(pokeTimer);
+    pokeAt = at;
+    pokeTimer = setTimer(() => {
+      pokeTimer = null;
+      pokeAt = Infinity;
+      refresh({ fresh: true }).catch(() => {});
+    }, Math.max(0, at - now()));
+    pokeTimer?.unref?.();
+  }
+
   function stop() {
     stopped = true;
     clearTimer(timer);
-    timer = null;
+    clearTimer(pokeTimer);
+    timer = pokeTimer = null;
   }
 
-  return { get, peek, refresh, stop };
+  return { get, peek, refresh, poke, stop };
 }

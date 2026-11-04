@@ -101,3 +101,58 @@ test('refresh({ fresh: true }) chains a new build behind one already in flight',
   assert.equal((await first).body.n, 1);
   assert.equal((await fresh).body.n, 2, 'the fresh one started after the first finished');
 });
+
+test('force reaches build, through a fresh chain too; the background tick builds with force: false', async () => {
+  const clock = fakeClock();
+  const seen = [];
+  let release;
+  const snap = createSnapshot({
+    build: (opts) => (seen.push(opts.force), seen.length === 1 ? new Promise((r) => (release = () => r({ n: 1 }))) : Promise.resolve({ n: seen.length })),
+    ...clock,
+  });
+  const first = snap.get();
+  const chained = snap.refresh({ fresh: true, force: true });
+  await new Promise((r) => setImmediate(r));
+  release();
+  await first;
+  await chained;
+  assert.deepEqual(seen, [false, true]);
+  clock.advance(3000);
+  await clock.fire();
+  assert.deepEqual(seen, [false, true, false], 'tick');
+});
+
+test('poke: no-op while nobody watches; two pokes → one build at the earliest', async () => {
+  const clock = fakeClock();
+  let builds = 0;
+  const timers = [];
+  const snap = createSnapshot({
+    build: async () => ({ n: ++builds }),
+    now: clock.now,
+    setTimer: (fn, ms) => {
+      const t = { fn, ms, cleared: false };
+      timers.push(t);
+      return t;
+    },
+    clearTimer: (t) => t && (t.cleared = true),
+    refreshMs: 3000,
+    idleAfterMs: 10_000,
+  });
+  snap.poke(clock.now());
+  assert.equal(timers.length, 0, 'no snapshot yet: nothing to rebuild');
+  await snap.get();
+  const live = () => timers.filter((t) => !t.cleared);
+  assert.equal(live().length, 1, 'the tick');
+  snap.poke(clock.now() + 4000);
+  snap.poke(clock.now() + 1000);
+  snap.poke(clock.now() + 2000);
+  const pokes = live().filter((t) => t.ms !== 3000);
+  assert.deepEqual(pokes.map((t) => t.ms), [1000], 'one pending poke, the earliest');
+  pokes[0].fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(builds, 2);
+  clock.advance(20_000);
+  for (const t of live()) t.cleared = true;
+  snap.poke(clock.now());
+  assert.equal(live().length, 0, 'idle: no build');
+});
