@@ -42,21 +42,28 @@ export function hostStamp(name: string): Stamp {
   return s
 }
 
-/** Move the clocks to a body: `at` for the list, each host's `fetchedAt` (else `at`) for that host; never backwards. */
-export function stampOvermind(overmind: OvermindResponse | null | undefined, at: number): void {
-  overmindStamp.set(at)
-  for (const h of overmind?.hosts ?? []) hostStamp(h.name).set(h.fetchedAt || at)
+/**
+ * Move the clocks to a body: `at` for the list, each host's `fetchedAt` (else `at`) for that host.
+ * A body built on the client (`exact` false) never moves them back. A poll body (`exact`) sets them
+ * outright: the server's `snapshotAt` only goes back when its clock does, and a host's `fetchedAt`
+ * comes from the peer's clock while it answers and from ours while it does not, so forward-only
+ * would freeze a label for as long as one clock is ahead of the other.
+ */
+export function stampOvermind(overmind: OvermindResponse | null | undefined, at: number, exact = false): void {
+  const move = (s: Stamp, v: number) => (exact ? s.force(v) : s.set(v))
+  move(overmindStamp, at)
+  for (const h of overmind?.hosts ?? []) move(hostStamp(h.name), h.fetchedAt || at)
 }
 
-/** `overmind` with the clocks the stamps hold now (stamps only move forward, so these are never older). */
+/** `overmind` with the clocks the stamps hold now (the latest the server said, never a kept body's older ones). */
 export function withStampedClocks(overmind: OvermindResponse): OvermindResponse {
   const at = overmindStamp.get()
   return {
     ...overmind,
-    ...(at > (overmind.snapshotAt ?? 0) ? { snapshotAt: at } : {}),
+    ...(at ? { snapshotAt: at } : {}),
     hosts: overmind.hosts.map((h) => {
       const checked = hostStamp(h.name).get()
-      return checked > (h.fetchedAt ?? 0) ? { ...h, fetchedAt: checked } : h
+      return checked ? { ...h, fetchedAt: checked } : h
     }),
   }
 }
@@ -74,6 +81,8 @@ export function useHostCheckedAt(name: string): number {
 // A reload paints the last list instantly while the first poll runs.
 export const SNAPSHOT_KEY = 'overmind.snapshot'
 export const SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000
+/** A snapshot from further ahead than this was saved under a clock that has since stepped back: dropped. */
+export const SNAPSHOT_MAX_SKEW_MS = 5 * 60 * 1000
 
 export interface OvermindSnapshot {
   overmind: OvermindResponse
@@ -83,7 +92,7 @@ export interface OvermindSnapshot {
 export function loadSnapshot(now = Date.now()): OvermindSnapshot | null {
   const parsed = storage.getJSON<OvermindSnapshot>(SNAPSHOT_KEY)
   if (!parsed || !Array.isArray(parsed.overmind?.hosts) || !parsed.at) return null
-  if (now - parsed.at > SNAPSHOT_MAX_AGE_MS) return null
+  if (now - parsed.at > SNAPSHOT_MAX_AGE_MS || parsed.at - now > SNAPSHOT_MAX_SKEW_MS) return null
   return parsed
 }
 

@@ -19,11 +19,11 @@ export interface FeedState {
 export interface OvermindFeed {
   get: () => FeedState
   subscribe: (fn: () => void) => () => void
-  /** Record a body (from a poll or a caller): stamps move, state only when more than the clocks changed. */
+  /** Record a body from a caller: stamps move forward only, state only when more than the clocks changed. */
   apply: (data: OvermindResponse) => void
   /** Hide a just-closed session now and from polls for CLOSED_HIDE_MS; the clocks stay. */
   drop: (host: string, id: string) => void
-  /** One poll: `fetch` the body, apply it, clear or set `error`, end a refresh. Rethrows aborts. */
+  /** One poll: `fetch` the body, apply it with its clocks set outright, clear or set `error`, end a refresh. Rethrows aborts. */
   poll: (fetch: (signal: AbortSignal) => Promise<OvermindResponse>, signal: AbortSignal) => Promise<void>
   /** An explicit refresh starts: `refreshing` until the next poll that is not aborted settles. */
   startRefresh: () => void
@@ -66,8 +66,9 @@ export function createOvermindFeed(
     update({ overmind: next.overmind })
   }
 
-  const apply = (data: OvermindResponse) => {
-    stampOvermind(data, data?.snapshotAt || now())
+  // `exact`: a poll body sets the stamps outright; a caller's body only moves them forward.
+  const apply = (data: OvermindResponse, exact = false) => {
+    stampOvermind(data, data?.snapshotAt || now(), exact)
     land(data)
   }
 
@@ -77,14 +78,14 @@ export function createOvermindFeed(
       listeners.add(fn)
       return () => void listeners.delete(fn)
     },
-    apply,
+    apply: (data) => apply(data),
     drop: (host, id) => {
       closed.set(closedKey(host, id), now() + CLOSED_HIDE_MS)
       if (snap.overmind) land(snap.overmind)
     },
     poll: async (fetch, signal) => {
       try {
-        apply(await fetch(signal))
+        apply(await fetch(signal), true)
         update({ error: null })
       } catch (err) {
         if (isAbortError(err)) throw err

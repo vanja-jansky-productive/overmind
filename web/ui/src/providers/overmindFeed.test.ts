@@ -92,6 +92,55 @@ test('a client-built body with old clocks (applyOvermind on the kept body) moves
   expect(saved.overmind.hosts[0].fetchedAt).toBe(late - 100)
 })
 
+test('a poll body sets the stamps outright: the server clock stepping back moves "updated" back', async () => {
+  const { feed, save, tick } = setup()
+  await feed.poll(async () => body(1_000_000 + 3_600_000), signal()) // server an hour ahead
+  expect(om.overmindStamp.get()).toBe(4_600_000)
+  tick(5_000)
+  await feed.poll(async () => body(1_005_000), signal()) // NTP fixed it
+  expect(om.overmindStamp.get()).toBe(1_005_000)
+  expect(om.hostStamp('laptop').get()).toBe(1_004_900)
+  tick(60_000)
+  await feed.poll(async () => body(1_065_000), signal())
+  expect(save.mock.lastCall![0].at).toBe(1_065_000) // a reload does not bring the future back
+})
+
+test('a host whose fetchedAt alternates between the peer clock and ours keeps "checked" counting', async () => {
+  const { feed, tick } = setup()
+  const peerAhead = 600_000
+  const withPeer = (at: number, fetchedAt: number) =>
+    body(at, ['a'], {
+      hosts: [
+        { name: 'laptop', ok: true, fetchedAt: at, sessions: [] },
+        { name: 'peer', ok: fetchedAt !== at, fetchedAt, sessions: [] },
+      ],
+    })
+  await feed.poll(async () => withPeer(1_000_000, 1_000_000 + peerAhead), signal()) // answered: its clock
+  expect(om.hostStamp('peer').get()).toBe(1_600_000)
+  for (const step of [5_000, 10_000, 15_000]) {
+    tick(5_000)
+    const at = 1_000_000 + step
+    await feed.poll(async () => withPeer(at, at), signal()) // unreachable: our clock, each try
+    expect(om.hostStamp('peer').get()).toBe(at)
+  }
+  tick(5_000)
+  await feed.poll(async () => withPeer(1_020_000, 1_620_000), signal()) // answers again
+  expect(om.hostStamp('peer').get()).toBe(1_620_000)
+})
+
+test('a caller body and a drop still never move a stamp back', async () => {
+  const { feed, save } = setup()
+  await feed.poll(async () => body(1_000_000, ['a', 'b']), signal())
+  feed.apply(body(990_000, ['a', 'b', 'c'])) // built from older clocks
+  expect(feed.get().overmind!.hosts[0].sessions).toHaveLength(3)
+  expect(om.overmindStamp.get()).toBe(1_000_000)
+  expect(om.hostStamp('laptop').get()).toBe(999_900)
+  feed.drop('laptop', 'c')
+  expect(om.overmindStamp.get()).toBe(1_000_000)
+  const saved = save.mock.lastCall![0]
+  expect([saved.at, saved.overmind.snapshotAt, saved.overmind.hosts[0].fetchedAt]).toEqual([1_000_000, 1_000_000, 999_900])
+})
+
 test('drop hides a session now and from polls for a while, and keeps the clocks', async () => {
   const { feed, save, tick } = setup()
   await feed.poll(async () => body(1_000_000, ['a', 'b']), signal())
@@ -140,4 +189,23 @@ test('refreshing: only an explicit refresh, kept through the poll it aborts, end
 
   await feed.poll(async () => body(1_005_000), signal())
   expect(feed.get().refreshing).toBe(false)
+})
+
+test('loadSnapshot drops a snapshot too old, or from a clock that was ahead and stepped back', () => {
+  const store = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  })
+  try {
+    const now = 100_000_000
+    const at = (t: number) => (om.saveSnapshot({ overmind: body(t), at: t }), om.loadSnapshot(now)?.at ?? null)
+    expect(at(now - 60_000)).toBe(now - 60_000)
+    expect(at(now - om.SNAPSHOT_MAX_AGE_MS - 1)).toBeNull()
+    expect(at(now + 60_000)).toBe(now + 60_000) // small skew: kept
+    expect(at(now + om.SNAPSHOT_MAX_SKEW_MS + 1)).toBeNull()
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
