@@ -38,7 +38,7 @@ import { useTheme, type ThemeChoice } from '@/hooks/useTheme'
 import { WEEKDAYS } from '@/lib/inbox'
 import { SEND_DELAYS, SEND_DELAY_LABELS } from '@/lib/outbox'
 import { PALETTES, parsePalette } from '@/lib/palettes'
-import { TEXT_SIZES, TEXT_SIZE_LABELS } from '@/lib/prefs'
+import { TERM_FONT_SIZES, TEXT_SIZES, TEXT_SIZE_LABELS } from '@/lib/prefs'
 import { shortcutHint, showShortcuts } from '@/lib/shortcuts'
 import { cn } from '@/lib/utils'
 
@@ -202,7 +202,7 @@ function SectionBody({ id }: { id: SectionId }) {
 function GeneralSettings() {
   const { theme, setTheme } = useTheme()
   const desktop = useIsDesktop()
-  const { textSize, setTextSize, hideNotes, setHideNotes, sendDelay, setSendDelay } = usePrefs()
+  const { textSize, setTextSize, termFont, setTermFont, hideNotes, setHideNotes, sendDelay, setSendDelay } = usePrefs()
   return (
     <>
       <Section title="Appearance">
@@ -243,6 +243,22 @@ function GeneralSettings() {
             <ToggleGroupItem value="light" className={segItem}>
               <SunIcon /> Light
             </ToggleGroupItem>
+          </ToggleGroup>
+        </Stacked>
+        <Stacked label="Terminal text" hint="The terminal view; follows the text size">
+          <ToggleGroup
+            type="single"
+            value={String(termFont)}
+            onValueChange={(v) => v && setTermFont(Number(v))}
+            spacing={0}
+            aria-label="Terminal text size"
+            className="w-full rounded-lg bg-muted p-1"
+          >
+            {TERM_FONT_SIZES.map((n, i) => (
+              <ToggleGroupItem key={n} value={String(n)} className={segItem}>
+                {['Small', 'Default', 'Large'][i] ?? `${n}px`}
+              </ToggleGroupItem>
+            ))}
           </ToggleGroup>
         </Stacked>
       </Section>

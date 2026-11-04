@@ -4,6 +4,8 @@ import {
   CircleAlertIcon,
   CircleCheckBigIcon,
   EllipsisIcon,
+  MessageSquareTextIcon,
+  SquareTerminalIcon,
   WifiOffIcon,
   XIcon,
 } from 'lucide-react'
@@ -31,7 +33,9 @@ import { FilePreview } from '@/components/session/FilePreview'
 import { OutboxBubbles } from '@/components/session/OutboxBubbles'
 import type { QuestionActions } from '@/components/session/QuestionCard'
 import { DetailsDrawer, DetailsPanel, type DetailsPanelProps } from '@/components/session/DetailsPanel'
+import { TermView } from '@/components/session/TermView'
 import { Button } from '@/components/ui/button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useFileDrop } from '@/hooks/useAttach'
 import { useBrief } from '@/hooks/useBrief'
 import { useFileStats } from '@/hooks/useFileLinks'
@@ -45,7 +49,7 @@ import { useSettings } from '@/hooks/useSettings'
 import { openStackLink, openStackSheet, type SiblingTarget } from '@/hooks/useStackUi'
 import { useSwipeBack } from '@/hooks/useSwipeBack'
 import { useSessionTitle } from '@/hooks/useTitles'
-import { CHAT_LIMITS, CHAT_POLL_MS, nextChatLimit } from '@/lib/chat'
+import { CHAT_LIMITS, CHAT_POLL_MS, PEEK_POLL_MS, TERM_LINES, nextChatLimit, parseMode, parseSize, type DetailMode } from '@/lib/chat'
 import { continueDraft } from '@/lib/brief'
 import { canBranchSession } from '@/lib/branch'
 import { modelLabel, relTime, shortCwd } from '@/lib/format'
@@ -54,7 +58,7 @@ import { tailAnchor } from '@/lib/outbox'
 import { findSession, sessionDone, statusMeta } from '@/lib/sessions'
 import { reviewHref } from '@/lib/review'
 import { stacksKnown } from '@/lib/stacks'
-import { isUndoBackspace } from '@/lib/shortcuts'
+import { isUndoBackspace, withHint } from '@/lib/shortcuts'
 import { STATUS_TEXT } from '@/lib/styles'
 import { clampDetailsWidth, DETAILS_DEFAULT_W, DETAILS_MAX_W, DETAILS_MIN_W, detailsWidth } from '@/lib/layout'
 import { cn } from '@/lib/utils'
@@ -68,9 +72,16 @@ interface ChatState {
   /** JSON of the payload, to skip re-renders when a poll brings nothing new. */
   key: string
 }
+interface PeekState {
+  text: string
+  at: number
+}
 
 /** What the desktop shell's shortcuts can ask of the open pane. */
 export interface PaneApi {
+  setMode: (m: DetailMode) => void
+  /** Chat ⇄ Terminal (⌘J). */
+  toggleMode: () => void
   focusComposer: () => void
 }
 
@@ -95,7 +106,8 @@ export interface SessionScreenProps {
 }
 
 /**
- * Session detail — `#/s/:host/:id`: the chat (transcript, polls `messages` every 3s).
+ * Session detail — `#/s/:host/:id`: Chat (transcript, polls `messages` every 3s) or Term
+ * (pane capture, polls `peek` every 2s) — exactly one loop runs, the other is disabled.
  * Shared composer with quick replies + key chips; ⋯ opens the session menu (drawer).
  */
 export function SessionScreen({
@@ -116,8 +128,11 @@ export function SessionScreen({
   const session = findSession(fleet, host, id)
   const hostEntry = fleet?.hosts.find((h) => h.name === host) ?? null
 
-  // View prefs (localStorage): text size and progress notes are global (the Settings screen).
-  const { hideNotes, sendDelay } = usePrefs()
+  // View prefs (localStorage). Text size, terminal text and
+  // progress notes are global (the Settings screen).
+  const [mode, setMode] = usePersistentState<DetailMode>('fleet.detailMode', 'chat', parseMode)
+  const [termLines] = usePersistentState<number>('fleet.termLines', 200, parseSize(TERM_LINES))
+  const { termFont, hideNotes, sendDelay } = usePrefs()
 
   const [menuOpen, setMenuOpen] = useState(false)
   // Pane: the Details column (brief + session details) is always beside the chat, resizable
@@ -165,15 +180,21 @@ export function SessionScreen({
   const [continueWith, setContinueWith] = useState<SpawnPrefill | null>(null)
 
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const modeRef = useRef(mode)
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
   useEffect(() => {
     if (!paneRef) return
     paneRef.current = {
+      setMode,
+      toggleMode: () => setMode(modeRef.current === 'chat' ? 'term' : 'chat'),
       focusComposer: () => composerRef.current?.focus(),
     }
     return () => {
       paneRef.current = null
     }
-  }, [paneRef])
+  }, [paneRef, setMode])
   useEffect(() => {
     if (autoFocusComposer) composerRef.current?.focus()
   }, [autoFocusComposer])
@@ -184,6 +205,11 @@ export function SessionScreen({
   const [chatLimit, setChatLimit] = useState<number>(CHAT_LIMITS[0])
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [msgBackend, setMsgBackend] = useState<string | null>(null)
+
+  // --- term loop -----------------------------------------------------------
+  const [peek, setPeek] = useState<PeekState | null>(null)
+  const [peekErr, setPeekErr] = useState<ApiError | Error | null>(null)
+  const [peekBackend, setPeekBackend] = useState<string | null>(null)
 
   const [gone, setGone] = useState(false)
   // The server's prompt queue for this session (lib/queue.mjs): carried by every chat poll.
@@ -217,9 +243,31 @@ export function SessionScreen({
     [host, id, chatLimit],
   )
 
-  const refreshChat = usePoller(pollChat, CHAT_POLL_MS)
+  const pollPeek = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const data = await api.peek(host, id, termLines, { signal })
+        const text = typeof data.text === 'string' ? data.text : ''
+        const at = data.capturedAt || Date.now()
+        setPeek((prev) => (prev && prev.text === text ? { ...prev, at } : { text, at }))
+        setPeekBackend(String(data.backend || 'unknown'))
+        setPeekErr(null)
+        setGone(false)
+      } catch (err) {
+        if (isAbortError(err)) throw err
+        setPeekErr(err as Error)
+        if (err instanceof ApiError && err.status === 404) setGone(true)
+        if (err instanceof ApiError && err.status === 409) setPeekBackend('unknown')
+      }
+    },
+    [host, id, termLines],
+  )
 
-  // Limit changes re-poll now (the poller always calls the latest fn).
+  const refreshChat = usePoller(pollChat, CHAT_POLL_MS, { enabled: mode === 'chat' })
+  const refreshPeek = usePoller(pollPeek, PEEK_POLL_MS, { enabled: mode === 'term' })
+  const refreshActive = mode === 'chat' ? refreshChat : refreshPeek
+
+  // Limit / lines changes re-poll now (the poller always calls the latest fn).
   const firstLimit = useRef(true)
   useEffect(() => {
     if (firstLimit.current) {
@@ -228,6 +276,15 @@ export function SessionScreen({
     }
     refreshChat()
   }, [chatLimit, refreshChat])
+  const firstLines = useRef(true)
+  useEffect(() => {
+    if (firstLines.current) {
+      firstLines.current = false
+      return
+    }
+    setPeek(null)
+    refreshPeek()
+  }, [termLines, refreshPeek])
 
   // Follow-up polls after steering, so the answer shows up quickly.
   const followUps = useRef(new Set<ReturnType<typeof setTimeout>>())
@@ -238,25 +295,28 @@ export function SessionScreen({
       timers.clear()
     }
   }, [])
-  const refreshChatRef = useRef(refreshChat)
+  const refreshActiveRef = useRef(refreshActive)
   useEffect(() => {
-    refreshChatRef.current = refreshChat
-  }, [refreshChat])
+    refreshActiveRef.current = refreshActive
+  }, [refreshActive])
   const scheduleFollowUps = () => {
     for (const delay of [800, 2000]) {
       const t = setTimeout(() => {
         followUps.current.delete(t)
-        refreshChatRef.current()
+        refreshActiveRef.current()
       }, delay)
       followUps.current.add(t)
     }
   }
 
   // --- derived -------------------------------------------------------------
-  const backend = msgBackend || (session?.backend ? String(session.backend) : null)
-  const status = gone ? 'unknown' : chat ? chat.status : String(session?.status || 'unknown')
+  const backend = (() => {
+    if (peekBackend === 'unknown' || (peekErr instanceof ApiError && peekErr.status === 409)) return 'unknown'
+    return peekBackend || msgBackend || (session?.backend ? String(session.backend) : null)
+  })()
+  const status = gone ? 'unknown' : mode === 'chat' && chat ? chat.status : String(session?.status || 'unknown')
   const meta = statusMeta(status)
-  const updatedAt = chat?.at
+  const updatedAt = mode === 'chat' ? chat?.at : peek?.at
   const lockedReason = gone
     ? 'Session is gone — nothing to steer.'
     : backend === 'unknown'
@@ -267,8 +327,9 @@ export function SessionScreen({
   const attachRef = useRef<(files: File[]) => void>(null)
   const drop = useFileDrop((files) => attachRef.current?.(files), lockedReason == null)
 
-  const noTranscript = chatErr instanceof ApiError && chatErr.status === 404 && !isSessionGone(chatErr)
-  const errText = !chatErr || gone ? null : noTranscript ? (chat ? 'No transcript for this session yet' : null) : sessionErrorMessage(chatErr)
+  const activeErr = mode === 'chat' ? chatErr : peekErr
+  const noTranscript = mode === 'chat' && chatErr instanceof ApiError && chatErr.status === 404 && !isSessionGone(chatErr)
+  const errText = !activeErr || gone ? null : noTranscript ? (chat ? 'No transcript for this session yet' : null) : sessionErrorMessage(activeErr)
   const hostDown = hostEntry?.ok === false
   const missing = !!fleet && !hostDown && !session
 
@@ -293,12 +354,16 @@ export function SessionScreen({
   const { box, items: outbox } = useOutbox({
     host,
     id,
-    onSent: afterSteer,
+    onSent: () => {
+      // The terminal view has no bubble to turn into "Sent".
+      if (modeRef.current !== 'chat') toast.success('Sent', { duration: 1500 })
+      afterSteer()
+    },
     onError: (err, _item, mounted) => {
       if (isAbortError(err)) return
       if (mounted && err instanceof ApiError && err.status === 404) setGone(true)
-      // On screen the bubble says it (Retry / Edit); after leaving only a toast can.
-      if (!mounted) toast.error(`Not sent: ${sendErrorMessage(err)}`)
+      // In the chat the bubble says it (Retry / Edit); elsewhere only a toast can.
+      if (!mounted || modeRef.current !== 'chat') toast.error(`Not sent: ${sendErrorMessage(err)}`)
     },
   })
   // The real message arrived → drop its optimistic bubble.
@@ -402,6 +467,9 @@ export function SessionScreen({
         },
       }
 
+  const outboxView = (variant: 'chat' | 'strip') => (
+    <OutboxBubbles items={outbox} desktop={pane} onUndo={undo} onRetry={retryFailed} onEdit={editFailed} variant={variant} />
+  )
 
   const back = () => {
     if (onBack) onBack()
@@ -553,6 +621,24 @@ export function SessionScreen({
               </span>
             </div>
           </div>
+          {/* Mobile switches view from the ⋯ menu; the header keeps its width for the title. */}
+          {pane ? (
+            <ToggleGroup
+              type="single"
+              value={mode}
+              onValueChange={(v) => v && setMode(v as DetailMode)}
+              spacing={0}
+              aria-label="View mode"
+              className="shrink-0 rounded-xl bg-muted p-0.5"
+            >
+              <ToggleGroupItem value="chat" aria-label="Chat view" title={pane ? withHint('Chat', 'mode') : undefined} className={modeItem}>
+                <MessageSquareTextIcon />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="term" aria-label="Terminal view" title={pane ? withHint('Terminal', 'mode') : undefined} className={modeItem}>
+                <SquareTerminalIcon />
+              </ToggleGroupItem>
+            </ToggleGroup>
+          ) : null}
           {detailsW > 0 ? null : (
             <Button
               variant="ghost"
@@ -598,7 +684,8 @@ export function SessionScreen({
       ) : null}
 
       <main className="relative flex min-h-0 flex-1 flex-col">
-        <ChatView
+        {mode === 'chat' ? (
+          <ChatView
             messages={chat?.messages ?? null}
             noTranscript={noTranscript}
             gone={gone}
@@ -611,13 +698,16 @@ export function SessionScreen({
             jumpSignal={jumpSignal}
             wide={pane}
             fileLinks={fileLinks}
-            outbox={<OutboxBubbles items={outbox} desktop={pane} onUndo={undo} onRetry={retryFailed} onEdit={editFailed} />}
+            outbox={outboxView('chat')}
             outboxKey={outbox.map((it) => `${it.id}:${it.state}`).join(',')}
             questionActions={questionActions}
             done={done}
             onCloseDone={closeDone}
             onBranch={!gone && session && canBranchSession(session.harness) ? openBranch : null}
           />
+        ) : (
+          <TermView text={peek?.text ?? null} failed={!!peekErr} fontSize={termFont} jumpSignal={jumpSignal} fileLinks={fileLinks} />
+        )}
         {(session?.harness || 'claude') === 'claude' && !lockedReason && !gone && !outbox.some((it) => it.state !== 'sent' && it.text.trim() === '/compact') ? (
           <CompactHint context={session?.context} onCompact={() => send('/compact')} />
         ) : null}
@@ -645,6 +735,11 @@ export function SessionScreen({
         }}
         onPause={(paused) => void queueAction(api.queuePause(host, id, paused))}
       />
+      {mode === 'term' && outbox.some((it) => it.state !== 'sent') ? (
+        <div className={cn('shrink-0 px-safe', pane ? 'mx-auto w-full max-w-4xl px-4 pt-2' : 'mx-auto w-full max-w-3xl px-3 pt-2')}>
+          {outboxView('strip')}
+        </div>
+      ) : null}
       <Composer
         quickReplies={settings.quickReplies}
         lockedReason={lockedReason}
@@ -723,3 +818,5 @@ export function SessionScreen({
   )
 }
 
+const modeItem =
+  'size-10 rounded-[10px] text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-accent [&_svg:not([class*=size-])]:size-[18px]'

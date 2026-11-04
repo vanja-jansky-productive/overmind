@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 
-import { CHAT_FONT_REM, TEXT_SIZES, parseTextSize, rootFontSize } from './prefs'
+import { CHAT_FONT_REM, TEXT_SIZES, parseTextSize, rootFontSize, termFontRem } from './prefs'
 
 test('rootFontSize scales the root so the chat lands on the chosen px', () => {
   expect(rootFontSize(15)).toBe('')
@@ -13,7 +13,8 @@ test('rootFontSize scales the root so the chat lands on the chosen px', () => {
   }
 })
 
-test('parseTextSize', () => {
+test('termFontRem / parseTextSize', () => {
+  expect(termFontRem(12)).toBe('0.75rem')
   expect(parseTextSize('17')).toBe(17)
   expect(parseTextSize('16')).toBeUndefined()
 })

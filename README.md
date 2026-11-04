@@ -39,7 +39,7 @@ The setup it is built for:
   (`ssh <host> fleet <same args>`).
 - **Web** — every machine runs the same server. It serves its own sessions and merges in its
   peers', so any one URL shows the whole fleet. A keyboard-first desktop UI and a phone PWA:
-  session list and board, chat with a prompt queue, briefs, a live diff reviewer, spawning now
+  session list and board, chat with a prompt queue, a live terminal, briefs, a live diff reviewer, spawning now
   or later — plus the modules around the sessions: an Inbox of everything waiting on you,
   Productive tasks, pull requests, Slack links, bots, a voice operator, voice memos and notes.
 - **Config** — one small JSON file per machine (`~/.config/fleet/config.json`), written by

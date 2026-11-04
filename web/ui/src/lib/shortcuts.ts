@@ -14,6 +14,7 @@ export type ShortcutAction =
   | 'new'
   | 'back'
   | 'blur'
+  | 'mode'
   | 'palette'
   | 'help'
   | 'view'
@@ -81,6 +82,7 @@ export const BINDINGS: readonly Binding[] = [
   { action: 'new', combo: ['mod', 'shift', 'O'] },
   { action: 'search', combo: ['mod', 'F'] },
   { action: 'view', combo: ['mod', 'B'] },
+  { action: 'mode', combo: ['mod', 'J'] },
   { action: 'rename', combo: ['mod', 'E'] },
   { action: 'notes', combo: ['mod', 'shift', 'E'] },
   { action: 'scratchpad', combo: ['mod', 'shift', 'S'] },
@@ -243,6 +245,7 @@ export const SHORTCUT_HELP: { title: string; items: ShortcutHelp[] }[] = [
     items: [
       { action: 'rename', label: 'Rename (the open session, else the cursor row)' },
       { keys: [['F2']], label: 'Rename (outside a field)' },
+      { action: 'mode', label: 'Switch Chat / Terminal' },
       { action: 'close', label: 'Close session (press twice; the open one, else the cursor row)' },
       { keys: [['Enter'], ['mod', 'Enter']], label: 'Send (in the composer)' },
       { keys: [['shift', 'Enter']], label: 'New line' },
