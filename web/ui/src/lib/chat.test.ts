@@ -2,7 +2,7 @@ import { expect, test } from 'vitest'
 
 import type { Message } from '@/api/types'
 
-import { CHAT_FONT_SIZES, nearBottom, nextChatLimit, parseMode, parseSize, sameGroup, splitPasted, stepSize, visibleMessages } from './chat'
+import { CHAT_FONT_SIZES, nearBottom, nextChat, nextChatLimit, parseMode, parseSize, sameGroup, splitPasted, stepSize, visibleMessages } from './chat'
 
 const m = (over: Partial<Message>): Message => ({ role: 'assistant', kind: 'assistant', text: 'x', ts: 1_000_000, ...over })
 
@@ -61,4 +61,15 @@ test('splitPasted pulls <pasted_content> blocks out of a prompt', () => {
     { pasted: false, text: 'thoughts?' },
   ])
   expect(splitPasted('<pasted_content id="x">only</pasted_content>')).toEqual([{ pasted: true, text: 'only' }])
+})
+
+test('nextChat: a poll that only moved the clocks keeps the old state object', () => {
+  const body = { messages: [m({ text: 'hi' })], truncated: false, status: 'idle', name: 'alpha', capturedAt: 1 }
+  const first = nextChat(null, body)
+  expect(first).toMatchObject({ status: 'idle', name: 'alpha', truncated: false })
+  expect(nextChat(first, { ...body, capturedAt: 2, messages: [m({ text: 'hi' })] })).toBe(first)
+  const moved = nextChat(first, { ...body, status: 'busy' })
+  expect(moved).not.toBe(first)
+  expect(moved.status).toBe('busy')
+  expect(nextChat(null, {})).toMatchObject({ messages: [], truncated: false, status: 'unknown', name: null })
 })

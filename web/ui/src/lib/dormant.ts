@@ -17,6 +17,16 @@ export function hostDormant(host: string, r: { dormant?: unknown; closed?: unkno
   return { host, views: Array.isArray(r.dormant) ? (r.dormant as DormantView[]) : [], closed: Array.isArray(r.closed) ? (r.closed as ClosedView[]) : [] }
 }
 
+/**
+ * One dormant poll onto the list: each of `names` takes its fresh answer, or keeps `prev`'s on a
+ * transient failure (null); hosts with nothing to show drop out. `prev` itself when unchanged, so
+ * an idle poll re-renders nothing.
+ */
+export function mergeDormant(prev: HostDormant[], names: string[], next: (HostDormant | null)[]): HostDormant[] {
+  const hosts = names.map((host, i) => next[i] ?? prev.find((h) => h.host === host) ?? null).filter((h): h is HostDormant => !!h && hasEntries(h))
+  return JSON.stringify(hosts) === JSON.stringify(prev) ? prev : hosts
+}
+
 /** Whether a host has anything for the Dormant or Recently closed section. */
 export const hasEntries = (h: HostDormant) => h.views.length > 0 || h.closed.length > 0
 

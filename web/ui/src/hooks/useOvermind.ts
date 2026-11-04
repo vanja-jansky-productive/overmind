@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 
 import type { OvermindResponse } from '@/api/types'
-import { createStamp, useStamp, type Stamp } from '@/lib/stamp'
+import { createStamp, useStamp, type Stamp } from '@/hooks/useStamp'
 import { storage } from '@/lib/storage'
 
 export interface OvermindState {
@@ -28,7 +28,7 @@ export function useOvermind(): OvermindState {
   return ctx
 }
 
-// The clocks of the last good body. They move on every poll, so they live in stamps (lib/stamp.ts)
+// The clocks of the last good body. They move on every poll, so they live in stamps (hooks/useStamp.ts)
 // read by the leaves that show them, never in the context: an unchanged body re-renders nothing.
 
 /** When the last good body was built (server `snapshotAt`, else receive time); 0 = never. */
@@ -42,10 +42,23 @@ export function hostStamp(name: string): Stamp {
   return s
 }
 
-/** Move the clocks to a body: `at` for the list, each host's `fetchedAt` (else `at`) for that host. */
+/** Move the clocks to a body: `at` for the list, each host's `fetchedAt` (else `at`) for that host; never backwards. */
 export function stampOvermind(overmind: OvermindResponse | null | undefined, at: number): void {
   overmindStamp.set(at)
   for (const h of overmind?.hosts ?? []) hostStamp(h.name).set(h.fetchedAt || at)
+}
+
+/** `overmind` with the clocks the stamps hold now (stamps only move forward, so these are never older). */
+export function withStampedClocks(overmind: OvermindResponse): OvermindResponse {
+  const at = overmindStamp.get()
+  return {
+    ...overmind,
+    ...(at > (overmind.snapshotAt ?? 0) ? { snapshotAt: at } : {}),
+    hosts: overmind.hosts.map((h) => {
+      const checked = hostStamp(h.name).get()
+      return checked > (h.fetchedAt ?? 0) ? { ...h, fetchedAt: checked } : h
+    }),
+  }
 }
 
 /** "updated Xs ago": when the session list was last fetched (0 = never). */

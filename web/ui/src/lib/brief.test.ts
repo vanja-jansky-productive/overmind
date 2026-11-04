@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest'
 
-import type { BriefResource } from '@/api/types'
+import type { Brief, BriefResource } from '@/api/types'
 
-import { briefBody, briefTime, briefTodos, CONTINUE_DEFAULT_TASK, continueDraft, editorLabel, gitLine, groupResources, retryMinutes, setTodoItem, todoProgress, withContinueTask } from './brief'
+import { briefBody, briefTime, briefTodos, CONTINUE_DEFAULT_TASK, continueDraft, editorLabel, gitLine, groupResources, nextBriefState, retryMinutes, setTodoItem, todoProgress, withContinueTask } from './brief'
 
 const md = `---
 session: 0000-aaaa
@@ -159,4 +159,12 @@ test('withContinueTask: the default task only when nothing follows the separator
   expect(withContinueTask(`${p}\n\n`)).toBe(`${p}\n\n${CONTINUE_DEFAULT_TASK}`)
   expect(withContinueTask(`${p}\n\nReview the PR.`)).toBe(`${p}\n\nReview the PR.`)
   expect(withContinueTask('a plain prompt\n---')).toBe('a plain prompt\n---')
+})
+
+test('nextBriefState: an unchanged poll keeps the old state; another session or a new body replaces it', () => {
+  const brief = { host: 'h', id: 'a', exists: true, markdown: '# x', parsed: { summary: 's', resources: [], plan: [] } } as unknown as Brief
+  const first = nextBriefState(null, 'h/a', brief)
+  expect(nextBriefState(first, 'h/a', { ...brief })).toBe(first)
+  expect(nextBriefState(first, 'h/b', brief)).toEqual({ key: 'h/b', brief })
+  expect(nextBriefState(first, 'h/a', { ...brief, markdown: '# y' }).brief.markdown).toBe('# y')
 })

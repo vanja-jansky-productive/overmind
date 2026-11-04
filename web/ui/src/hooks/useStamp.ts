@@ -3,7 +3,8 @@ import { useSyncExternalStore } from 'react'
 /**
  * A timestamp in a tiny external store: what moves on every poll ("updated 5s ago", "checked
  * 3s ago") lives here, so only the leaf that shows it re-renders — not the tree above it.
- * `set` is a no-op when the value is unchanged.
+ * It only moves forward: `set` ignores a value at or before the current one, so a body rebuilt
+ * on the client from older clocks (a kept poll body) never makes a label jump back.
  */
 export interface Stamp {
   get: () => number
@@ -17,7 +18,7 @@ export function createStamp(initial = 0): Stamp {
   return {
     get: () => value,
     set: (at) => {
-      if (at === value) return
+      if (!(at > value)) return
       value = at
       for (const fn of listeners) fn()
     },

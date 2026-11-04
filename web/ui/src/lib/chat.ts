@@ -1,5 +1,5 @@
 // Chat/term view logic — pure, unit-tested in chat.test.ts.
-import type { Message } from '@/api/types'
+import type { Message, MessagesResponse } from '@/api/types'
 
 export type DetailMode = 'chat' | 'term'
 
@@ -15,6 +15,25 @@ export const CHAT_POLL_MS = 3000
 export const PEEK_POLL_MS = 2000
 /** Composer text limit (server: 1..8000 chars). */
 export const MAX_SEND_CHARS = 8000
+
+/** The chat pane's transcript state; `key` (JSON of the rest) lets an unchanged poll keep the old object. */
+export interface ChatState {
+  messages: Message[]
+  truncated: boolean
+  status: string
+  name: string | null
+  key: string
+}
+
+/** A /messages poll onto the chat state: `prev` itself when nothing but the clocks moved, so nothing re-renders. */
+export function nextChat(prev: ChatState | null, data: Partial<MessagesResponse>): ChatState {
+  const messages = Array.isArray(data.messages) ? data.messages : []
+  const truncated = data.truncated === true
+  const status = String(data.status || 'unknown')
+  const name = typeof data.name === 'string' && data.name ? data.name : null
+  const key = JSON.stringify([messages, truncated, status, name])
+  return prev?.key === key ? prev : { messages, truncated, status, name, key }
+}
 
 export const parseMode = (raw: string): DetailMode => (raw === 'term' ? 'term' : 'chat')
 

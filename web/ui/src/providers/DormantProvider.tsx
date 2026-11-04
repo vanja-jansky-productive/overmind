@@ -5,7 +5,7 @@ import { api, isAbortError } from '@/api/client'
 import { DormantContext, type DormantState } from '@/hooks/useDormant'
 import { useOvermind } from '@/hooks/useOvermind'
 import { usePoller } from '@/hooks/usePoller'
-import { closedCount, dormantCount, dormantErrorMessage, dormantIndex, dormantMissing, hasEntries, hostDormant, restoreSummary, type HostDormant } from '@/lib/dormant'
+import { closedCount, dormantCount, dormantErrorMessage, dormantIndex, dormantMissing, hostDormant, mergeDormant, restoreSummary, type HostDormant } from '@/lib/dormant'
 
 /** Dormant sessions change only on a reboot or a resume / forget (which refresh at once); closed ones as sessions end. */
 export const DORMANT_POLL_MS = 30_000
@@ -32,11 +32,7 @@ export function DormantProvider({ children }: { children: ReactNode }) {
           }
         }),
       )
-      setHosts((prev) => {
-        const hosts = names.map((host, i) => next[i] ?? prev.find((h) => h.host === host) ?? null).filter((h): h is HostDormant => !!h && hasEntries(h))
-        // An unchanged poll keeps the old array: nothing re-renders.
-        return JSON.stringify(hosts) === JSON.stringify(prev) ? prev : hosts
-      })
+      setHosts((prev) => mergeDormant(prev, names, next))
     },
     [hostsKey],
   )

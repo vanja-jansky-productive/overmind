@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { ApiError, api, isAbortError, sessionErrorMessage } from '@/api/client'
 import type { Brief } from '@/api/types'
 import { usePoller } from '@/hooks/usePoller'
-import { briefTodos, retryMinutes, setTodoItem } from '@/lib/brief'
+import { briefTodos, nextBriefState, retryMinutes, setTodoItem } from '@/lib/brief'
 
 /** While open: refresh this often (GET never calls the model, so it is cheap). */
 export const BRIEF_POLL_MS = 30_000
@@ -40,8 +40,7 @@ export function useBrief(host: string, id: string, open: boolean) {
 
   const apply = useCallback(
     (b: Brief) => {
-      // An unchanged poll keeps the same object: nothing re-renders.
-      setState((prev) => (prev?.key === key && JSON.stringify(prev.brief) === JSON.stringify(b) ? prev : { key, brief: b }))
+      setState((prev) => nextBriefState(prev, key, b))
       setErrorOf(null)
       const a = awaiting.current
       if (a && a.key === key && !b.generating) {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import type { ClosedView, DormantView } from '@/api/types'
-import { byActivity, closedCount, closedMeta, dormantCount, dormantErrorMessage, dormantIndex, dormantMember, dormantMeta, dormantMissing, dormantTitles, hasEntries, hostDormant, matchesDormantMember, restoreSummary, searchDormant } from '@/lib/dormant'
+import { byActivity, closedCount, closedMeta, dormantCount, dormantErrorMessage, dormantIndex, dormantMember, dormantMeta, dormantMissing, dormantTitles, hasEntries, hostDormant, matchesDormantMember, mergeDormant, restoreSummary, searchDormant } from '@/lib/dormant'
 
 const NOW = Date.parse('2026-10-04T12:00:00Z')
 const tmux: DormantView = {
@@ -124,5 +124,20 @@ describe('byActivity', () => {
     ]
     expect(byActivity(hosts, (h) => h.views).map((e) => `${e.host}/${e.view.target}`)).toEqual(['workstation/fix-login', 'laptop/old', 'laptop/bbbb-2'])
     expect(byActivity(hosts, (h) => h.closed).map((e) => e.view.target)).toEqual(['fresh'])
+  })
+})
+
+describe('mergeDormant', () => {
+  const a = hostDormant('a', { dormant: [tmux] })
+  const b = hostDormant('b', { dormant: [tmux] })
+  it('keeps the old array when a poll brings the same lists', () => {
+    const prev = [a, b]
+    expect(mergeDormant(prev, ['a', 'b'], [hostDormant('a', { dormant: [tmux] }), hostDormant('b', { dormant: [tmux] })])).toBe(prev)
+  })
+  it('keeps a host through a transient failure, drops empty and unlisted hosts', () => {
+    const prev = [a, b]
+    expect(mergeDormant(prev, ['a', 'b'], [null, b])).toBe(prev)
+    expect(mergeDormant(prev, ['a', 'b'], [a, hostDormant('b', {})])).toEqual([a])
+    expect(mergeDormant(prev, ['a'], [a])).toEqual([a])
   })
 })

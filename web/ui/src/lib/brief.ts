@@ -1,11 +1,16 @@
 // Session briefs — pure helpers for the brief panel (unit-tested in brief.test.ts).
 // The file format is the server's contract (docs/architecture.md → "Session briefs"); these
 // only touch the body the way a human editor would: toggle a todo's checkbox, keep every other line.
-import type { BriefResource, BriefResourceKind, BriefTodo } from '@/api/types'
+import type { Brief, BriefResource, BriefResourceKind, BriefTodo } from '@/api/types'
 
 const FRONTMATTER_RE = /^---\n[\s\S]*?\n---[ \t]*(?:\n|$)/
 const HEADING_RE = /^##\s+(.+?)\s*#*\s*$/
 const CHECK_RE = /^(\s*[-*+]\s+\[)([ xX])(\]\s+.*)$/
+
+/** The brief panel's state after a poll for session `key`: `prev` itself when the body is unchanged, so nothing re-renders. */
+export function nextBriefState(prev: { key: string; brief: Brief } | null, key: string, brief: Brief): { key: string; brief: Brief } {
+  return prev?.key === key && JSON.stringify(prev.brief) === JSON.stringify(brief) ? prev : { key, brief }
+}
 
 /** The markdown without its `---` frontmatter (what the editor shows; the server keeps its own keys). */
 export function briefBody(markdown: string | null | undefined): string {

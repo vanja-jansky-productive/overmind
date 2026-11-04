@@ -15,7 +15,6 @@ import { toast } from 'sonner'
 import { ApiError, api, isAbortError, isSessionGone, sendErrorMessage, sessionErrorMessage } from '@/api/client'
 import type { FileStat, Message, PromptQueue, SessionKey } from '@/api/types'
 import { ContextMeter } from '@/components/ContextMeter'
-import { Ago } from '@/components/Ago'
 import { DropOverlay } from '@/components/DropOverlay'
 import { EditableTitle } from '@/components/EditableTitle'
 import { HostBadge } from '@/components/HostBadge'
@@ -36,6 +35,7 @@ import type { QuestionActions } from '@/components/session/QuestionCard'
 import { DetailsDrawer, DetailsPanel, type DetailsPanelProps } from '@/components/session/DetailsPanel'
 import { LiveTerm } from '@/components/session/LiveTerm'
 import { TermView } from '@/components/session/TermView'
+import { UpdatedAgo } from '@/components/session/UpdatedAgo'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useFileDrop } from '@/hooks/useAttach'
@@ -50,7 +50,7 @@ import { useSettings } from '@/hooks/useSettings'
 import { openStackLink, openStackSheet, type SiblingTarget } from '@/hooks/useStackUi'
 import { useSwipeBack } from '@/hooks/useSwipeBack'
 import { useSessionTitle } from '@/hooks/useTitles'
-import { CHAT_LIMITS, CHAT_POLL_MS, PEEK_POLL_MS, TERM_LINES, nextChatLimit, parseMode, parseSize, type DetailMode } from '@/lib/chat'
+import { CHAT_LIMITS, CHAT_POLL_MS, PEEK_POLL_MS, TERM_LINES, nextChat, nextChatLimit, parseMode, parseSize, type ChatState, type DetailMode } from '@/lib/chat'
 import { continueDraft } from '@/lib/brief'
 import { canBranchSession } from '@/lib/branch'
 import { modelLabel, shortCwd } from '@/lib/format'
@@ -62,17 +62,9 @@ import { stacksKnown } from '@/lib/stacks'
 import { isUndoBackspace, withHint } from '@/lib/shortcuts'
 import { STATUS_TEXT } from '@/lib/styles'
 import { clampDetailsWidth, DETAILS_DEFAULT_W, DETAILS_MAX_W, DETAILS_MIN_W, detailsWidth } from '@/lib/layout'
-import { createStamp, useStamp, type Stamp } from '@/lib/stamp'
+import { createStamp } from '@/hooks/useStamp'
 import { cn } from '@/lib/utils'
 
-interface ChatState {
-  messages: Message[]
-  truncated: boolean
-  status: string
-  name: string | null
-  /** JSON of the payload, to skip re-renders when a poll brings nothing new. */
-  key: string
-}
 interface PeekState {
   text: string
 }
@@ -225,13 +217,8 @@ export function SessionScreen({
     async (signal: AbortSignal) => {
       try {
         const data = await api.messages(host, id, chatLimit, { signal })
-        const messages = Array.isArray(data.messages) ? data.messages : []
-        const truncated = data.truncated === true
-        const status = String(data.status || 'unknown')
-        const name = typeof data.name === 'string' && data.name ? data.name : null
-        const key = JSON.stringify([messages, truncated, status, name])
         chatStamp.set(data.capturedAt || Date.now())
-        setChat((prev) => (prev?.key === key ? prev : { messages, truncated, status, name, key }))
+        setChat((prev) => nextChat(prev, data))
         if (data.backend) setMsgBackend(String(data.backend))
         const q = data.queue ?? null
         setQueue((prev) => (JSON.stringify(prev) === JSON.stringify(q) ? prev : q))
@@ -851,9 +838,3 @@ export function SessionScreen({
 
 const modeItem =
   'size-10 rounded-[10px] text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-accent [&_svg:not([class*=size-])]:size-[18px]'
-
-/** The header's "· 5s ago" (the last good capture of the current mode), or "· connecting…" before one. */
-function UpdatedAgo({ stamp, connected }: { stamp: Stamp; connected: boolean }) {
-  const at = useStamp(stamp)
-  return connected && at ? <>· <Ago at={at} /> ago</> : '· connecting…'
-}

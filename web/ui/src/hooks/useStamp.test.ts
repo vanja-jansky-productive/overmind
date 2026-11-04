@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 
-import { createStamp } from './stamp'
+import { createStamp } from './useStamp'
 
 test('a stamp notifies its own listeners when it moves, and only then', () => {
   const a = createStamp()
@@ -18,4 +18,16 @@ test('a stamp notifies its own listeners when it moves, and only then', () => {
   off()
   a.set(11)
   expect(la).toHaveBeenCalledTimes(1)
+})
+
+test('a stamp never moves backwards', () => {
+  const a = createStamp(100)
+  const l = vi.fn()
+  a.subscribe(l)
+  a.set(50)
+  a.set(Number.NaN)
+  expect(a.get()).toBe(100)
+  expect(l).not.toHaveBeenCalled()
+  a.set(150)
+  expect(a.get()).toBe(150)
 })
