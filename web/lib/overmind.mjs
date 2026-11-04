@@ -30,8 +30,9 @@ export function placeholderId(s) {
  * Every `localHost()` call counts as "someone asked": it starts the watcher, and `idleAfterMs`
  * with no call stops it again (an idle server watches nothing).
  *
- * `force` always lists, but never joins a run that started before the last change
- * (`markDirty`/`invalidate`): it chains a new one behind it.
+ * A run that started before the last change (`markDirty`/`invalidate`) is never joined by `force`,
+ * nor by any validated caller once that change is due: they chain a new run behind it, so a list
+ * that takes longer than the gap cannot serve the change it was asked for.
  */
 export function createOvermind({
   cli,
@@ -52,8 +53,10 @@ export function createOvermind({
   let gen = 0; // bumped by every change signal: a run started before it cannot clear `dirty`
   let dirty = true; // a watcher signal (or a mutation) since the last complete run
   let stale = false; // a mutation since then (invalidate): honoured in TTL mode too
+  let staleGen = 0; // the gen of the last invalidate(): a run started at or after it clears `stale`
   let dueAt = 0;
   let lastRunStartedAt = -Infinity;
+  let lastRunGen = -1; // the gen the last run started at
   let lastListAt = null;
   let listRuns = 0;
   let warm = false;
@@ -97,10 +100,15 @@ export function createOvermind({
 
   const validated = () => warm && watcher?.status().mode === 'watch';
 
-  /** Something changed: the next caller at or after the returned `dueAt` lists again. */
+  /**
+   * Something changed: the next caller at or after the returned `dueAt` lists again. The gap counts
+   * from the last run's start; a `dueAt` from before that run is spent (the run covers it), so it
+   * never pins the schedule in the past — or a change during every run would list back to back.
+   */
   function markDirty({ gapMs = 0 } = {}) {
+    const next = lastRunStartedAt + gapMs;
+    dueAt = dirty && gen > lastRunGen ? Math.min(dueAt, next) : next; // gen > lastRunGen: set since that run started
     gen += 1;
-    dueAt = dirty ? Math.min(dueAt, lastRunStartedAt + gapMs) : lastRunStartedAt + gapMs;
     dirty = true;
     return Math.max(dueAt, now());
   }
@@ -110,12 +118,14 @@ export function createOvermind({
     const g = gen;
     const startedAt = now();
     lastRunStartedAt = startedAt;
+    lastRunGen = g;
     listRuns += 1;
     const promise = discover()
       .then((value) => {
         cached = { at: now(), startedAt, value };
         lastListAt = startedAt;
-        if (g === gen) dirty = stale = false;
+        if (g === gen) dirty = false;
+        if (g >= staleGen) stale = false;
         return value;
       })
       .finally(() => {
@@ -131,13 +141,16 @@ export function createOvermind({
       const t = now();
       // A failed list is never trusted past the TTL: the watcher says nothing about why it failed.
       if (validated() && cached.value.ok) {
-        if (!(dirty && t >= dueAt) && t - cached.startedAt < safetyMs) return { ...cached.value, fetchedAt: t };
+        // Restamped only when known clean: a list known stale (not yet due) keeps its own time.
+        if (!(dirty && t >= dueAt) && t - cached.startedAt < safetyMs) return dirty ? cached.value : { ...cached.value, fetchedAt: t };
       } else if (!stale && t - cached.at < ttlMs) {
         return cached.value;
       }
     }
-    if (inFlight && (!force || inFlight.gen === gen)) return inFlight.promise;
-    if (inFlight) return inFlight.promise.then(() => localHost({ force }));
+    if (inFlight && inFlight.gen !== gen && (force || (validated() && dirty && now() >= dueAt))) {
+      return inFlight.promise.then(() => localHost({ force }));
+    }
+    if (inFlight) return inFlight.promise;
     return run();
   }
 
@@ -151,6 +164,7 @@ export function createOvermind({
   function invalidate() {
     stale = true;
     markDirty();
+    staleGen = gen;
   }
 
   /** A watcher signal of class `fast` | `slow` (lib/watch.mjs). Returns when a list is due. */
@@ -163,11 +177,15 @@ export function createOvermind({
     return cached?.value ?? null;
   }
 
-  /** For /api/health: how this host's discovery is decided and how often it ran. */
+  /**
+   * For /api/health: how this host's discovery is decided and how often it ran. Without a watcher
+   * (`ttl`) only the fields that apply; with one, its age bound, gaps, events and roots too.
+   */
   function status() {
-    const w = watcher ? watcher.status() : null;
-    const mode = !w ? 'ttl' : w.mode === 'idle' ? 'idle' : w.mode;
-    return { mode, lastListAt, listRuns, ttlMs, safetyMs, gaps, ...(w ? { events: w.events, roots: w.roots } : {}) };
+    const base = { lastListAt, listRuns, ttlMs };
+    if (!watcher) return { mode: 'ttl', ...base };
+    const w = watcher.status();
+    return { mode: w.mode, ...base, safetyMs, gaps, events: w.events, roots: w.roots };
   }
 
   function stop() {

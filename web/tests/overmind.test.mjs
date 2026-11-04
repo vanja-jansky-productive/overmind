@@ -194,3 +194,161 @@ test('each run re-arms missing watch roots; peek() reads the last list without l
   assert.equal(om.peek().sessions[0].session_id, 's1');
   assert.equal(cli.runs, 1);
 });
+
+/** A CLI whose every list waits until `release()`; `pending` counts the lists in flight. */
+function gatedCli() {
+  const cli = { runs: 0, waiting: [] };
+  cli.list = () => {
+    cli.runs += 1;
+    const n = cli.runs;
+    return new Promise((r) => cli.waiting.push(() => r([{ session_id: `s${n}`, status: 'busy', updated_at: n }])));
+  };
+  cli.release = () => cli.waiting.shift()?.();
+  return cli;
+}
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('an event during every run → at most one run per gap (dueAt counts from the latest run)', async () => {
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: fakeWatcher(), ...clock, gaps: { fast: 1000, slow: 5000 } });
+  let p = om.localHost();
+  cli.release();
+  await p;
+  // A busy fleet: a slow event every 250 ms, one of them always during the list (which takes 500 ms),
+  // and a caller (tick, peer, poke) every 250 ms. Over 20 s the 5 s gap allows 4 or 5 runs.
+  const start = cli.runs;
+  for (let i = 0; i < 80; i++) {
+    clock.advance(250);
+    om.signal('slow');
+    p = om.localHost();
+    await tick();
+    if (cli.waiting.length) {
+      clock.advance(250);
+      om.signal('slow'); // lands mid-run
+      clock.advance(250);
+      cli.release();
+      i += 2;
+    }
+    await p;
+  }
+  const runs = cli.runs - start;
+  assert.ok(runs >= 3 && runs <= 5, `${runs} runs in 20 s with a 5 s gap`);
+});
+
+test('stuck-state repro (review B1): after events landed mid-run, a 5 s gap still means ≤ 1 run in 5 s', async () => {
+  // Ported from the reviewer's probe: ten due runs, each with a slow event during it; then a slow
+  // event and a caller every 300 ms for 3 s (each again with an event mid-run).
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: fakeWatcher(), ...clock, gaps: { fast: 1000, slow: 5000 } });
+  let p = om.localHost();
+  cli.release();
+  await p;
+  for (let i = 0; i < 10; i++) {
+    clock.advance(6000);
+    om.signal('slow');
+    p = om.localHost();
+    await tick();
+    assert.equal(cli.waiting.length, 1, `run ${i}: due after 6 s`);
+    clock.advance(300);
+    om.signal('slow');
+    cli.release();
+    await p;
+  }
+  assert.equal(cli.runs, 11);
+  const before = cli.runs;
+  for (let i = 0; i < 10; i++) {
+    clock.advance(300);
+    om.signal('slow');
+    p = om.localHost();
+    await tick();
+    if (cli.waiting.length) {
+      clock.advance(200);
+      om.signal('slow');
+      cli.release();
+    }
+    await p;
+  }
+  assert.ok(cli.runs - before <= 1, `${cli.runs - before} runs in ~5 s with slowGapMs 5000 (was 10)`);
+});
+
+test('a list longer than the gap: a validated caller once the change is due chains, not joins (review S1)', async () => {
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: fakeWatcher(), ...clock });
+  let p = om.localHost();
+  cli.release();
+  await p;
+  clock.advance(10_000);
+  const peer = om.localHost({ force: true }); // a peer's ?local=1 / the tick starts run 2 at t0
+  await tick();
+  clock.advance(100); // a registry rewrite at t0+0.1 …
+  const due = om.signal('fast'); // … signalled at t0+0.35
+  assert.equal(due, clock.now() + 900, 'due 1 s after run 2 started');
+  clock.advance(250);
+  assert.equal((await om.localHost()).sessions[0].session_id, 's1', 'not due yet: the last complete list');
+  assert.equal(cli.runs, 2);
+  clock.advance(650); // t0+1 s: the poke — run 2 is still listing
+  const poked = om.localHost();
+  await tick();
+  assert.equal(cli.runs, 2, 'chained behind run 2, not started in parallel');
+  cli.release();
+  assert.equal((await peer).sessions[0].session_id, 's2');
+  await tick();
+  assert.equal(cli.runs, 3, 'run 3 starts as run 2 ends');
+  cli.release();
+  assert.equal((await poked).sessions[0].session_id, 's3', 'the poked build sees a list that started after the change');
+});
+
+test('ttl mode: non-force callers still join an in-flight list after invalidate (kill-switch = before)', async () => {
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: null, ...clock });
+  const a = om.localHost();
+  await tick();
+  om.invalidate();
+  const b = om.localHost();
+  cli.release();
+  assert.equal(await a, await b);
+  assert.equal(cli.runs, 1);
+});
+
+test('degraded: one invalidate() forces one list, not every list while signals keep coming (N2)', async () => {
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: fakeWatcher('degraded'), ttlMs: 2000, ...clock });
+  let p = om.localHost();
+  cli.release();
+  await p;
+  om.invalidate();
+  p = om.localHost(); // run 2, started after the invalidate
+  await tick();
+  om.signal('fast'); // the still-armed roots keep signalling
+  cli.release();
+  await p;
+  clock.advance(500);
+  om.signal('slow');
+  await om.localHost();
+  assert.equal(cli.runs, 2, 'inside the TTL: served from cache');
+});
+
+test('dirty but not yet due: the list is served with its own fetchedAt, not restamped (N3)', async () => {
+  const { clock, om } = setup();
+  const first = await om.localHost();
+  clock.advance(200);
+  om.signal('slow');
+  clock.advance(1000);
+  const again = await om.localHost();
+  assert.equal(again.fetchedAt, first.fetchedAt, 'known stale: keeps the list time');
+});
+
+test('status(): ttl mode reports only what applies; a watcher adds its bound, gaps and roots (N4)', async () => {
+  const ttl = createOvermind({ cli: fakeCli(), ...fakeClock() });
+  assert.deepEqual(Object.keys(ttl.status()).sort(), ['lastListAt', 'listRuns', 'mode', 'ttlMs']);
+  const { om } = setup();
+  await om.localHost();
+  const s = om.status();
+  assert.equal(s.mode, 'watch');
+  for (const k of ['safetyMs', 'gaps', 'events', 'roots']) assert.ok(k in s, k);
+});
