@@ -1,0 +1,119 @@
+// Idle CPU of the web UI in headless WebKit, against the demo API with a frozen clock.
+//
+//   cd scripts/perf && npm install && npx playwright-core install webkit   # once
+//   node scripts/perf/idle-cpu.mjs [--dist web/ui/dist] [--runs 3] [--idle 60] [--only list|session|mobile] [--json]
+//
+// Starts scripts/guide/mock.mjs (GUIDE_FREEZE=1: every poll answers a byte-identical body, so this
+// measures the "nothing changed" idle case) on GUIDE_PORT 7798, serving `--dist`. Per run: a fresh
+// WebKit, load the scenario, wait for its ready text, settle 2 s, then sit idle for `--idle` s.
+// CPU = the summed CPU time of every process whose command line has `ms-playwright/webkit` in it
+// (WebContent / Networking / GPU are XPC services, not children of the browser), so run nothing
+// else on Playwright's WebKit meanwhile. Prints one line per run and the median per scenario.
+import { execFileSync, spawn } from 'node:child_process'
+import path from 'node:path'
+import { parseArgs } from 'node:util'
+import { webkit } from 'playwright-core'
+
+const ROOT = path.resolve(import.meta.dirname, '../..')
+const PORT = 7798
+const BASE = `http://127.0.0.1:${PORT}/`
+
+const SCENARIOS = {
+  // DesktopShell, no session open.
+  list: { hash: '#/', ready: 'Invoice rounding fix', context: { viewport: { width: 1440, height: 900 } } },
+  // DesktopShell with a session pane (chat + the details column).
+  session: { hash: '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000001', ready: 'Root cause', context: { viewport: { width: 1440, height: 900 } } },
+  // The mobile ListScreen (< 1024 px).
+  mobile: { hash: '#/', ready: 'Invoice rounding fix', context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
+}
+
+const { values: opts } = parseArgs({
+  options: {
+    dist: { type: 'string', default: path.join(ROOT, 'web/ui/dist') },
+    runs: { type: 'string', default: '3' },
+    idle: { type: 'string', default: '60' },
+    only: { type: 'string', multiple: true },
+    json: { type: 'boolean', default: false },
+  },
+})
+const runs = Number(opts.runs)
+const idleS = Number(opts.idle)
+const names = opts.only?.length ? opts.only : Object.keys(SCENARIOS)
+for (const n of names) if (!SCENARIOS[n]) throw new Error(`unknown scenario ${n} (${Object.keys(SCENARIOS).join(', ')})`)
+
+/** Summed CPU seconds of Playwright's WebKit processes. */
+function webkitCpu() {
+  const rows = execFileSync('ps', ['-axo', 'time=,command=']).toString().trim().split('\n')
+  const secs = (t) => t.split(':').reduce((a, x) => a * 60 + Number(x), 0)
+  return rows.filter((l) => l.includes('ms-playwright/webkit')).reduce((a, l) => a + secs(l.trim().split(/\s+/)[0]), 0)
+}
+
+const median = (xs) => {
+  const s = [...xs].sort((a, b) => a - b)
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2
+}
+
+async function startMock() {
+  const mock = spawn(process.execPath, [path.join(ROOT, 'scripts/guide/mock.mjs')], {
+    env: { ...process.env, GUIDE_FREEZE: '1', GUIDE_PORT: String(PORT), OVERMIND_WEB_UI: path.resolve(opts.dist) },
+    stdio: ['ignore', 'ignore', 'inherit'],
+  })
+  for (let i = 0; i < 100; i++) {
+    try {
+      if ((await fetch(`${BASE}api/health`)).ok) return mock
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  mock.kill()
+  throw new Error(`mock did not answer on :${PORT}`)
+}
+
+async function measure(name) {
+  const sc = SCENARIOS[name]
+  const server = await webkit.launchServer({ headless: true })
+  const browser = await webkit.connect(server.wsEndpoint())
+  try {
+    const page = await (await browser.newContext(sc.context)).newPage()
+    let requests = 0
+    page.on('request', () => requests++)
+    const c0 = webkitCpu()
+    const t0 = Date.now()
+    await page.goto(BASE + sc.hash)
+    await page.waitForFunction((t) => document.body?.innerText?.includes(t), sc.ready, { timeout: 30_000, polling: 25 })
+    const readyMs = Date.now() - t0
+    const loadCpuS = webkitCpu() - c0
+    await page.waitForTimeout(2000)
+    const r0 = requests
+    const c1 = webkitCpu()
+    await page.waitForTimeout(idleS * 1000)
+    const idleCpuS = webkitCpu() - c1
+    return { scenario: name, readyMs, loadCpuS: +loadCpuS.toFixed(2), idleCpuS: +idleCpuS.toFixed(2), idleCorePct: +((100 * idleCpuS) / idleS).toFixed(2), idleRequests: requests - r0 }
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+}
+
+const mock = await startMock()
+const results = {}
+try {
+  for (const name of names) {
+    const rs = []
+    for (let i = 0; i < runs; i++) {
+      const r = await measure(name)
+      rs.push(r)
+      if (!opts.json) console.log(JSON.stringify(r))
+    }
+    results[name] = {
+      runs: rs.length,
+      readyMs: median(rs.map((r) => r.readyMs)),
+      loadCpuS: median(rs.map((r) => r.loadCpuS)),
+      idleCpuS: median(rs.map((r) => r.idleCpuS)),
+      idleCorePct: median(rs.map((r) => r.idleCorePct)),
+      idleRequests: median(rs.map((r) => r.idleRequests)),
+    }
+  }
+} finally {
+  mock.kill()
+}
+console.log(JSON.stringify({ dist: path.resolve(opts.dist), idleSeconds: idleS, median: results }, null, opts.json ? 2 : 0))

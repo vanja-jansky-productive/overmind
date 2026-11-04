@@ -1,0 +1,9 @@
+{
+  "name": "overmind-perf",
+  "private": true,
+  "type": "module",
+  "description": "Idle-CPU harness for the web UI (idle-cpu.mjs); not a web/ui dependency",
+  "devDependencies": {
+    "playwright-core": "1.58.2"
+  }
+}

@@ -10,7 +10,9 @@ const DIST = process.env.OVERMIND_WEB_UI || new URL('../../web/ui/dist', import.
 const PORT = Number(process.env.GUIDE_PORT || 7799)
 const H = '/Users/demo'
 const M = 60_000, HR = 3_600_000, D = 86_400_000
-const now = () => Date.now()
+// GUIDE_FREEZE=1 pins the clock: every poll answers a byte-identical body (scripts/perf/idle-cpu.mjs).
+const FROZEN = process.env.GUIDE_FREEZE === '1' ? Date.now() : 0
+const now = () => FROZEN || Date.now()
 const iso = (ms) => new Date(ms).toISOString()
 
 // ---------------------------------------------------------------- sessions

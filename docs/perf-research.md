@@ -132,6 +132,33 @@ The frameworks figures are js-framework-benchmark results, Chrome 156 run of Oct
 | — | Framework switch (Solid / Svelte / Preact) | Smaller than 1; risky | 4–10 weeks: **not recommended** |
 | — | Native shell or client | No gain for the web content; doubles the UI | **not recommended** |
 
+## Render hygiene shipped (#36)
+
+Recommendation 1 without the `memo`: a shared clock per interval (`useNow`, `<Ago>`), clocks that move on
+every poll kept in stamps instead of state, and polls that bail out on unchanged data (overmind,
+chat / peek, brief, Slack, focus, dormant). `refreshing` shows only for an explicit refresh.
+
+Measured with `scripts/perf/idle-cpu.mjs`: the demo API with a frozen clock (`GUIDE_FREEZE=1`, every
+poll answers the same body), headless WebKit 26, 60 s idle after load, median of 3 runs. `before` is
+the `main` build and `after` is the branch build, both through the same harness and mock.
+
+| Scenario | before (CPU s / 60 s) | after | after / before | idle requests (both) |
+| --- | --- | --- | --- | --- |
+| `list`: 1440×900, no session open | 1.24 | 0.47 | 0.38 | 27 |
+| `session`: 1440×900, a session open | 2.00 | 0.68 | 0.34 | 49 |
+| `mobile`: 390×844, the list | 0.62 | 0.32 | 0.52 | 23 |
+
+Render counts (dev build, the same frozen mock, `console.count` in `DesktopShell`, `ListScreen`,
+`SessionScreen`): `main` renders ~170/min on the desktop list and ~200/min with a session open. The
+branch renders 0 in 60 s on the desktop list, the desktop session, the mobile list and the mobile
+session. What is left is the floor: a fetch, a `JSON.parse` and a key compare every 2–5 s, plus the
+1 s text leaves ("4s ago" on every row, which keep their cadence). Memoizing the rows would not
+help: they no longer re-render while idle.
+
+Reproduce: `cd scripts/perf && npm install && npx playwright-core install webkit`, then
+`node scripts/perf/idle-cpu.mjs [--dist <web/ui/dist>] [--runs 3] [--idle 60] [--only list|session|mobile]`.
+Run nothing else on Playwright's WebKit meanwhile: the harness sums the CPU of every WebKit process.
+
 ## Caveats
 
 - WebKit numbers come from headless Playwright WebKit 26, not Overmind.app itself. A's idle cost matched the real app (1.97 vs 2.26 s/min), but the shell's own 0.87 s/min was not re-measured after the fixes. It is likely compositor work driven by the same re-renders.
