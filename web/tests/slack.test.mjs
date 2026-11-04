@@ -434,6 +434,14 @@ test('blockedWhat: a short label without Slack markup', () => {
   assert.ok(blockedWhat('x'.repeat(200)).length <= 60);
 });
 
+test('blockedWhat: a Codex approval goes to Slack as its label, never the command', () => {
+  const w = "exec approval: `curl -H 'Authorization: Bearer s3cr3t' https://x`";
+  assert.equal(blockedWhat(w, 'codex'), 'exec approval');
+  assert.doesNotMatch(blockedWhat(w, 'codex'), /s3cr3t|curl/);
+  assert.equal(blockedWhat('exec approval', 'codex'), 'exec approval');
+  assert.equal(blockedWhat(null, 'codex'), 'input needed');
+});
+
 test('reply: posts in the thread, only for the linked session, only while linked', async (t) => {
   const fx = fixture(t);
   const link = await fx.bridge.link({ session: SID, url: URL_, minutes: 5, host: 'h' });

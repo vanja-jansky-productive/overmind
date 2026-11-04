@@ -1,4 +1,4 @@
-// Close a session for good: terminate the Claude process, then tear down the terminal
+// Close a session for good: interrupt a Codex turn, terminate the process, then tear down the terminal
 // that hosted it (the tmux window, and the tmux session when that was its only window,
 // or the iTerm tab).
 //
@@ -23,10 +23,49 @@ function isAlive(pid, killProcess) {
  *   sleep        (ms) => Promise
  *   closeIterm   (session) => Promise — backends.closeIterm
  *   graceMs      SIGTERM → SIGKILL grace period
+ *   keys         (session, key) => Promise — backends.keys (the Codex interrupt)
+ *   listSessions () => Promise<rows|null> — a fresh `overmind list` of this host
+ *   interruptMs  how long a Codex interrupt may take to land before SIGTERM anyway
  */
-export function createKiller({ run, tmux = 'tmux', killProcess = process.kill.bind(process), sleep, closeIterm, graceMs = 4000 }) {
+export function createKiller({
+  run,
+  tmux = 'tmux',
+  killProcess = process.kill.bind(process),
+  sleep,
+  closeIterm,
+  graceMs = 4000,
+  keys = null,
+  listSessions = null,
+  interruptMs = 5000,
+}) {
   if (typeof run !== 'function') throw new TypeError('run must be a function');
   const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+
+  /**
+   * A busy or waiting Codex row: Escape first (its menu's "No", the turn's interrupt), so the
+   * rollout ends with `turn_aborted`. SIGTERM alone leaves an embedded turn open forever, and a
+   * daemon-mode turn keeps running in the daemon. Waits until the row reads idle (or is gone),
+   * at most `interruptMs`; the kill goes ahead either way.
+   * @returns 'skipped' | 'interrupted' | 'timeout' | 'failed'
+   */
+  async function interrupt(session) {
+    const codexTurn = session.harness === 'codex' && (session.status === 'busy' || session.status === 'waiting');
+    if (!codexTurn || !keys || !session.handle) return 'skipped';
+    try {
+      await keys(session, 'Escape');
+    } catch {
+      return 'failed';
+    }
+    const step = 250;
+    for (let waited = 0; waited < interruptMs; waited += step) {
+      await wait(step);
+      const rows = listSessions ? await listSessions().catch(() => null) : null;
+      if (!rows) continue;
+      const row = rows.find((r) => Number(r.pid) === Number(session.pid));
+      if (!row || row.status === 'idle') return 'interrupted';
+    }
+    return 'timeout';
+  }
 
   /** SIGTERM, wait up to graceMs, then SIGKILL. Returns how it died ('gone' if it never was alive). */
   async function terminate(pid) {
@@ -85,7 +124,7 @@ export function createKiller({ run, tmux = 'tmux', killProcess = process.kill.bi
 
   /**
    * @param session a `overmind list --json` row { pid, backend, handle, tmux_session }
-   * @returns {{ process, terminal }} what happened to each half
+   * @returns {{ process, terminal, interrupt? }} what happened to each half (+ a Codex turn's interrupt)
    *   process:  'terminated' | 'killed' | 'gone' | 'skipped'
    *   terminal: 'tmux-session-killed' | 'tmux-window-killed' | 'tmux-pane-gone'
    *           | 'iterm-tab-closed' | 'iterm-tab-left' | 'left'
@@ -93,6 +132,7 @@ export function createKiller({ run, tmux = 'tmux', killProcess = process.kill.bi
   async function kill(session) {
     const backend = String(session.backend || 'unknown');
     const shape = backend === 'tmux' && session.handle ? await tmuxShape(session.handle) : null;
+    const interrupted = await interrupt(session);
     const processResult = await terminate(Number(session.pid));
     let terminal = 'left';
 
@@ -115,7 +155,7 @@ export function createKiller({ run, tmux = 'tmux', killProcess = process.kill.bi
         terminal = 'iterm-tab-left'; // iTerm may refuse (prefs); the process is dead anyway
       }
     }
-    return { process: processResult, terminal };
+    return { process: processResult, terminal, ...(interrupted === 'skipped' ? {} : { interrupt: interrupted }) };
   }
 
   /** Close an iTerm tab whose process already ended (a sleep): what `kill` reports for it. */
@@ -129,5 +169,5 @@ export function createKiller({ run, tmux = 'tmux', killProcess = process.kill.bi
     }
   }
 
-  return { kill, terminate, closeTab };
+  return { kill, terminate, closeTab, interrupt };
 }

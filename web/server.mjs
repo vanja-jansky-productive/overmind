@@ -275,7 +275,16 @@ const handleApi = createApi({
   transcripts,
   spawner,
   brancher: createBrancher({ spawner }),
-  killer: createKiller({ run, tmux: config.tmux, closeIterm: (s) => backend.closeIterm(s) }),
+  killer: createKiller({
+    run,
+    tmux: config.tmux,
+    closeIterm: (s) => backend.closeIterm(s),
+    keys: (s, key) => backend.keys(s, key),
+    listSessions: async () => {
+      const host = await overmind.localHost({ force: true });
+      return host.ok ? host.sessions : null;
+    },
+  }),
   cli,
   autoNamer,
   spawnNamer,

@@ -302,9 +302,14 @@ export function messagesPrompt(link, messages, { names = {} } = {}) {
 const HELD = 'hourglass_flowing_sand';
 const short = (t, max = 80) => (String(t).length > max ? `${String(t).slice(0, max - 1)}…` : String(t));
 
-/** What a blocked session waits on, for Slack: the registry's short label, never more. */
-export function blockedWhat(waitingFor) {
-  const w = String(waitingFor ?? '').replace(/[`*_~<>]/g, '').replace(/\s+/g, ' ').trim();
+/**
+ * What a blocked session waits on, for Slack: the registry's short label, never more. A Codex
+ * row's `waiting_for` carries the command it asks to run (`exec approval: \`curl -H …\``) —
+ * commands carry secrets, and this goes to a channel: its label only.
+ */
+export function blockedWhat(waitingFor, harness) {
+  const raw = harness === 'codex' ? String(waitingFor ?? '').split(':')[0] : waitingFor;
+  const w = String(raw ?? '').replace(/[`*_~<>]/g, '').replace(/\s+/g, ' ').trim();
   return w ? short(w, 60) : 'input needed';
 }
 
@@ -1286,7 +1291,7 @@ export function createSlackBridge({ settings = {}, self = null, call, socket = n
   }
 
   async function blocked(l, s) {
-    const what = blockedWhat(s.waiting_for);
+    const what = blockedWhat(s.waiting_for, s.harness);
     l.blocked = { at: now(), what };
     await save(); // before posting: a failed post is not retried every tick
     const name = sessionTitle(s) || l.sessionName || 'session';

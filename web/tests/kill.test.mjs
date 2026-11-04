@@ -97,3 +97,48 @@ test('kill: iterm closes the tab, tolerates refusal, dead pid is reported gone',
   const k2 = createKiller({ run: noRun, killProcess, sleep: async () => {}, closeIterm: async () => { throw new Error('nope'); } });
   assert.equal((await k2.kill({ pid: 4242, backend: 'iterm', handle: 'ABC' })).terminal, 'iterm-tab-left');
 });
+
+test('kill: a busy or waiting Codex row is interrupted with Escape first, then SIGTERMed', async () => {
+  for (const status of ['busy', 'waiting']) {
+    const order = [];
+    const { killProcess } = fakeProcess();
+    let listed = 0;
+    const k = createKiller({
+      run: tmuxRun('$3 @7 1\n').run,
+      killProcess: (pid, sig) => (sig === 'SIGTERM' && order.push('SIGTERM'), killProcess(pid, sig)),
+      sleep: async () => {},
+      keys: async (s, key) => void order.push(key),
+      // Still busy on the first look, idle (turn_aborted) on the second.
+      listSessions: async () => [{ pid: 4242, status: (listed += 1) < 2 ? status : 'idle' }],
+    });
+    const res = await k.kill({ pid: 4242, harness: 'codex', status, backend: 'tmux', handle: '%7' });
+    assert.deepEqual(order, ['Escape', 'SIGTERM'], status);
+    assert.equal(res.interrupt, 'interrupted');
+    assert.equal(listed, 2);
+  }
+});
+
+test('kill: an interrupt that never lands still SIGTERMs; idle Codex and Claude rows get no Escape', async () => {
+  const keys = [];
+  const { sent, killProcess } = fakeProcess();
+  const k = createKiller({
+    run: noRun,
+    killProcess,
+    sleep: async () => {},
+    interruptMs: 1000,
+    keys: async (s, key) => void keys.push(key),
+    listSessions: async () => [{ pid: 4242, status: 'busy' }],
+  });
+  const res = await k.kill({ pid: 4242, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%7' });
+  assert.equal(res.interrupt, 'timeout');
+  assert.ok(sent.includes('SIGTERM'));
+  keys.length = 0;
+  for (const row of [
+    { pid: 4243, harness: 'codex', status: 'idle', backend: 'tmux', handle: '%8' },
+    { pid: 4244, harness: 'claude', status: 'busy', backend: 'tmux', handle: '%9' },
+  ]) {
+    const r = await k.kill(row);
+    assert.equal(r.interrupt, undefined);
+  }
+  assert.deepEqual(keys, []);
+});
