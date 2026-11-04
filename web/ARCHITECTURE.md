@@ -325,7 +325,9 @@ Editing the list is as powerful as spawning (it widens the allow-list) and has n
 `overmind list` every 250 ms until the row reads idle or is gone, at most 5 s of wall clock (lists
 included) — so the rollout ends
 with `turn_aborted` (SIGTERM alone leaves an embedded-mode turn open forever, and a daemon-mode turn
-keeps running in the Codex daemon). The kill goes ahead either way. Then SIGTERM to the agent's `pid` (SIGKILL after 4s), then the
+keeps running in the Codex daemon). The kill goes ahead either way. The interrupt ends the turn,
+not a tool process the turn started: a long shell command keeps running until it ends, in daemon
+and embedded mode alike (killing it is planned for phase 1b of #34). Then SIGTERM to the agent's `pid` (SIGKILL after 4s), then the
 terminal that hosted it. tmux: the whole tmux session when Claude's window was its only window
 (`terminal: "tmux-session-killed"`), else just that window (`"tmux-window-killed"`). The pane's
 session/window ids (`$3`, `@7`, never names) are resolved *before* the signal, because when Claude
@@ -438,7 +440,8 @@ during every list still means at most one list per gap (not back to back).
 dirty and due, or when the last list is `safetySeconds` (30) old: what has no file signal (tmux/iTerm
 tab names, branches, a SIGKILLed process, a Codex session before its first prompt) shows within
 30 s. A list with a `waiting` Codex row is reused for the TTL (`ttlMs`, 2 s) only: that state is
-read off the screen, and answering the menu in the TUI writes nothing until the command ends. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
+read off the screen, and answering the menu in the TUI writes nothing until the command ends — so a
+TUI answer reads `busy` on the web ~3.5 s later (the 3 s refresh plus one list), not within the TTL. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
 started before a change cannot clear `dirty` (a generation counter). `force` (mutations,
 spawnNamer, stacks, queue, slack) chains a new run behind such a one, and so does any validated
 caller once that change is due (a poked rebuild, a peer's `?local=1`): a list slower than the gap

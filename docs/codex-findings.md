@@ -28,6 +28,8 @@ No file says a session waits on an approval, in either mode: the rollout has no
 Hence Overmind's rule: the hook or the rollout only *triggers* a look; the screen decides.
 And since leaving the menu touches no file, the web server's watcher cannot see it: a list
 holding a waiting Codex row is reused for the short TTL only, not the watcher's safety interval.
+Measured: an approval answered in the TUI reads `busy` on the web ~3.5 s later — the 3 s refresh
+plus one list; `?fresh=1` changes nothing (the CLI itself reads `busy` within 0.1 s).
 
 ## 2. Hooks
 
@@ -57,6 +59,7 @@ is a new hash), so `codex hooks status` compares that entry with the one `instal
 | Hotkeys `(y)` / `(p)` / `(esc)` | not needed: the arrow keys reach every option |
 | Approved `sleep 20 && …` answered in the TUI | the row reads `busy` on the next forced list, `idle` when it ends; the card's answer gets 409 and types nothing |
 | Esc on a busy daemon-mode turn, then SIGTERM (web close) | `custom_tool_call_output "aborted by user"`, `turn_aborted interrupted` before the TUI went. The running tool process (`sleep 30`, a daemon child) was not stopped by the abort and ended on its own |
+| Esc on a busy embedded-mode turn, then SIGTERM (web close) | same: `turn_aborted interrupted`, and the turn's `sleep 30` stayed alive, reparented to pid 1. So a close never stops a tool process the turn started, in either mode — killing it is planned for phase 1b of #34 |
 | Esc on a waiting embedded-mode row (menu = "No"), then SIGTERM | same `turn_aborted interrupted` |
 | Embedded TUI killed mid-turn (`sleep 45`), then `codex resume <id>` | **resume writes nothing** before the first prompt: the rollout's last line stays the open turn's `custom_tool_call` until the next prompt, ten minutes later. The resumed row reads `idle` (open turn, nothing written since this process started) |
 
