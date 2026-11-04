@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useHarnesses } from '@/hooks/useHarnesses'
 import { useSettings } from '@/hooks/useSettings'
 import { branchTargets, branchesFromPrompt } from '@/lib/branch'
@@ -49,7 +49,7 @@ export function BranchDialog(p: BranchDialogProps) {
 
 function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSession }: BranchDialogProps & { from: Message }) {
   const { models: claudeModels } = useSettings()
-  const { applyFleet } = useFleet()
+  const { applyOvermind } = useOvermind()
   const targets = branchTargets(offeredHarnesses(useHarnesses(host).harnesses, claudeModels))
   const isPrompt = branchesFromPrompt(from)
   const [harness, setHarness] = useState(source)
@@ -80,7 +80,7 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
       watchForSpawned(
         { host, name: res.spawn.name, tmuxSession: res.spawn.tmuxSession },
         {
-          onFleet: applyFleet,
+          onOvermind: applyOvermind,
           onFound: (s) => {
             toast.success(`${res.spawn.name} is up`, {
               id,

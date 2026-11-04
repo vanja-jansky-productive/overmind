@@ -1,12 +1,12 @@
 // Smart grouping: the scheduler (lib/grouping.mjs), /api/groups served by the grouping host
-// and proxied from peers, the config keys, and `run`'s stdin. The `fleet` CLI is faked.
+// and proxied from peers, the config keys, and `run`'s stdin. The `overmind` CLI is faked.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApi, groupEditOp } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
-import { createFleet } from '../lib/fleet.mjs';
-import { createFleetCli } from '../lib/fleet-cli.mjs';
+import { createOvermind } from '../lib/overmind.mjs';
+import { createOvermindCli } from '../lib/overmind-cli.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
 import { createGrouper, liveKeys, memberKeys } from '../lib/grouping.mjs';
 import { run } from '../lib/run.mjs';
@@ -17,7 +17,7 @@ function report(groups, lastRun = { mode: 'incremental', ok: true, modelCalls: 1
   return { version: 1, applied: true, updatedAt: 42, lastRun, groups, ungrouped: [], hosts: {} };
 }
 
-const BOARD = { id: 'g-1', label: 'Fleet Board', description: 'Kanban', source: 'llm', members: [{ host: 'laptop', id: 'a1', name: 'board' }] };
+const BOARD = { id: 'g-1', label: 'Overmind Board', description: 'Kanban', source: 'llm', members: [{ host: 'laptop', id: 'a1', name: 'board' }] };
 
 function fakeCli({ fail = false } = {}) {
   const calls = [];
@@ -29,15 +29,15 @@ function fakeCli({ fail = false } = {}) {
       if (op.to === 'g-gone') throw Object.assign(new Error('no group g-gone'), { refused: true });
       return report([{ ...BOARD, label: op.label ?? BOARD.label }]);
     },
-    groupRun: async ({ fleet, refresh }) => {
-      calls.push(['run', fleet, refresh]);
-      if (fail) throw new Error('fleet group timed out after 300s');
+    groupRun: async ({ overmind, refresh }) => {
+      calls.push(['run', overmind, refresh]);
+      if (fail) throw new Error('overmind group timed out after 300s');
       return report([BOARD, { id: 'g-2', label: 'Team Reviews', description: null, source: 'llm', members: [{ host: 'workstation', id: 'b1' }] }]);
     },
   };
 }
 
-const FLEET = {
+const OVERMIND = {
   self: 'laptop',
   hosts: [
     { name: 'laptop', ok: true, sessions: [{ host: 'laptop', session_id: 'a1' }] },
@@ -47,14 +47,14 @@ const FLEET = {
 };
 
 test('liveKeys / memberKeys', () => {
-  assert.deepEqual([...liveKeys(FLEET)], ['laptop/a1', 'workstation/b1']);
+  assert.deepEqual([...liveKeys(OVERMIND)], ['laptop/a1', 'workstation/b1']);
   assert.deepEqual([...memberKeys(report([BOARD]))], ['laptop/a1']);
 });
 
-test('grouper: stored groups first, a run feeds the fleet to the CLI and reports lastRun', async () => {
+test('grouper: stored groups first, a run feeds the overmind to the CLI and reports lastRun', async () => {
   const cli = fakeCli();
   let t = 1000;
-  const g = createGrouper({ cli, getFleet: async () => FLEET, self: 'laptop', now: () => t, intervalMs: 600000 });
+  const g = createGrouper({ cli, getOvermind: async () => OVERMIND, self: 'laptop', now: () => t, intervalMs: 600000 });
   await g.loadCached();
   let r = g.response();
   assert.equal(r.enabled, true);
@@ -70,7 +70,7 @@ test('grouper: stored groups first, a run feeds the fleet to the CLI and reports
   t = 1500;
   r = await a;
   assert.equal(cli.calls.filter((c) => c[0] === 'run').length, 1);
-  assert.equal(cli.calls.at(-1)[1], FLEET);
+  assert.equal(cli.calls.at(-1)[1], OVERMIND);
   assert.equal(r.groups.length, 2);
   assert.equal(r.running, false);
   assert.equal(r.updatedAt, 42);
@@ -81,7 +81,7 @@ test('grouper: stored groups first, a run feeds the fleet to the CLI and reports
 });
 
 test('grouper: a failing run keeps the last groups and reports the error', async () => {
-  const g = createGrouper({ cli: fakeCli({ fail: true }), getFleet: async () => FLEET });
+  const g = createGrouper({ cli: fakeCli({ fail: true }), getOvermind: async () => OVERMIND });
   await g.loadCached();
   const r = await g.runOnce('scheduled');
   assert.equal(r.lastRun.ok, false);
@@ -96,8 +96,8 @@ test('grouper: the change check runs early only for unknown live sessions, never
   let built = 0;
   const g = createGrouper({
     cli,
-    getFleet: async () => (built++, FLEET),
-    peekFleet: () => peek,
+    getOvermind: async () => (built++, OVERMIND),
+    peekOvermind: () => peek,
     now: () => t,
     minGapMs: 1000,
   });
@@ -106,7 +106,7 @@ test('grouper: the change check runs early only for unknown live sessions, never
   peek = { hosts: [{ name: 'laptop', ok: true, sessions: [{ host: 'laptop', session_id: 'a1' }] }] };
   assert.equal(await g.checkChanges(), false, 'every live session is known');
   assert.equal(built, 0);
-  peek = FLEET; // workstation/b1 is new
+  peek = OVERMIND; // workstation/b1 is new
   assert.equal(await g.checkChanges(), true);
   assert.equal(cli.calls.at(-1)[0], 'run');
   assert.equal(g.lastRun.reason, 'changes');
@@ -117,18 +117,18 @@ test('grouper: the change check runs early only for unknown live sessions, never
   assert.equal(await g.checkChanges(), true);
 });
 
-test('fleet-cli groupRun pipes the fleet on stdin and parses the report', async () => {
+test('overmind-cli groupRun pipes the overmind on stdin and parses the report', async () => {
   const seen = [];
-  const cli = createFleetCli({
+  const cli = createOvermindCli({
     run: async (bin, args, opts) => (seen.push({ args, opts }), { stdout: JSON.stringify(report([BOARD])), stderr: '' }),
   });
-  const r = await cli.groupRun({ fleet: FLEET, refresh: true });
+  const r = await cli.groupRun({ overmind: OVERMIND, refresh: true });
   assert.equal(r.groups[0].id, 'g-1');
   assert.deepEqual(seen[0].args, ['group', '--input', '-', '--apply', '--json', '--refresh']);
-  assert.deepEqual(JSON.parse(seen[0].opts.input), FLEET);
-  const bad = createFleetCli({ run: async () => ({ stdout: 'nope', stderr: '' }) });
-  await assert.rejects(bad.groupRun({ fleet: FLEET }), /non-JSON/);
-  const cached = createFleetCli({ run: async (b, args) => (seen.push({ args }), { stdout: '{"groups":[]}', stderr: '' }) });
+  assert.deepEqual(JSON.parse(seen[0].opts.input), OVERMIND);
+  const bad = createOvermindCli({ run: async () => ({ stdout: 'nope', stderr: '' }) });
+  await assert.rejects(bad.groupRun({ overmind: OVERMIND }), /non-JSON/);
+  const cached = createOvermindCli({ run: async (b, args) => (seen.push({ args }), { stdout: '{"groups":[]}', stderr: '' }) });
   await cached.groupCached();
   assert.deepEqual(seen.at(-1).args, ['group', '--cached', '--json']);
 });
@@ -149,7 +149,7 @@ test('config: web.grouping is opt-in, grouping.host makes one host authoritative
   assert.equal(n({ self: 'laptop', web: { grouping: { enabled: true } }, grouping: { host: 'laptop' } }).enabled, true);
   // Enabled here but another host is the grouping host: this one stays off.
   assert.equal(n({ self: 'laptop', web: { grouping: { enabled: true } }, grouping: { host: 'workstation' } }).enabled, false);
-  assert.equal(n({ self: 'laptop' }, { FLEET_WEB_GROUPING: '1' }).enabled, true);
+  assert.equal(n({ self: 'laptop' }, { OVERMIND_WEB_GROUPING: '1' }).enabled, true);
   assert.throws(() => n({ web: { grouping: { enabled: 'yes' } } }), /grouping.enabled/);
   assert.throws(() => n({ web: { grouping: { intervalMinutes: 0 } } }), /intervalMinutes/);
   assert.throws(() => n({ grouping: { host: '' } }), /grouping.host/);
@@ -183,13 +183,13 @@ async function startPair(t, { workstationGrouping = {} } = {}) {
       ...(name === 'workstation' ? { grouping: workstationGrouping } : {}),
     };
     const config = normalizeConfig(raw, { env: {}, home: HOME });
-    const cli = createFleetCli({ run: async () => ({ stdout: JSON.stringify(hosts[name]), stderr: '' }) });
-    const fleet = createFleet({ cli, self: name });
+    const cli = createOvermindCli({ run: async () => ({ stdout: JSON.stringify(hosts[name]), stderr: '' }) });
+    const overmind = createOvermind({ cli, self: name });
     let api = null;
     const grouper = config.grouping.enabled
-      ? createGrouper({ cli: groupCli, getFleet: () => api.buildFleet(), peekFleet: () => api.peekFleet(), self: name })
+      ? createGrouper({ cli: groupCli, getOvermind: () => api.buildOvermind(), peekOvermind: () => api.peekOvermind(), self: name })
       : null;
-    api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, grouper, warmFleet: false });
+    api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, grouper, warmOvermind: false });
     t.after(() => api.stop());
     handles[name] = api;
   }
@@ -205,7 +205,7 @@ async function post(url, body) {
   return { status: res.status, body: await res.json() };
 }
 
-test('/api/groups: served by the grouping host, proxied by grouping.host, runs over the merged fleet', async (t) => {
+test('/api/groups: served by the grouping host, proxied by grouping.host, runs over the merged overmind', async (t) => {
   const { urls, groupCli } = await startPair(t, { workstationGrouping: { host: 'laptop' } });
   const empty = await get(`${urls.laptop}/api/groups`);
   assert.equal(empty.status, 200);
@@ -229,7 +229,7 @@ test('/api/groups: served by the grouping host, proxied by grouping.host, runs o
   const viaPeer = await get(`${urls.workstation}/api/groups`);
   assert.equal(viaPeer.status, 200);
   assert.equal(viaPeer.body.host, 'laptop');
-  assert.deepEqual(viaPeer.body.groups.map((g) => g.label), ['Fleet Board', 'Team Reviews']);
+  assert.deepEqual(viaPeer.body.groups.map((g) => g.label), ['Overmind Board', 'Team Reviews']);
 
   const h = await get(`${urls.laptop}/api/health`);
   assert.equal(h.body.grouping.enabled, true);
@@ -247,8 +247,8 @@ test('/api/groups: without grouping.host a peer finds the grouping host itself',
 
 test('/api/groups: nobody runs grouping → disabled response and 501 on run', async () => {
   const config = normalizeConfig({ self: 'solo' }, { env: {}, home: HOME });
-  const cli = createFleetCli({ run: async () => ({ stdout: '[]', stderr: '' }) });
-  const api = createApi({ config, fleet: createFleet({ cli, self: 'solo' }), backend: {}, transcripts: {}, spawner: {}, warmFleet: false });
+  const cli = createOvermindCli({ run: async () => ({ stdout: '[]', stderr: '' }) });
+  const api = createApi({ config, overmind: createOvermind({ cli, self: 'solo' }), backend: {}, transcripts: {}, spawner: {}, warmOvermind: false });
   const r = await api({ method: 'GET', headers: {} }, new URL('http://x/api/groups'));
   assert.equal(r.status, 200);
   assert.equal(r.body.enabled, false);
@@ -267,7 +267,7 @@ test('grouper: an edit waits for a running pass and a pass waits for an edit', a
     groupRun: async () => (order.push('run:start'), await gate, order.push('run:end'), report([BOARD])),
     groupEdit: async (op) => (order.push(`edit:${op.label}`), report([{ ...BOARD, label: op.label }])),
   };
-  const g = createGrouper({ cli, getFleet: async () => FLEET });
+  const g = createGrouper({ cli, getOvermind: async () => OVERMIND });
   const run = g.runOnce('manual');
   await new Promise((r) => setImmediate(r));
   const edit = g.edit({ op: 'rename', id: 'g-1', label: 'Renamed' });
@@ -280,9 +280,9 @@ test('grouper: an edit waits for a running pass and a pass waits for an edit', a
   assert.equal(r.groups[0].label, 'Renamed');
 });
 
-test('fleet-cli groupEdit: flags as --k=v, the CLI error surfaces as refused', async () => {
+test('overmind-cli groupEdit: flags as --k=v, the CLI error surfaces as refused', async () => {
   const seen = [];
-  const cli = createFleetCli({ run: async (b, args) => (seen.push(args), { stdout: JSON.stringify(report([BOARD])), stderr: '' }) });
+  const cli = createOvermindCli({ run: async (b, args) => (seen.push(args), { stdout: JSON.stringify(report([BOARD])), stderr: '' }) });
   await cli.groupEdit({ op: 'rename', id: 'g-1', label: '-dash' });
   await cli.groupEdit({ op: 'move', host: 'laptop', session: 'a1', to: 'g-2' });
   await cli.groupEdit({ op: 'move', host: 'laptop', session: 'a1', label: 'New One' });
@@ -295,7 +295,7 @@ test('fleet-cli groupEdit: flags as --k=v, the CLI error surfaces as refused', a
     ['group', '--create', '--label=Spikes', '--json'],
     ['group', '--delete=g-3', '--json'],
   ]);
-  const failing = createFleetCli({
+  const failing = createOvermindCli({
     run: async () => {
       throw Object.assign(new Error('Command failed'), { code: 1, stderr: 'Error: no group g-9\n' });
     },
@@ -340,7 +340,7 @@ test('/api/groups/edit: applied on the grouping host, proxied from a peer, refus
 test('grouper: a member\'s `dormant: true` passes through to /api/groups (only when true)', async () => {
   const members = [{ host: 'laptop', id: 'a1', dormant: true }, { host: 'laptop', id: 'a2', dormant: false }, { host: 'laptop', id: 'a3' }];
   const cli = { ...fakeCli(), groupCached: async () => report([{ ...BOARD, members }]) };
-  const g = createGrouper({ cli, getFleet: async () => FLEET, self: 'laptop', intervalMs: 600000 });
+  const g = createGrouper({ cli, getOvermind: async () => OVERMIND, self: 'laptop', intervalMs: 600000 });
   await g.loadCached();
   assert.deepEqual(g.response().groups[0].members, [{ host: 'laptop', id: 'a1', dormant: true }, { host: 'laptop', id: 'a2' }, { host: 'laptop', id: 'a3' }]);
 });

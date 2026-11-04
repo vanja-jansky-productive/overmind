@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { useSlack } from '@/hooks/useSlack'
 import { relTime } from '@/lib/format'
@@ -9,7 +9,7 @@ import { allSessions, findStatusFilter, keepOrder, listView, slackLinked, status
 
 /**
  * The session list's state, shared by the mobile list screen and the desktop sidebar:
- * search, status + host filters (persisted in `fleet.filter` / `fleet.hostFilter`; Bots / Slack / Apps
+ * search, status + host filters (persisted in `overmind.filter` / `overmind.hostFilter`; Bots / Slack / Apps
  * are status filters; the host filter is a scope or a multi-select, lib/hosts.ts), the filtered view,
  * per-host counts, the header summary (own hosts only: a shared shed's sessions are not yours to
  * answer) and the "updated Xs ago" note.
@@ -17,14 +17,14 @@ import { allSessions, findStatusFilter, keepOrder, listView, slackLinked, status
  * under the mouse; the new order lands when it leaves.
  */
 export function useSessionList(now: number) {
-  const { fleet, fleetAt, error, refreshing } = useFleet()
+  const { overmind, overmindAt, error, refreshing } = useOvermind()
   const [query, setQuery] = useState('')
-  const [status, setStatus] = usePersistentState<StatusFilterId>('fleet.filter', 'all', (raw) => findStatusFilter(raw).id)
-  const [hostFilter, setHostFilter] = usePersistentState<string>('fleet.hostFilter', serializeSelection(DEFAULT_SELECTION))
+  const [status, setStatus] = usePersistentState<StatusFilterId>('overmind.filter', 'all', (raw) => findStatusFilter(raw).id)
+  const [hostFilter, setHostFilter] = usePersistentState<string>('overmind.hostFilter', serializeSelection(DEFAULT_SELECTION))
   const selection = useMemo(() => parseSelection(hostFilter), [hostFilter])
   const setSelection = (sel: HostSelection) => setHostFilter(serializeSelection(sel))
 
-  const hosts = useMemo(() => fleet?.hosts ?? [], [fleet])
+  const hosts = useMemo(() => overmind?.hosts ?? [], [overmind])
   const hostNames = hosts.map((h) => h.name)
   // The hosts shown; a remembered host that is no longer configured drops out (lib/hosts.ts).
   const shown = useMemo(() => resolveSelection(selection, hosts), [selection, hosts])
@@ -34,17 +34,17 @@ export function useSessionList(now: number) {
 
   const slackStatus = useSlack()
   const slack = useMemo(() => slackLinked(slackStatus?.enabled ? slackStatus.links : null), [slackStatus])
-  const live = useMemo(() => listView(fleet, { query, hosts: hostSet, status, slack }), [fleet, query, hostSet, status, slack])
+  const live = useMemo(() => listView(overmind, { query, hosts: hostSet, status, slack }), [overmind, query, hostSet, status, slack])
   // The order the list froze in (session keys); null when it follows the live order.
   const [frozenOrder, setFrozenOrder] = useState<string[] | null>(null)
   const setFrozen = (on: boolean) => setFrozenOrder(on ? live.sessions.map((s) => `${s.host}/${s.session_id}`) : null)
   const view = useMemo(() => (frozenOrder ? { ...live, sessions: keepOrder(live.sessions, frozenOrder) } : live), [live, frozenOrder])
   const hostCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const s of allSessions(fleet)) counts.set(s.host, (counts.get(s.host) ?? 0) + 1)
+    for (const s of allSessions(overmind)) counts.set(s.host, (counts.get(s.host) ?? 0) + 1)
     return counts
-  }, [fleet])
-  const summary = useMemo(() => statusSummary(fleet, ownHosts), [fleet, ownHosts])
+  }, [overmind])
+  const summary = useMemo(() => statusSummary(overmind, ownHosts), [overmind, ownHosts])
   // Sessions waiting on each shared host: the rail's quiet hint that something happens there.
   const sharedWaiting = useMemo(() => {
     const out = new Map<string, number>()
@@ -58,13 +58,13 @@ export function useSessionList(now: number) {
   const unreachable = hosts.filter((h) => h.ok === false && (hostSet == null || hostSet.has(h.name)))
 
   let note: { text: string; error?: boolean }
-  if (!fleet && refreshing) note = { text: 'loading…' }
+  if (!overmind && refreshing) note = { text: 'loading…' }
   else if (error) note = { text: 'offline — retrying', error: true }
   else if (refreshing) note = { text: 'refreshing…' }
-  else note = { text: fleetAt ? `updated ${relTime(fleetAt, now)} ago` : '' }
+  else note = { text: overmindAt ? `updated ${relTime(overmindAt, now)} ago` : '' }
 
   return {
-    fleet,
+    overmind,
     error,
     query,
     setQuery,

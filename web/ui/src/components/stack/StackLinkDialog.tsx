@@ -7,7 +7,7 @@ import { HostBadge } from '@/components/HostBadge'
 import { StatusDot } from '@/components/StatusDot'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { shortCwd } from '@/lib/format'
 import { paletteFilter } from '@/lib/palette'
 import { allSessions, byLastActivity, findSession } from '@/lib/sessions'
@@ -36,11 +36,11 @@ async function runLink(plan: LinkPlan, source: Session, other: Session, refresh:
  * stack either of them is in, or creates one around this session (one model call).
  */
 export function StackLinkDialog({ target, onClose }: { target: { host: string; id: string } | null; onClose: () => void }) {
-  const { fleet, refresh } = useFleet()
-  const found = target ? findSession(fleet, target.host, target.id) : null
+  const { overmind, refresh } = useOvermind()
+  const found = target ? findSession(overmind, target.host, target.id) : null
   const source = found && target ? { ...found, host: target.host } : null
   const candidates = source
-    ? allSessions(fleet)
+    ? allSessions(overmind)
         .filter((s) => sessionKey(s) !== sessionKey(source))
         .map((s) => ({ s, plan: linkPlan(source, s) }))
         .filter((c) => c.plan.kind !== 'same')

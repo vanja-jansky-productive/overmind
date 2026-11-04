@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-    <title>Fleet</title>
-    <meta name="description" content="Supervise and steer the Claude Code fleet" />
+    <title>Overmind</title>
+    <meta name="description" content="Supervise and steer the Claude Code overmind" />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#0b0c0e" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Fleet" />
+    <meta name="apple-mobile-web-app-title" content="Overmind" />
     <meta name="format-detection" content="telephone=no" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -19,12 +19,12 @@
       // Pre-paint theme (same rules as ThemeProvider): dark unless chosen/OS-preferred light, plus
       // the palette (lib/palettes.ts; theme-color = the palette's --background per mode).
       try {
-        var t = localStorage.getItem('fleet.theme')
+        var t = localStorage.getItem('overmind.theme')
         // The embed view (#/embed?…&theme=dark|light, or ?…&theme=…#/…) is told its mode by the page framing it.
         var forced = /[?&]theme=(dark|light)\b/.exec(location.search + location.hash)
         if (forced) t = forced[1]
         var light = t === 'light' || (t !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches)
-        var p = localStorage.getItem('fleet.palette')
+        var p = localStorage.getItem('overmind.palette')
         var colors = { suite: ['#17181a', '#fbfbfa'], graphite: ['#0b0c0e', '#ffffff'], earth: ['#1a1512', '#f7f2ea'], dusk: ['#121119', '#faf9fc'] }
         if (!colors.hasOwnProperty(p)) p = 'suite'
         if (light) document.documentElement.classList.remove('dark')
@@ -33,7 +33,7 @@
       } catch (e) {}
       // Pre-paint text size (same rule as PrefsProvider / lib/prefs.ts rootFontSize): scales every rem.
       try {
-        var f = localStorage.getItem('fleet.chatFont')
+        var f = localStorage.getItem('overmind.chatFont')
         if (f === '13' || f === '17') {
           document.documentElement.style.fontSize = f === '13' ? '86.667%' : '113.333%'
           document.documentElement.dataset.textSize = f
@@ -43,7 +43,7 @@
   </head>
   <body>
     <div id="root"></div>
-    <noscript><p style="padding:16px">Fleet needs JavaScript.</p></noscript>
+    <noscript><p style="padding:16px">Overmind needs JavaScript.</p></noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

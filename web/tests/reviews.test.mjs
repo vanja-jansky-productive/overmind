@@ -15,7 +15,7 @@ const SID = 'aaaaaaaa-0000-0000-0000-000000000001';
 const session = { session_id: SID, cwd: '/tmp/x', status: 'idle', backend: 'tmux' };
 
 function fixture(t, { start = 1_000_000 } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-reviews-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-reviews-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const sent = [];
   const transcript = [];
@@ -140,10 +140,10 @@ test('validation: bad anchors and bodies are 400s, unknown threads 404', async (
 test('HTTP: …/review routes locally (methods, ids) and 501 without reviews', async (t) => {
   const fx = fixture(t);
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [session] }) };
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [session] }) };
   const urls = {};
   for (const [k, reviews] of [['on', fx.reviews], ['off', null]]) {
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, reviews, warmFleet: false });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, reviews, warmOvermind: false });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));

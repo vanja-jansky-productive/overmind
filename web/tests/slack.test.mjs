@@ -59,7 +59,7 @@ function fakeSlack() {
 }
 
 function fixture(t, { status = 'idle', download = null, settings = { owner: 'UOWNER' }, spawn = null, self = null, sessionUrl = null } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-slack-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-slack-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const slack = fakeSlack();
   const sessions = [
@@ -140,7 +140,7 @@ test('link: reads the thread, types the intro into the idle session, then messag
   assert.match(intro, /The owner's instructions for it: artifact testing/);
   assert.match(intro, /a thread you have posted in[^]*not necessarily for you/);
   assert.match(fx.sent[0].text, /Stay free to talk[^]*background subagent/);
-  assert.match(intro, new RegExp(`fleet slack reply ${link.id}`));
+  assert.match(intro, new RegExp(`overmind slack reply ${link.id}`));
   assert.match(intro, /Owner \(UOWNER, the owner of this session\)/);
   assert.match(intro, /Alex \(U1\)[^\n]*\n\s*How does it work\?/);
   assert.doesNotMatch(intro, /a bot/);
@@ -215,7 +215,7 @@ test('proactive mode: every message goes in, marked as not addressed', async (t)
 });
 
 test('a session on another host: listed and typed into on its host; replies only from there', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-slack-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-slack-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const slack = fakeSlack();
   const byHost = {
@@ -261,7 +261,7 @@ test('delivery waits while the session is busy or waiting', async (t) => {
 });
 
 test('blocked: a session waiting on its owner says so in the thread and DMs the owner, then says it continued', async (t) => {
-  const fx = fixture(t, { sessionUrl: (host, id) => `http://workstation:7777/#/s/${host}/${id}` });
+  const fx = fixture(t, { sessionUrl: (host, id) => `http://workstation:7878/#/s/${host}/${id}` });
   fx.slack.handlers['conversations.open'] = () => ({ channel: { id: 'DOWNER' } });
   fx.slack.handlers['chat.update'] = () => ({});
   fx.slack.handlers['reactions.remove'] = () => ({});
@@ -289,7 +289,7 @@ test('blocked: a session waiting on its owner says so in the thread and DMs the 
   assert.doesNotMatch(notice.params.text, /`/);
   assert.equal(dm.params.channel, 'DOWNER');
   assert.match(dm.params.text, /artifacts-demo\* is blocked/);
-  assert.ok(dm.params.text.includes(`<http://workstation:7777/#/s/h/${SID}|Open it in Fleet>`));
+  assert.ok(dm.params.text.includes(`<http://workstation:7878/#/s/h/${SID}|Open it in Overmind>`));
   assert.ok(dm.params.text.includes(link.id));
   assert.equal((await fx.bridge.list()).links[0].blocked.what, blockedWhat('permission `rm -rf /tmp/x`'));
   fx.advance(16_000);
@@ -473,7 +473,7 @@ test('slack.owner changed while linked: messages mark the owner it is now', asyn
   const fx = fixture(t, { settings, status: 'idle' });
   const link = await fx.bridge.link({ session: SID, url: URL_, minutes: 30, mode: 'proactive', host: 'h' });
   await fx.bridge.tick(); // the intro
-  settings.owner = 'U1'; // what the server's reload does after `fleet config set slack.owner U1`
+  settings.owner = 'U1'; // what the server's reload does after `overmind config set slack.owner U1`
   fx.advance(10_000);
   await fx.bridge.handleEvent({ type: 'message', channel: 'C0123ABCDEF', ts: '1792778300.000001', thread_ts: THREAD, user: 'U1', text: 'go' });
   await fx.bridge.tick();
@@ -711,8 +711,8 @@ test('HTTP: /api/slack on the bridge host, proxied elsewhere, off without slack.
   const servers = {};
   const start = async (k, raw, slack) => {
     const config = normalizeConfig(raw, { env: {}, home: '/home/tester' });
-    const fleet = { localHost: async () => ({ name: raw.self, ok: true, sessions: fx.sessions }) };
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, slack, warmFleet: false });
+    const overmind = { localHost: async () => ({ name: raw.self, ok: true, sessions: fx.sessions }) };
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, slack, warmOvermind: false });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));
@@ -839,8 +839,8 @@ test('two bridges: slack.bridges sends a host\'s sessions to its own bridge; sta
   const studio = fixture(t);
   const start = async (raw, slack, sessions) => {
     const config = normalizeConfig(raw, { env: {}, home: '/home/tester' });
-    const fleet = { localHost: async () => ({ name: raw.self, ok: true, sessions }) };
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, slack, warmFleet: false });
+    const overmind = { localHost: async () => ({ name: raw.self, ok: true, sessions }) };
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, slack, warmOvermind: false });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));
@@ -901,13 +901,13 @@ test('two bridges: slack.bridges sends a host\'s sessions to its own bridge; sta
 test('a spawn linked to Slack: no prompt at launch, linked once it registers, the prompt ends the intro', async (t) => {
   const fx = fixture(t);
   const NEW = 'cccccccc-0000-0000-0000-000000000003';
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-spawn-slack-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-spawn-slack-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const spawned = [];
   const spawner = { spawn: async (o) => (spawned.push(o), { name: o.name, dir: o.dir, tmuxSession: o.name, command: 'claude', trusted: false }) };
   const start = async (raw, slack) => {
     const config = normalizeConfig({ spawnDirs: [dir], ...raw }, { env: {}, home: '/home/tester' });
-    const fleet = { localHost: async () => ({ name: raw.self, ok: true, sessions: fx.sessions }) };
+    const overmind = { localHost: async () => ({ name: raw.self, ok: true, sessions: fx.sessions }) };
     // The session registers while the spawn waits: first unlisted, then listed without an id, then with one.
     let waits = 0;
     const sleep = async () => {
@@ -915,7 +915,7 @@ test('a spawn linked to Slack: no prompt at launch, linked once it registers, th
       if (waits === 1) fx.sessions.push({ session_id: null, name: 'job', status: 'idle', handle: '%7', backend: 'tmux', tmux_session: 'job' });
       else fx.sessions.at(-1).session_id = NEW;
     };
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner, slack, warmFleet: false, sleep });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner, slack, warmOvermind: false, sleep });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));
@@ -1097,8 +1097,8 @@ test('PUT /api/slack/spawn: saved in the bridge\'s config and live at once; prox
   const cli = { configSet: async (o) => void sets.push(o) };
   const servers = {};
   const start = async (k, config, slack) => {
-    const fleet = { localHost: async () => ({ name: config.self, ok: true, sessions: fx.sessions }) };
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, slack, cli, warmFleet: false });
+    const overmind = { localHost: async () => ({ name: config.self, ok: true, sessions: fx.sessions }) };
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, slack, cli, warmOvermind: false });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));

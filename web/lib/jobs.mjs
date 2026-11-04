@@ -1,7 +1,7 @@
 // Jobs (cron-scheduled agent sessions): GET /api/hosts/:host/jobs[/:name], POST …/jobs/:name/run,
 // POST …/jobs/:name/enabled. The CLI owns everything (docs/cli.md → Jobs): the list is
-// `fleet --local jobs --json`, one job with its runs `fleet --local jobs show <name> --json`, a run
-// now `fleet --local jobs run [--force] <name>`, pause / resume `fleet --local jobs enable|disable`.
+// `overmind --local jobs --json`, one job with its runs `overmind --local jobs show <name> --json`, a run
+// now `overmind --local jobs run [--force] <name>`, pause / resume `overmind --local jobs enable|disable`.
 // Each host has its own jobs (its config's `jobs`); the UI asks every host. A prompt file gets
 // `prompt.abs` (`~` expanded on the job's host) and `prompt.root` (its git checkout, else its
 // directory); the API layer adds their editor links.
@@ -13,7 +13,7 @@ import path from 'node:path';
 /** A job name as the UI may send it (config keys are free-form; the web only passes these). */
 export const JOB_NAME_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
-const MISSING = 'this host’s fleet CLI has no `jobs` command — update it';
+const MISSING = 'this host’s overmind CLI has no `jobs` command — update it';
 
 export function validJobName(name) {
   return typeof name === 'string' && JOB_NAME_RE.test(name);
@@ -45,7 +45,7 @@ function withPromptAbs(job, home, exists) {
 }
 
 /**
- * @param cli   lib/fleet-cli.mjs instance (`jobs`, `jobShow`, `jobRunNow`, `jobSetEnabled`)
+ * @param cli   lib/overmind-cli.mjs instance (`jobs`, `jobShow`, `jobRunNow`, `jobSetEnabled`)
  * @param self  this host's name
  * @param home  this host's home directory (expands a `~/…` prompt file)
  * @param exists  path → whether it exists (finds a prompt file's git checkout)

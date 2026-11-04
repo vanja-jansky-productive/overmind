@@ -1,12 +1,12 @@
-// After a spawn: poll /api/fleet until Claude registers the new session, then hand it
+// After a spawn: poll /api/overmind until Claude registers the new session, then hand it
 // over (the caller navigates to it). One watch at a time; a new spawn replaces the old one.
 import { api } from '@/api/client'
-import type { FleetResponse, Session, SpawnResponse } from '@/api/types'
+import type { OvermindResponse, Session, SpawnResponse } from '@/api/types'
 import { findSpawned } from '@/lib/sessions'
 
 export interface SpawnWatchHandlers {
-  /** Every fresh fleet body (so the list updates too). */
-  onFleet: (fleet: FleetResponse) => void
+  /** Every fresh overmind body (so the list updates too). */
+  onOvermind: (overmind: OvermindResponse) => void
   onFound: (session: Session) => void
   onTimeout: () => void
 }
@@ -26,10 +26,10 @@ export function watchForSpawned(
 
   const tick = async () => {
     try {
-      const fleet = await api.fleet({ signal: ctl.signal })
+      const overmind = await api.overmind({ signal: ctl.signal })
       if (stopped) return
-      handlers.onFleet(fleet)
-      const found = findSpawned(fleet, spawned.host, spawned)
+      handlers.onOvermind(overmind)
+      const found = findSpawned(overmind, spawned.host, spawned)
       if (found) {
         stop()
         handlers.onFound(found)

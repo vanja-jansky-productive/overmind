@@ -81,7 +81,7 @@ export function validateInputData(data) {
   return { ok: true, data };
 }
 
-/** Same cap as the CLI (`fleet rename`, core::title::MAX_TITLE). */
+/** Same cap as the CLI (`overmind rename`, core::title::MAX_TITLE). */
 export const MAX_TITLE = 64;
 
 /** A session title for `rename`: trimmed, single line, 1..64 chars. */

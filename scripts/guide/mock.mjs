@@ -1,4 +1,4 @@
-// Demo API for the fleet web UI, for the feature-guide screenshots (scripts/guide/README.md).
+// Demo API for the overmind web UI, for the feature-guide screenshots (scripts/guide/README.md).
 // Every value here is invented: company "Acme", user "demo", hosts laptop / workstation / devbox.
 // It serves web/ui/dist and answers the HTTP API the UI calls (web/ui/src/api/client.ts) with
 // canned data; writes answer { ok: true } and change nothing. New UI features need data here.
@@ -6,7 +6,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const DIST = process.env.FLEET_WEB_UI || new URL('../../web/ui/dist', import.meta.url).pathname
+const DIST = process.env.OVERMIND_WEB_UI || new URL('../../web/ui/dist', import.meta.url).pathname
 const PORT = Number(process.env.GUIDE_PORT || 7799)
 const H = '/Users/demo'
 const M = 60_000, HR = 3_600_000, D = 86_400_000
@@ -30,7 +30,7 @@ const SESSIONS = () => [
   S({ host: 'laptop', session_id: 'c3d4e5f6-3333-4000-8000-000000000001', pid: 77120, display_title: 'Docs site search', backend: 'iterm', handle: 'w0t2p0', tab: 'docs', cwd: `${H}/Code/docs`, status: 'idle', updated_at: now() - 2 * HR, model: 'claude-sonnet-5-5', context: { used: 18_000, window: 200_000, pct: 9 } }),
   S({ host: 'laptop', session_id: 'c3d4e5f6-3333-4000-8000-000000000002', pid: 77333, display_title: 'Billing webhook retries', cwd: `${H}/Code/billing-service`, status: 'busy', updated_at: now() - 6_000, handle: '%2', tmux_session: 'billing-webhooks', model: 'claude-opus-5-5', context: { used: 410_000, window: 1_000_000, pct: 41 } }),
   S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-000000000008', pid: 41850, display_title: 'Billing questions (#billing)', cwd: `${H}/Code/acme-api`, status: 'idle', updated_at: now() - 14 * M, handle: '%32', tmux_session: 'billing-slack', model: 'claude-sonnet-5-5', context: { used: 26_000, window: 200_000, pct: 13 } }),
-  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-0000000000ff', pid: 41999, display_title: 'Operator', cwd: `${H}/.local/state/fleet/operator`, status: 'idle', updated_at: now() - 60_000, handle: '%30', tmux_session: 'operator', operator: true, model: 'claude-sonnet-5-5' }),
+  S({ host: 'workstation', session_id: 'a1b2c3d4-1111-4000-8000-0000000000ff', pid: 41999, display_title: 'Operator', cwd: `${H}/.local/state/overmind/operator`, status: 'idle', updated_at: now() - 60_000, handle: '%30', tmux_session: 'operator', operator: true, model: 'claude-sonnet-5-5' }),
 ].map((s) => ({ ...s, name: s.display_title, editorUrl: `vscode://vscode-remote/ssh-remote+${s.host}${s.cwd}` }))
 
 const SPAWN_DIRS = {
@@ -39,7 +39,7 @@ const SPAWN_DIRS = {
   laptop: [{ label: 'acme-web', path: '~/Code/acme-web' }, { label: 'docs', path: '~/Code/docs' }, { label: 'billing-service', path: '~/Code/billing-service' }],
 }
 const HOSTS = ['laptop', 'workstation', 'devbox']
-function fleet() {
+function overmind() {
   const all = SESSIONS()
   return {
     self: 'laptop', snapshotAt: now(),
@@ -68,7 +68,7 @@ function chat(id) {
     { role: 'assistant', kind: 'assistant', final: false, ts: t - 60_000, text: 'Checking how `Currency.minorUnits` is used across billing…' },
   ]
   if (id.endsWith('0008') && id.startsWith('a1')) return [
-    { role: 'user', kind: 'user', ts: t - 2 * HR, text: 'You are linked to a Slack thread in #billing until 18:00 (sl-3c9e1a). Task: answer questions about the invoice rounding fix and when the affected invoices can be re-issued. Do not promise dates. Post only with `fleet slack reply`.' },
+    { role: 'user', kind: 'user', ts: t - 2 * HR, text: 'You are linked to a Slack thread in #billing until 18:00 (sl-3c9e1a). Task: answer questions about the invoice rounding fix and when the affected invoices can be re-issued. Do not promise dates. Post only with `overmind slack reply`.' },
     { role: 'assistant', kind: 'assistant', final: true, ts: t - 2 * HR + 30_000, text: 'Linked. I read the thread so far and will answer when someone asks me.' },
     { role: 'user', kind: 'user', ts: t - 25 * M, text: 'Slack #billing · Marta (U04MARTA) → mentions you: can we re-issue INV-2026-0912 today?' },
     { role: 'assistant', kind: 'assistant', final: false, ts: t - 24 * M, text: 'Checking the state of acme/acme-api#482.' },
@@ -187,9 +187,9 @@ function groups() {
 function stack() {
   const md = `---\nlabel: Onboarding redesign\n---\n## Summary\nNew 3-step onboarding for Acme web: UI in acme-web (devbox), the profile + invite endpoints in acme-api (workstation), and the copy + welcome emails. Design: Figma "Onboarding v3".\n\n## Resources\n- Spec: \`docs/onboarding/v3.md\`\n- PR: [acme/acme-web#1322](https://github.com/acme/acme-web/pull/1322)\n- Link: [Figma — Onboarding v3](https://figma.com/)\n\n## Notes\n- Step 2 must work without a company domain (freelancers).\n- Emails go out through the existing Postmark templates.\n`
   return {
-    host: 'devbox', id: 'onboarding-redesign', label: 'Onboarding redesign', path: `${H}/.local/state/fleet/stacks/onboarding-redesign.md`, cwd: '~/Code/acme-web', absCwd: `${H}/Code/acme-web`,
+    host: 'devbox', id: 'onboarding-redesign', label: 'Onboarding redesign', path: `${H}/.local/state/overmind/stacks/onboarding-redesign.md`, cwd: '~/Code/acme-web', absCwd: `${H}/Code/acme-web`,
     created: iso(now() - 2 * D), updated: iso(now() - 25 * M), generatedAt: iso(now() - 2 * D), editedAt: iso(now() - 25 * M),
-    contextLine: 'You are one of several sessions in the stack "Onboarding redesign"; shared context: ~/.local/state/fleet/stacks/onboarding-redesign.md',
+    contextLine: 'You are one of several sessions in the stack "Onboarding redesign"; shared context: ~/.local/state/overmind/stacks/onboarding-redesign.md',
     members: [
       { session: 'b2c3d4e5-2222-4000-8000-000000000001', host: 'devbox', name: 'Onboarding flow redesign', added: iso(now() - 2 * D), closed: null, live: true, status: 'busy' },
       { session: 'b2c3d4e5-2222-4000-8000-000000000002', host: 'devbox', name: 'Onboarding copy & emails', added: iso(now() - D), closed: null, live: true, status: 'idle' },
@@ -453,7 +453,7 @@ const FILES = {
 }
 const kindOf = (p) => /\.md$/.test(p) ? 'markdown' : /\.(png|jpe?g|svg)$/.test(p) ? 'image' : /\.pdf$/.test(p) ? 'pdf' : 'text'
 
-const OPERATOR = () => ({ host: 'workstation', dir: `${H}/.local/state/fleet/operator`, session: SESSIONS().find((s) => s.operator), tmuxSession: 'operator' })
+const OPERATOR = () => ({ host: 'workstation', dir: `${H}/.local/state/overmind/operator`, session: SESSIONS().find((s) => s.operator), tmuxSession: 'operator' })
 
 // ---------------------------------------------------------------- diff reviewer
 // "Invoice rounding fix" works in its acme-api worktree and edits the PDF renderer in an
@@ -655,9 +655,9 @@ const focusStatus = (host) => ({ host, active: false, remainingMs: 0, endsAt: nu
 async function body(req) { const b = []; for await (const c of req) b.push(c); try { return JSON.parse(Buffer.concat(b).toString() || '{}') } catch { return {} } }
 function route(method, p, q, b) {
   let m
-  if (p === '/api/health') return { name: 'fleet-web', version: '0.9.0', apiVersion: 1, self: 'laptop', uptime: 86_000, now: now(), autoName: { enabled: true, intervalMinutes: 5, lastRun: { ok: true, at: now() - 2 * M, ms: 4100, renamed: [{ from: 'fw-101522', to: 'invoice-rounding-fix' }] } } }
+  if (p === '/api/health') return { name: 'overmind-web', version: '0.9.0', apiVersion: 1, self: 'laptop', uptime: 86_000, now: now(), autoName: { enabled: true, intervalMinutes: 5, lastRun: { ok: true, at: now() - 2 * M, ms: 4100, renamed: [{ from: 'om-101522', to: 'invoice-rounding-fix' }] } } }
   if (p === '/api/settings') return SETTINGS
-  if (p === '/api/fleet') return fleet()
+  if (p === '/api/overmind') return overmind()
   if (p === '/api/groups' || p === '/api/groups/run' || p === '/api/groups/edit') return groups()
   if (p === '/api/operator') return OPERATOR()
   if (p === '/api/memos') return { dir: `${H}/Memos`, memos: MEMOS }
@@ -708,7 +708,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
   if (url.pathname === '/demo/fixture.json') {
-    // The same fleet as `fleet list --json` rows, for FLEET_FIXTURE (the TUI screenshot).
+    // The same overmind as `overmind list --json` rows, for OVERMIND_FIXTURE (the TUI screenshot).
     const prompts = { 'Checkout e2e flake': 'checkout.spec.ts fails ~1 in 5 runs on CI. Find out why and make it stable.', 'Rate limits spec': 'Write a spec for per-organization API rate limits.', 'October release notes': 'Draft the October release notes from merged PRs.', 'Billing webhook retries': 'Retry failed webhooks with exponential backoff.', 'Onboarding flow redesign': 'Build the new 3-step onboarding UI.', 'Search index migration': 'Migrate the search index to the new schema.' }
     const rows = SESSIONS().filter((s) => !s.operator).map((s) => (prompts[s.display_title] ? { ...s, title: prompts[s.display_title] } : s))
     res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(rows))

@@ -92,14 +92,14 @@ function describeError(err, timeoutMs) {
 }
 
 /**
- * Ask a peer for its local fleet and return a single host entry for it.
+ * Ask a peer for its local overmind and return a single host entry for it.
  * Never throws — an unreachable peer becomes { ok:false, error:"unreachable: ..." }.
  */
 export async function fetchPeerHost(name, baseUrl, { timeoutMs = 6000, now = Date.now } = {}) {
   const fetchedAt = now();
   try {
     const res = await fetchWithTimeout(
-      `${baseUrl}/api/fleet?local=1`,
+      `${baseUrl}/api/overmind?local=1`,
       { headers: { accept: 'application/json' } },
       timeoutMs,
     );
@@ -227,7 +227,7 @@ const PASS_HEADERS = [
   'x-content-type-options',
   'cache-control',
   'last-modified',
-  'x-fleet-kind',
+  'x-overmind-kind',
 ];
 
 /**

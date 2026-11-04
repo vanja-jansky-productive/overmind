@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 
 import { ApiError, api, isAbortError } from '@/api/client'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePoller } from '@/hooks/usePoller'
 import { groupByAccount, usageErrors, type HostUsage } from '@/lib/usage'
 
@@ -13,8 +13,8 @@ let last: HostUsage[] = []
 
 /** Every reachable host's subscription usage, polled while shown, grouped by account. */
 export function useUsage() {
-  const { fleet } = useFleet()
-  const hosts = useMemo(() => (fleet?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [fleet])
+  const { overmind } = useOvermind()
+  const hosts = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [overmind])
   const [results, setResults] = useState<HostUsage[]>(last)
   const [loading, setLoading] = useState(last.length === 0)
   const hostsKey = hosts.join('\n')
@@ -30,7 +30,7 @@ export function useUsage() {
             if (isAbortError(err)) throw err
             // 404/501: that host's server predates the usage route.
             const old = err instanceof ApiError && (err.status === 404 || err.status === 501)
-            const error = old ? 'runs an older fleet — update it to see its usage' : (err as Error)?.message || 'could not load usage'
+            const error = old ? 'runs an older overmind — update it to see its usage' : (err as Error)?.message || 'could not load usage'
             return { host, usage: null, error }
           }
         }),

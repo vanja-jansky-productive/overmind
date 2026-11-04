@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 
 import { api, isAbortError } from '@/api/client'
 import { DormantContext, type DormantState } from '@/hooks/useDormant'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePoller } from '@/hooks/usePoller'
 import { closedCount, dormantCount, dormantErrorMessage, dormantIndex, dormantMissing, hasEntries, hostDormant, restoreSummary, type HostDormant } from '@/lib/dormant'
 
@@ -12,8 +12,8 @@ export const DORMANT_POLL_MS = 30_000
 
 /** Polls GET /api/hosts/:host/dormant (dormant + recently closed) for every reachable host; restore / forget with toasts. */
 export function DormantProvider({ children }: { children: ReactNode }) {
-  const { fleet, refresh: refreshFleet } = useFleet()
-  const hostNames = useMemo(() => (fleet?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [fleet])
+  const { overmind, refresh: refreshOvermind } = useOvermind()
+  const hostNames = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok).map((h) => h.name), [overmind])
   const hostsKey = hostNames.join('\n')
   const [hosts, setHosts] = useState<HostDormant[]>([])
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
@@ -54,10 +54,10 @@ export function DormantProvider({ children }: { children: ReactNode }) {
           return n
         })
         refresh()
-        refreshFleet()
+        refreshOvermind()
       }
     },
-    [refresh, refreshFleet],
+    [refresh, refreshOvermind],
   )
 
   const restore = useCallback(

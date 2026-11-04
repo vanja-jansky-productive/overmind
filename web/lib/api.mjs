@@ -105,7 +105,7 @@ const SESSION_STACK_SPAWN_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/st
 const STACK_SPAWN_PROXY_MS = 180 * 1000;
 const REPOS_ROUTE = /^\/api\/hosts\/([^/]+)\/repos(?:\/(sync|service))?$/;
 const JOBS_ROUTE = /^\/api\/hosts\/([^/]+)\/jobs(?:\/([^/]+)(?:\/(run|enabled))?)?$/;
-/** `fleet jobs run` starts a session (tmux + the agent): give a peer longer than the CLI's 60 s. */
+/** `overmind jobs run` starts a session (tmux + the agent): give a peer longer than the CLI's 60 s. */
 const JOB_RUN_PROXY_MS = 90 * 1000;
 const USAGE_ROUTE = /^\/api\/hosts\/([^/]+)\/usage$/;
 const PRS_ROUTE = /^\/api\/hosts\/([^/]+)\/prs(?:\/(checkout|spawn|seen))?$/;
@@ -123,7 +123,7 @@ const PRS_PROXY_MS = 130 * 1000;
 const TASKS_ROUTE = /^\/api\/hosts\/([^/]+)\/tasks(?:\/(status|spawn))?$/;
 /** A Productive task: its numeric id. */
 const TASK_ID_RE = /^[1-9][0-9]{0,14}$/;
-/** Scheduled sessions: GET list, POST add, POST :id/cancel (`fleet schedule`). */
+/** Scheduled sessions: GET list, POST add, POST :id/cancel (`overmind schedule`). */
 const SCHEDULE_ROUTE = /^\/api\/hosts\/([^/]+)\/schedule(?:\/([a-z0-9]{1,24})\/(cancel))?$/;
 /** A `--at` as the UI sends it (`2026-10-29T07:30`, `tomorrow 09:00`, `in 2h`): passed to the CLI as one flag value. */
 const SCHEDULE_AT_RE = /^[A-Za-z0-9 :+-]{1,40}$/;
@@ -136,20 +136,20 @@ const FOCUS_ROUTE = /^\/api\/hosts\/([^/]+)\/focus$/;
 /** `focus start` runs Shortcuts and quits apps: a few seconds. */
 const FOCUS_PROXY_MS = 45 * 1000;
 const HARNESSES_ROUTE = /^\/api\/hosts\/([^/]+)\/harnesses$/;
-/** `fleet harness list` runs `pi --list-models` (a node start): keep its answer a while. */
+/** `overmind harness list` runs `pi --list-models` (a node start): keep its answer a while. */
 const HARNESSES_TTL_MS = 10 * 60 * 1000;
 const HARNESS_DEFAULTS_ROUTE = /^\/api\/hosts\/([^/]+)\/harness-defaults$/;
 const HARNESS_IDS = ['claude', 'codex', 'pi'];
-// Fallback effort levels for a CLI that predates `efforts` in `fleet harness list`.
+// Fallback effort levels for a CLI that predates `efforts` in `overmind harness list`.
 const DEFAULT_EFFORTS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['minimal', 'low', 'medium', 'high', 'xhigh'], pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] };
 const SLACK_LINK_ACTION_ROUTE = /^\/api\/slack\/links\/([^/]+)\/(unlink|relink)$/;
-/** `fleet slack history | thread | file`: the linked session reads its conversation (read-only). */
+/** `overmind slack history | thread | file`: the linked session reads its conversation (read-only). */
 const SLACK_READS = new Set(['history', 'thread', 'file']);
 const SLACK_ACTIONS = new Set(['/api/slack/link', '/api/slack/reply', ...[...SLACK_READS].map((a) => `/api/slack/${a}`)]);
 const DORMANT_ROUTE = /^\/api\/hosts\/([^/]+)\/dormant(?:\/(restore|forget))?$/;
 /** A restore types launch lines into new tmux panes; `--all` may bring back many sessions. */
 const DORMANT_PROXY_MS = 6 * 60 * 1000;
-/** Restored sessions register in `fleet list` within seconds: refresh the list and stacks then. */
+/** Restored sessions register in `overmind list` within seconds: refresh the list and stacks then. */
 const DORMANT_SETTLE_MS = [3000, 10000];
 
 export const DEFAULT_QUICK_REPLIES = [
@@ -163,13 +163,13 @@ export const DEFAULT_QUICK_REPLIES = [
 /**
  * @param {object} deps
  *   config      normalized config (lib/config.mjs)
- *   fleet       lib/fleet.mjs instance (local discovery)
+ *   overmind       lib/overmind.mjs instance (local discovery)
  *   backend     lib/backends.mjs instance (peek/send/keys)
  *   transcripts lib/transcript.mjs reader
  *   spawner     lib/spawn.mjs spawner
  *   brancher    lib/branch.mjs#createBrancher (…/branch: a new session from a message; absent → 501)
  *   killer      lib/kill.mjs killer (kill action; absent → 501)
- *   cli         lib/fleet-cli.mjs instance — `rename`, `nameOne`, `usage`, `prs`, `prCheckout`, `tasks`, `taskShow`, `taskStatus`, `schedule`, `scheduleAdd`, `scheduleCancel` (absent → 501)
+ *   cli         lib/overmind-cli.mjs instance — `rename`, `nameOne`, `usage`, `prs`, `prCheckout`, `tasks`, `taskShow`, `taskStatus`, `schedule`, `scheduleAdd`, `scheduleCancel` (absent → 501)
  *   autoNamer   lib/autoname.mjs instance (autoname route + health; absent → 501)
  *   spawnNamer  lib/autoname.mjs#createSpawnNamer — a targeted naming pass after an unnamed
  *               spawn with a first prompt (only when web.autoName is enabled; absent → none)
@@ -198,15 +198,15 @@ export const DEFAULT_QUICK_REPLIES = [
  *               grouping host, or a disabled response)
  *   inbox       lib/inbox.mjs instance when THIS host runs the inbox (absent → proxy to
  *               config.inbox.host, or a disabled response)
- *   warmFleet   keep the merged /api/fleet warm in the background (lib/snapshot.mjs)
+ *   warmOvermind   keep the merged /api/overmind warm in the background (lib/snapshot.mjs)
  *   name, version, startedAt   for /api/health
  *   fetchPeerHost, proxyToPeer, streamToPeer, streamFromPeer (optional, for tests)
  * @returns {(req, url) => Promise<{status, body}>}  throws HttpError / BackendError.
- *   The function carries `.refreshFleet()` and `.stop()` (clears the background refresh).
+ *   The function carries `.refreshOvermind()` and `.stop()` (clears the background refresh).
  */
 export function createApi({
   config,
-  fleet,
+  overmind,
   backend,
   transcripts,
   spawner,
@@ -240,19 +240,19 @@ export function createApi({
   inbox = null,
   slack = null,
   groupingDiscoveryMs = 5 * 60 * 1000,
-  name = 'fleet-web',
+  name = 'overmind-web',
   version = '0.0.0',
   startedAt = Date.now(),
   fetchPeerHost = defaultFetchPeerHost,
   proxyToPeer = defaultProxyToPeer,
   streamToPeer = defaultStreamToPeer,
   streamFromPeer = defaultStreamFromPeer,
-  peerFleetTimeoutMs = 6000,
+  peerOvermindTimeoutMs = 6000,
   peerProxyTimeoutMs = 20000,
   peerUploadTimeoutMs = 15 * 60 * 1000,
-  warmFleet = true,
-  fleetRefreshMs = 3000,
-  fleetIdleAfterMs = 90 * 1000,
+  warmOvermind = true,
+  overmindRefreshMs = 3000,
+  overmindIdleAfterMs = 90 * 1000,
   logError = () => {},
   sleep = defaultSleep,
   answerKeyGapMs = 80,
@@ -273,13 +273,13 @@ export function createApi({
 
   // `home`: a `~/…` path from the UI (the embed view's `dir`) is matched against the absolute
   // spawnDirs and session cwds.
-  async function buildFleet({ force = false } = {}) {
-    const selfHost = stampOperator({ ...(await fleet.localHost({ force })), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
+  async function buildOvermind({ force = false } = {}) {
+    const selfHost = stampOperator({ ...(await overmind.localHost({ force })), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
     const peerNames = Object.keys(config.peers);
     const peerHosts = await Promise.all(
-      peerNames.map((n) => fetchPeerHost(n, config.peers[n], { timeoutMs: peerFleetTimeoutMs })),
+      peerNames.map((n) => fetchPeerHost(n, config.peers[n], { timeoutMs: peerOvermindTimeoutMs })),
     );
-    // Editor links are added per request (handleFleet): they depend on where the browser is.
+    // Editor links are added per request (handleOvermind): they depend on where the browser is.
     // A member of a stack homed on another host gets that stack on its row here.
     // `shared` is this server's call (hosts.<name>.shared), whatever a peer says of itself.
     const shared = new Set(config.sharedHosts ?? []);
@@ -287,19 +287,19 @@ export function createApi({
     return { self: config.self, hosts };
   }
 
-  // The merged fleet, served stale-while-revalidate so a page load never waits on
+  // The merged overmind, served stale-while-revalidate so a page load never waits on
   // discovery or the slowest peer (see lib/snapshot.mjs).
-  const snapshot = warmFleet
-    ? createSnapshot({ build: () => buildFleet({ force: true }), refreshMs: fleetRefreshMs, idleAfterMs: fleetIdleAfterMs, logError })
+  const snapshot = warmOvermind
+    ? createSnapshot({ build: () => buildOvermind({ force: true }), refreshMs: overmindRefreshMs, idleAfterMs: overmindIdleAfterMs, logError })
     : null;
 
   /**
    * After a mutation: drop the local cache and rebuild the merged snapshot behind it.
    * `wait`: resolve once a build that started after this call is done (capped at `waitMs`),
-   * so the next /api/fleet already shows the change (a settings save, not a spawn).
+   * so the next /api/overmind already shows the change (a settings save, not a spawn).
    */
-  function refreshFleet({ wait = false, waitMs = 3000 } = {}) {
-    fleet.invalidate?.();
+  function refreshOvermind({ wait = false, waitMs = 3000 } = {}) {
+    overmind.invalidate?.();
     const p = snapshot?.refresh({ fresh: wait }).catch(() => {});
     if (!wait || !p) return Promise.resolve();
     return new Promise((resolve) => {
@@ -309,22 +309,22 @@ export function createApi({
     });
   }
 
-  async function handleFleet(req, url) {
+  async function handleOvermind(req, url) {
     // Editor links are this server's to build: its `web.editor` and its ssh aliases, for the
     // machine the browser is on.
     const ec = editorViewer(config, req);
     const withEditors = (body) => ({ ...body, hosts: body.hosts.map((h) => withSessionEditors(h, ec)) });
     if (url.searchParams.get('local') === '1') {
       // Peers poll this: the local host (2s TTL cache), never the merged snapshot.
-      const selfHost = stampOperator({ ...(await fleet.localHost()), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
+      const selfHost = stampOperator({ ...(await overmind.localHost()), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
       return { status: 200, body: withEditors({ self: config.self, hosts: [selfHost] }) };
     }
     if (snapshot) return { status: 200, body: withEditors(await snapshot.get()) };
-    return { status: 200, body: withEditors({ ...(await buildFleet()), snapshotAt: Date.now() }) };
+    return { status: 200, body: withEditors({ ...(await buildOvermind()), snapshotAt: Date.now() }) };
   }
 
   async function resolveLocalSession(id) {
-    const host = await fleet.localHost();
+    const host = await overmind.localHost();
     if (!host.ok) throw new HttpError(`session discovery failed: ${host.error}`, 503);
     const session = findSession(host.sessions, id);
     if (!session) throw new HttpError(`unknown session: ${id}`, 404);
@@ -380,7 +380,7 @@ export function createApi({
       if (!killer) throw new HttpError('kill is not available on this server', 501);
       const session = await resolveLocalSession(id);
       const result = await killer.kill(session);
-      refreshFleet();
+      refreshOvermind();
       // The StackBrief marks it closed; best effort (logged by lib/stacks.mjs), never fails the kill.
       stacks?.sync('kill').catch(() => {});
       return {
@@ -390,7 +390,7 @@ export function createApi({
     }
 
     if (action === 'sleep') {
-      // Close, but keep it dormant: `fleet sleep` ends it and records it; restore brings it back.
+      // Close, but keep it dormant: `overmind sleep` ends it and records it; restore brings it back.
       if (typeof cli?.sleep !== 'function') throw new HttpError('sleep is not available on this server', 501);
       const session = await resolveLocalSession(id);
       if (!session.session_id || session.session_id.startsWith('pid-')) {
@@ -400,11 +400,11 @@ export function createApi({
       try {
         report = await cli.sleep({ target: session.session_id });
       } catch (err) {
-        if (err?.missing) throw new HttpError("this host's fleet CLI has no `sleep` command — update fleet there", 501);
+        if (err?.missing) throw new HttpError("this host's overmind CLI has no `sleep` command — update overmind there", 501);
         throw new HttpError(`sleep failed: ${err?.message ?? err}`, err?.timedOut ? 504 : 502);
       }
       const terminal = session.backend === 'iterm' && killer?.closeTab ? await killer.closeTab(session) : report.terminal;
-      refreshFleet();
+      refreshOvermind();
       return {
         status: 200,
         body: { ...report, ok: true, host: config.self, id: session.session_id, name: session.name ?? null, terminal },
@@ -416,7 +416,7 @@ export function createApi({
       const check = validateTitle(body.title);
       if (!check.ok) throw new HttpError(check.error, 400);
       const session = await resolveLocalSession(id);
-      // The session id, never a fuzzy name: `fleet rename` types into a live agent.
+      // The session id, never a fuzzy name: `overmind rename` types into a live agent.
       const target = session.session_id && !session.session_id.startsWith('pid-') ? session.session_id : String(session.pid);
       let report;
       try {
@@ -428,7 +428,7 @@ export function createApi({
         // Waiting on a prompt: nothing was typed. 409 so the UI rolls back and says why.
         return { status: 409, body: { host: config.self, id: session.session_id, error: report.message || 'session is waiting on you — nothing sent', ...report } };
       }
-      refreshFleet();
+      refreshOvermind();
       return { status: 200, body: { host: config.self, id: session.session_id, ...report, ok: true } };
     }
 
@@ -446,7 +446,7 @@ export function createApi({
       const base = { host: config.self, id: session.session_id };
       if (held.length) return { status: 409, body: { ...base, error: `session is waiting on you — nothing sent (${held[0]})` } };
       if (errors.length && !renamed.length) return { status: 502, body: { ...base, error: `naming failed: ${errors[0]}` } };
-      refreshFleet();
+      refreshOvermind();
       return { status: 200, body: { ...base, ok: true, name: renamed[0]?.to ?? null } };
     }
 
@@ -478,7 +478,7 @@ export function createApi({
         if (err?.status) throw new HttpError(err.message, err.status);
         throw err;
       }
-      refreshFleet();
+      refreshOvermind();
       return { status: 200, body: { ok: true, host: config.self, ...result, spawn: { ok: true, host: config.self, ...result.spawn } } };
     }
 
@@ -536,7 +536,7 @@ export function createApi({
       else await backend.keys(session, step.key);
       await sleep(answerKeyGapMs);
     }
-    refreshFleet();
+    refreshOvermind();
     return { status: 200, body: { ok: true } };
   }
 
@@ -553,7 +553,7 @@ export function createApi({
       else await backend.keys(session, step.key);
       await sleep(answerKeyGapMs);
     }
-    refreshFleet();
+    refreshOvermind();
     return { status: 200, body: { ok: true } };
   }
 
@@ -637,7 +637,7 @@ export function createApi({
       // Linked: it starts with no prompt, so nothing runs before it knows it is in Slack — the
       // prompt goes in with the link's intro, as its first prompt.
       const result = await spawner.spawn({ ...check, ...(link ? { prompt: '' } : {}), nameGiven });
-      refreshFleet();
+      refreshOvermind();
       if (link) {
         try {
           result.slack = await linkSpawned(result.tmuxSession, link, check.prompt);
@@ -702,7 +702,7 @@ export function createApi({
     await readJsonBody(req);
     if (target.kind === 'self') {
       const body = await grouper.runOnce('manual');
-      refreshFleet();
+      refreshOvermind();
       return { status: body.lastRun?.ok === false ? 502 : 200, body };
     }
     if (target.kind === 'peer') {
@@ -714,7 +714,7 @@ export function createApi({
       });
       return { status: r.status, body: r.body };
     }
-    throw new HttpError(target.error ?? 'smart grouping is not enabled on this fleet (web.grouping.enabled)', 501);
+    throw new HttpError(target.error ?? 'smart grouping is not enabled on this overmind (web.grouping.enabled)', 501);
   }
 
   // --- /api/inbox: served by the inbox host (config inbox.host), proxied from everywhere else
@@ -733,7 +733,7 @@ export function createApi({
       }
       const checked = checkInboxSettings(body);
       if (checked.error) throw new HttpError(checked.error, 400);
-      // The CLI owns the config file: one `fleet config set inbox.<key>` per knob, then live.
+      // The CLI owns the config file: one `overmind config set inbox.<key>` per knob, then live.
       if (typeof cli?.configSet !== 'function') throw new HttpError('config writes are not available on this server', 501);
       try {
         for (const [key, value] of Object.entries(checked.ok)) await cli.configSet({ key: `inbox.${key}`, value, configFile: config.configFile ?? null });
@@ -746,7 +746,7 @@ export function createApi({
     const off = (error) => ({ status: 200, body: { enabled: false, host, ...(error ? { error } : {}), updatedAt: null, brief: null, sources: {}, items: [] } });
     const fail = (error) => (action === 'get' ? off(error) : { status: 409, body: { error: error ?? 'no server runs the inbox (inbox.host)' } });
     if (!host) return fail(null);
-    if (host === config.self) return fail('the inbox is off on this server (FLEET_WEB_INBOX)');
+    if (host === config.self) return fail('the inbox is off on this server (OVERMIND_WEB_INBOX)');
     if (url.searchParams.get('local') === '1') return fail(null); // never chain
     const peerUrl = config.peers[host];
     if (!peerUrl) return fail(`inbox.host "${host}" is not a peer with a web URL`);
@@ -789,7 +789,7 @@ export function createApi({
       if (action === 'unlink') return await slack.unlink(id);
       if (action === 'relink') {
         const link = await slack.relink(id, { minutes: body?.minutes ?? undefined });
-        refreshFleet();
+        refreshOvermind();
         return link;
       }
       if (action === 'reply') return await slack.reply({ ...(body ?? {}), host: replyHost(body) });
@@ -798,7 +798,7 @@ export function createApi({
       const target = typeof body?.host === 'string' && body.host ? body.host : config.self;
       if (target !== config.self && !config.peers[target]) throw new HttpError(`unknown host: ${target} (not a peer with a web url)`, 400);
       const link = await slack.link({ ...body, host: target });
-      refreshFleet();
+      refreshOvermind();
       return link;
     } catch (err) {
       if (err instanceof SlackError) throw new HttpError(err.message, err.status);
@@ -809,7 +809,7 @@ export function createApi({
   /** One action on bridge `bridge`: here, or proxied once to that peer → `{ status, body }`. */
   async function atBridge(bridge, action, id, body, pathname) {
     if (bridge === config.self) {
-      if (!slack) return { status: 409, body: { error: 'Slack links are off on this server (FLEET_WEB_SLACK)' } };
+      if (!slack) return { status: 409, body: { error: 'Slack links are off on this server (OVERMIND_WEB_SLACK)' } };
       try {
         return { status: 200, body: await slackHere(action, id, body) };
       } catch (err) {
@@ -836,7 +836,7 @@ export function createApi({
     const host = config.slack?.host ?? null;
     const off = (error) => ({ enabled: false, host, ...(error ? { error } : {}), links: [], ended: [] });
     const one = async (b) => {
-      if (b === config.self && !slack) return off('Slack links are off on this server (FLEET_WEB_SLACK)');
+      if (b === config.self && !slack) return off('Slack links are off on this server (OVERMIND_WEB_SLACK)');
       if (b !== config.self && local) return off(null); // never chain
       const r = await atBridge(b, 'status', null, null, '/api/slack');
       return r.status === 200 ? r.body : off(r.body?.error ?? `HTTP ${r.status} from ${b}`);
@@ -875,7 +875,7 @@ export function createApi({
       if (!peerUrl) return { status: 409, body: { error: `Slack bridge "${bridge}" is not a peer with a web URL` } };
       return proxyToPeer(peerUrl, { method: 'PUT', pathname: '/api/slack/spawn', body: JSON.stringify(body), timeoutMs: peerProxyTimeoutMs });
     }
-    if (!slack) return { status: 409, body: { error: 'Slack links are off on this server (FLEET_WEB_SLACK)' } };
+    if (!slack) return { status: 409, body: { error: 'Slack links are off on this server (OVERMIND_WEB_SLACK)' } };
     if (!body || !('spawn' in body)) throw new HttpError('spawn is required: { host, dir, model, minutes, from } or null', 400);
     let spawn;
     try {
@@ -953,7 +953,7 @@ export function createApi({
       const r = await proxyToPeer(target.url, { method: 'POST', pathname: '/api/groups/edit', body: JSON.stringify(op), timeoutMs: peerProxyTimeoutMs });
       return { status: r.status, body: r.body };
     }
-    throw new HttpError(target.error ?? 'smart grouping is not enabled on this fleet (web.grouping.enabled)', 501);
+    throw new HttpError(target.error ?? 'smart grouping is not enabled on this overmind (web.grouping.enabled)', 501);
   }
 
   /** Serve locally when `host` is self, proxy (once, with ?local=1) when it is a peer. */
@@ -998,7 +998,7 @@ export function createApi({
     if (req.method === 'GET') return { status: 200, body: await operator.status() };
     try {
       const r = await operator.ensure();
-      if (r.started) refreshFleet();
+      if (r.started) refreshOvermind();
       return { status: 200, body: r };
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
@@ -1138,9 +1138,9 @@ export function createApi({
       throw new HttpError(`no operator host answered (${tried.join('; ')})`, 503);
     }
 
-    if (url.pathname === '/api/fleet') {
+    if (url.pathname === '/api/overmind') {
       if (req.method !== 'GET') throw new HttpError('method not allowed', 405);
-      return handleFleet(req, url);
+      return handleOvermind(req, url);
     }
 
     if (url.pathname === '/api/groups') {
@@ -1232,7 +1232,7 @@ export function createApi({
           await readJsonBody(req);
           if (!autoNamer) throw new HttpError('auto-naming is not available on this server', 501);
           const result = await autoNamer.runOnce('manual');
-          refreshFleet();
+          refreshOvermind();
           return { status: result.ok ? 200 : 502, body: { host: config.self, ...result } };
         },
       });
@@ -1244,7 +1244,7 @@ export function createApi({
       const r = await forHost({ req, url, host: decodeURIComponent(sd[1]), local: () => localSpawnDirs(req) });
       // A peer saved its list: rebuild our merged snapshot so it advertises the new one.
       if (req.method === 'PUT' && r.status === 200 && r.body?.saved && decodeURIComponent(sd[1]) !== config.self) {
-        await refreshFleet({ wait: true });
+        await refreshOvermind({ wait: true });
       }
       return r;
     }
@@ -1278,8 +1278,8 @@ export function createApi({
         timeoutMs: action === 'run' ? JOB_RUN_PROXY_MS : peerProxyTimeoutMs,
         local: () => localJobs(req, jobName, action),
       });
-      // A run started a session: show it in the next /api/fleet without waiting a poll.
-      if (action === 'run' && r.status === 200) refreshFleet();
+      // A run started a session: show it in the next /api/overmind without waiting a poll.
+      if (action === 'run' && r.status === 200) refreshOvermind();
       // Prompt-file editor links are built by the server the browser asked, like the notes'.
       if (!action && r.status === 200 && r.body) {
         const viewer = editorViewer(config, req);
@@ -1723,10 +1723,10 @@ export function createApi({
 
   /** After a restore: the list now (tmux sessions), again as the agents register, then a stack sync. */
   function afterRestore() {
-    refreshFleet();
+    refreshOvermind();
     DORMANT_SETTLE_MS.forEach((ms, i) => {
       const timer = setTimeout(() => {
-        refreshFleet();
+        refreshOvermind();
         if (i === DORMANT_SETTLE_MS.length - 1) stacks?.sync('restore').catch(() => {});
       }, ms);
       timer.unref?.();
@@ -1734,8 +1734,8 @@ export function createApi({
   }
 
   /**
-   * GET harnesses: what this host can spawn (`fleet harness list --json`), cached
-   * HARNESSES_TTL_MS (`?refresh=1` skips it). A CLI without `harness` (older fleet) answers
+   * GET harnesses: what this host can spawn (`overmind harness list --json`), cached
+   * HARNESSES_TTL_MS (`?refresh=1` skips it). A CLI without `harness` (older overmind) answers
    * Claude alone, with the configured model list, so the New session form still works.
    */
   let harnessCache = null; // { at, rows }
@@ -1806,27 +1806,27 @@ export function createApi({
     return { ...r, body };
   }
 
-  /** GET usage: this host's Claude subscription limits (`fleet usage --json`). */
-  /** `fleet --local prs --json` on this host (its `gh` login, its checkouts). */
+  /** GET usage: this host's Claude subscription limits (`overmind usage --json`). */
+  /** `overmind --local prs --json` on this host (its `gh` login, its checkouts). */
   async function localPrs(url) {
     if (typeof cli?.prs !== 'function') throw new HttpError('pull requests are not available on this server', 501);
     try {
       const prs = await cli.prs({ refresh: url.searchParams.get('refresh') === '1' });
       return { status: 200, body: { host: config.self, ...prs } };
     } catch (err) {
-      if (err?.missing) throw new HttpError('this host’s fleet CLI has no `prs` command — update it', 501);
+      if (err?.missing) throw new HttpError('this host’s overmind CLI has no `prs` command — update it', 501);
       throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     }
   }
 
-  /** The PR as this host's `fleet prs` knows it (its clone under the repos roots), or an HttpError. */
+  /** The PR as this host's `overmind prs` knows it (its clone under the repos roots), or an HttpError. */
   async function findPr({ owner, repo, number }) {
     if (typeof cli?.prs !== 'function') throw new HttpError('pull requests are not available on this server', 501);
     let list;
     try {
       list = await cli.prs({ refresh: false });
     } catch (err) {
-      if (err?.missing) throw new HttpError('this host’s fleet CLI has no `prs` command — update it', 501);
+      if (err?.missing) throw new HttpError('this host’s overmind CLI has no `prs` command — update it', 501);
       throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     }
     const lc = (x) => String(x ?? '').toLowerCase();
@@ -1837,7 +1837,7 @@ export function createApi({
 
   /**
    * The diff reviewer over a PR, with no session and no worktree: the diff from this host's
-   * clone (refs fetched into refs/fleet/pr/<n>/…), review notes kept in Fleet (each can be
+   * clone (refs fetched into refs/overmind/pr/<n>/…), review notes kept in Overmind (each can be
    * posted to GitHub), side questions in a fresh read-only `claude -p` in the clone, and
    * `handoff`: the notes as the first prompt of a session on the PR's worktree.
    */
@@ -1852,7 +1852,7 @@ export function createApi({
     const info = { owner: pr.owner, repo: pr.repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author, headBranch: pr.headBranch, baseBranch: pr.baseBranch, headOid: pr.headOid ?? null, draft: pr.draft };
     if (op === 'diff') {
       if (!differ?.prDiff) throw new HttpError('the diff reviewer is not available on this server', 501);
-      if (!repoPath) throw new HttpError(`no local clone of ${pr.owner}/${pr.repo} on this host — clone it under the fleet repos roots`, 409);
+      if (!repoPath) throw new HttpError(`no local clone of ${pr.owner}/${pr.repo} on this host — clone it under the overmind repos roots`, 409);
       try {
         const d = await differ.prDiff(repoPath, { number: pr.number, baseBranch: pr.baseBranch, headBranch: pr.headBranch, since: url.searchParams.get('since'), refetch: url.searchParams.get('refetch') === '1' });
         const { unchanged, fingerprint, ...repoDiff } = d;
@@ -1873,7 +1873,7 @@ export function createApi({
         `This is pull request ${prRef} by ${pr.author}: "${pr.title}" (${pr.url}).`,
         head
           ? `The working tree of this clone is NOT the PR. The PR's code is commit ${head}${base ? `, diffed against ${base} (its merge-base with ${pr.baseBranch})` : ''}: read a file with \`git show ${head}:<path>\`, the change with \`git diff ${base ?? pr.baseBranch}...${head} -- <path>\`.`
-          : `The working tree of this clone is NOT the PR; its head is refs/fleet/pr/${pr.number}/head (read files with \`git show refs/fleet/pr/${pr.number}/head:<path>\`).`,
+          : `The working tree of this clone is NOT the PR; its head is refs/overmind/pr/${pr.number}/head (read files with \`git show refs/overmind/pr/${pr.number}/head:<path>\`).`,
       ].join(' ');
       try {
         const file = typeof body?.path === 'string' ? body.path : null;
@@ -1933,11 +1933,11 @@ export function createApi({
     try {
       worktree = await cli.prCheckout(ref);
     } catch (err) {
-      if (err?.missing) throw new HttpError('this host’s fleet CLI has no `pr` command — update it', 501);
+      if (err?.missing) throw new HttpError('this host’s overmind CLI has no `pr` command — update it', 501);
       throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     }
     if (typeof worktree?.path !== 'string' || !path.isAbsolute(worktree.path) || typeof worktree.contextLine !== 'string') {
-      throw new HttpError('fleet pr checkout returned no worktree path — update fleet on this host', 502);
+      throw new HttpError('overmind pr checkout returned no worktree path — update overmind on this host', 502);
     }
     if (action === 'checkout') return { status: 200, body: { host: config.self, worktree } };
 
@@ -1951,7 +1951,7 @@ export function createApi({
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
     }
-    refreshFleet();
+    refreshOvermind();
     if (!nameGiven && spawnNamer && check.harness === 'claude') spawnNamer.schedule(result.tmuxSession).catch(() => {});
     return { status: 200, body: { host: config.self, worktree, spawn: { ok: true, host: config.self, ...result } } };
   }
@@ -1963,19 +1963,19 @@ export function createApi({
       const r = await cli.prSeen(ref);
       return { status: 200, body: { host: config.self, pr: r?.pr ?? ref, seenAt: r?.seenAt ?? null } };
     } catch (err) {
-      if (err?.missing) throw new HttpError('this host’s fleet CLI has no `pr seen` command — update it', 501);
+      if (err?.missing) throw new HttpError('this host’s overmind CLI has no `pr seen` command — update it', 501);
       throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     }
   }
 
-  /** `fleet --local tasks --json` on this host (its Productive token and organization). */
+  /** `overmind --local tasks --json` on this host (its Productive token and organization). */
   async function localTasks(url) {
     if (typeof cli?.tasks !== 'function') throw new HttpError('tasks are not available on this server', 501);
     try {
       const tasks = await cli.tasks({ refresh: url.searchParams.get('refresh') === '1' });
       return { status: 200, body: { host: config.self, ...tasks } };
     } catch (err) {
-      if (err?.missing) throw new HttpError('this host’s fleet CLI has no `tasks` command — update it', 501);
+      if (err?.missing) throw new HttpError('this host’s overmind CLI has no `tasks` command — update it', 501);
       throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     }
   }
@@ -1993,7 +1993,7 @@ export function createApi({
     const id = taskId(body?.task);
     if (!id) throw new HttpError('task must be a Productive task id or link', 400);
     const cliError = (err) => {
-      if (err?.missing) return new HttpError('this host’s fleet CLI has no `task` command — update it', 501);
+      if (err?.missing) return new HttpError('this host’s overmind CLI has no `task` command — update it', 501);
       return new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     };
     if (action === 'status') {
@@ -2017,7 +2017,7 @@ export function createApi({
       throw cliError(err);
     }
     if (typeof task?.contextLine !== 'string' || !task.contextLine.trim()) {
-      throw new HttpError('fleet task show returned no context line — update fleet on this host', 502);
+      throw new HttpError('overmind task show returned no context line — update overmind on this host', 502);
     }
     const userPrompt = check.prompt.trim();
     const prompt = userPrompt ? `${task.contextLine} ${userPrompt}` : task.contextLine;
@@ -2030,13 +2030,13 @@ export function createApi({
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
     }
-    refreshFleet();
+    refreshOvermind();
     if (!nameGiven && spawnNamer && check.harness === 'claude') spawnNamer.schedule(result.tmuxSession).catch(() => {});
     return { status: 200, body: { host: config.self, task, spawn: { ok: true, host: config.self, ...result } } };
   }
 
   function scheduleError(err) {
-    if (err?.missing) return new HttpError('this host’s fleet CLI has no `schedule` command — update it', 501);
+    if (err?.missing) return new HttpError('this host’s overmind CLI has no `schedule` command — update it', 501);
     return new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
   }
 
@@ -2147,7 +2147,7 @@ export function createApi({
     try {
       if (req.method === 'GET') return { status: 200, body: await spawnDirs.get() };
       const r = await spawnDirs.put(await readJsonBody(req));
-      if (r.body?.saved) await refreshFleet({ wait: true }); // the next /api/fleet shows the new list
+      if (r.body?.saved) await refreshOvermind({ wait: true }); // the next /api/overmind shows the new list
       return r;
     } catch (err) {
       if (err instanceof HttpError) throw err;
@@ -2212,27 +2212,27 @@ export function createApi({
     if (action === 'sync') {
       await readJsonBody(req);
       const body = await stacks.syncNow('manual');
-      refreshFleet();
+      refreshOvermind();
       return { status: 200, body };
     }
     if (action === 'GET') return { status: 200, body: await stacks.show(id) };
     if (action === 'DELETE') {
       const body = await stacks.remove(id);
-      refreshFleet();
+      refreshOvermind();
       return { status: 200, body };
     }
     if (action === 'rename') {
       const label = validateStackLabel((await readJsonBody(req))?.label);
       if (!label) throw new HttpError('label must be one non-empty line', 400);
       const body = await stacks.rename(id, label);
-      refreshFleet(); // the label shows on session rows
+      refreshOvermind(); // the label shows on session rows
       return { status: 200, body };
     }
     // PUT
     const edit = validateStackEdit(await readJsonBody(req, STACK_BODY_LIMIT));
     try {
       const body = await stacks.set(id, edit.markdown, edit.expectUpdated);
-      refreshFleet(); // the label shows on session rows
+      refreshOvermind(); // the label shows on session rows
       return { status: 200, body };
     } catch (err) {
       if (err?.status === 409 && err.body) return { status: 409, body: err.body };
@@ -2244,7 +2244,7 @@ export function createApi({
    * A sibling: from a session (`sessionId`: `stack ensure` first — it may create the stack) or
    * from a stack (`stackId`). Spawns with this server's spawner in the source's directory, the
    * stack's context line prepended to the prompt, then adds the new session to the stack in the
-   * background once it shows up in `fleet list` (lib/stacks.mjs#join). With `host` (a peer):
+   * background once it shows up in `overmind list` (lib/stacks.mjs#join). With `host` (a peer):
    * the peer's `/spawn` route starts it in `dir` (a path there, required) with the stack's
    * `remoteContextLine`, and the join watches that peer's list; the stack stays on this host.
    */
@@ -2286,8 +2286,8 @@ export function createApi({
       stack = await stacks.show(stackId);
       if (!remote) dir = await resolveStackSpawnDir({ base: stack?.absCwd ?? stack?.cwd, requested, roots });
     }
-    if (!stack?.id || typeof stack.contextLine !== 'string') throw new HttpError('fleet stack returned no stack id / contextLine — update fleet on this host', 502);
-    if (remote && typeof stack.remoteContextLine !== 'string') throw new HttpError('fleet stack returned no remoteContextLine — update fleet on this host', 502);
+    if (!stack?.id || typeof stack.contextLine !== 'string') throw new HttpError('overmind stack returned no stack id / contextLine — update overmind on this host', 502);
+    if (remote && typeof stack.remoteContextLine !== 'string') throw new HttpError('overmind stack returned no remoteContextLine — update overmind on this host', 502);
 
     // Exactly `core::stack::stack_prompt`: the context line, a space, the trimmed prompt.
     const userPrompt = check.prompt.trim();
@@ -2312,7 +2312,7 @@ export function createApi({
         const why = proxied.body?.error ?? `HTTP ${proxied.status}`;
         throw new HttpError(`${spawnHost}: ${why}`, proxied.status >= 500 ? 502 : proxied.status);
       }
-      refreshFleet();
+      refreshOvermind();
       if (typeof proxied.body?.tmuxSession === 'string') stacks.join(proxied.body.tmuxSession, stack.id, spawnHost);
       return {
         status: 200,
@@ -2327,7 +2327,7 @@ export function createApi({
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
     }
-    refreshFleet();
+    refreshOvermind();
     if (!nameGiven && check.prompt.trim() && spawnNamer && check.harness === 'claude') spawnNamer.schedule(result.tmuxSession).catch(() => {});
     stacks.join(result.tmuxSession, stack.id);
     return {
@@ -2361,10 +2361,10 @@ export function createApi({
       created = Boolean(out?.created);
       generated = Boolean(out?.generated);
       id = out?.stack?.id ?? out?.id;
-      if (!id) throw new HttpError('fleet stack returned no stack id — update fleet on this host', 502);
+      if (!id) throw new HttpError('overmind stack returned no stack id — update overmind on this host', 502);
     }
     const stack = await stacks.add(id, other, onHost === config.self ? undefined : onHost);
-    refreshFleet(); // the stack shows on both rows
+    refreshOvermind(); // the stack shows on both rows
     return { status: 200, body: { host: config.self, stack, created, generated } };
   }
 
@@ -2380,11 +2380,11 @@ export function createApi({
     return files.raw(url.searchParams.get('path'), cwd, { download, session });
   }
 
-  handleApi.refreshFleet = refreshFleet;
-  /** A fresh merged fleet, built once — what the grouper feeds `fleet group`. Doesn't warm the snapshot. */
-  handleApi.buildFleet = () => buildFleet({ force: true });
+  handleApi.refreshOvermind = refreshOvermind;
+  /** A fresh merged overmind, built once — what the grouper feeds `overmind group`. Doesn't warm the snapshot. */
+  handleApi.buildOvermind = () => buildOvermind({ force: true });
   /** The warm snapshot if someone is watching, else null — for cheap change checks. */
-  handleApi.peekFleet = () => snapshot?.peek() ?? null;
+  handleApi.peekOvermind = () => snapshot?.peek() ?? null;
   handleApi.stop = () => snapshot?.stop();
   return handleApi;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FleetResponse, SpawnDirEntry, SpawnDirsResponse } from '@/api/types'
+import type { OvermindResponse, SpawnDirEntry, SpawnDirsResponse } from '@/api/types'
 
 import {
   baseHost,
@@ -62,13 +62,13 @@ describe('hidden entries', () => {
     expect(sameList(HIDDEN, [HIDDEN[0], { ...HIDDEN[1], hidden: false }])).toBe(false)
   })
   it('withOffered refreshes the hidden dirs too (dropped when none)', () => {
-    const fleet = {
+    const overmind = {
       self: 'laptop',
       hosts: [{ name: 'laptop', ok: true, sessions: [], spawnDirs: [], hiddenSpawnDirs: [{ label: 'Old', path: '/old' }] }],
-    } as FleetResponse
-    const hidden = withOffered(fleet, { laptop: { ...resp('laptop'), hiddenSpawnDirs: [{ label: 'Brain', path: '/abs/brain' }] } })
+    } as OvermindResponse
+    const hidden = withOffered(overmind, { laptop: { ...resp('laptop'), hiddenSpawnDirs: [{ label: 'Brain', path: '/abs/brain' }] } })
     expect(hidden.hosts[0].hiddenSpawnDirs).toEqual([{ label: 'Brain', path: '/abs/brain' }])
-    expect('hiddenSpawnDirs' in withOffered(fleet, { laptop: resp('laptop') }).hosts[0]).toBe(false)
+    expect('hiddenSpawnDirs' in withOffered(overmind, { laptop: resp('laptop') }).hosts[0]).toBe(false)
   })
 })
 
@@ -146,9 +146,9 @@ describe('server results', () => {
     expect(divergedHosts(LIST, loaded)).toEqual(['workstation'])
   })
   it('withOffered swaps in each saved host’s new spawnDirs', () => {
-    const fleet = { self: 'laptop', hosts: [{ name: 'laptop', ok: true, sessions: [], spawnDirs: [] }, { name: 'workstation', ok: true, sessions: [] }] } as FleetResponse
-    const next = withOffered(fleet, { laptop: resp('laptop') })
+    const overmind = { self: 'laptop', hosts: [{ name: 'laptop', ok: true, sessions: [], spawnDirs: [] }, { name: 'workstation', ok: true, sessions: [] }] } as OvermindResponse
+    const next = withOffered(overmind, { laptop: resp('laptop') })
     expect(next.hosts[0].spawnDirs?.map((d) => d.label)).toEqual(['Work', 'Notes'])
-    expect(next.hosts[1]).toBe(fleet.hosts[1])
+    expect(next.hosts[1]).toBe(overmind.hosts[1])
   })
 })

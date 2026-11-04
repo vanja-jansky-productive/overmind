@@ -1,4 +1,4 @@
-// Scheduled sessions (`fleet schedule`, docs/cli.md → Scheduled sessions) — pure helpers.
+// Scheduled sessions (`overmind schedule`, docs/cli.md → Scheduled sessions) — pure helpers.
 import type { ScheduledEntry } from '@/api/types'
 import { whenLabel } from '@/lib/jobs'
 

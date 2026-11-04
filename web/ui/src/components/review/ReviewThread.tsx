@@ -143,7 +143,7 @@ export interface ThreadActions {
   remove: (thread: string) => Promise<boolean>
 }
 
-/** A PR note (no session): kept in Fleet until posted to GitHub. */
+/** A PR note (no session): kept in Overmind until posted to GitHub. */
 export interface NoteProps {
   posted: { url: string | null; at: number } | null
   onPost: () => Promise<boolean>
@@ -257,7 +257,7 @@ export function ReviewThreadCard({ thread, outdated, actions, note }: { thread: 
         {open ? (
           <>
             {thread.entries.map((e, i) => (
-              <Entry key={i} entry={e} first={i === 0} stateText={note ? (note.posted ? 'Posted on GitHub' : 'Only in Fleet — post it, or hand the notes to a session') : undefined} />
+              <Entry key={i} entry={e} first={i === 0} stateText={note ? (note.posted ? 'Posted on GitHub' : 'Only in Overmind — post it, or hand the notes to a session') : undefined} />
             ))}
             <div className="border-t px-3 py-2">
               {replying ? (

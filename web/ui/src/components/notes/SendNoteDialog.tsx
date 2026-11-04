@@ -3,7 +3,7 @@ import { useLocation } from 'wouter'
 
 import { StatusDot } from '@/components/StatusDot'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { formatPath } from '@/lib/attach'
 import { setDraft } from '@/lib/drafts'
 import { shortCwd } from '@/lib/format'
@@ -15,9 +15,9 @@ import { sessionTitle } from '@/lib/title'
  * (nothing is sent — the user finishes the prompt). Sessions on other hosts can't read the file.
  */
 export function SendNoteDialog({ open, onOpenChange, host, absPath }: { open: boolean; onOpenChange: (o: boolean) => void; host: string; absPath: string }) {
-  const { fleet } = useFleet()
+  const { overmind } = useOvermind()
   const [, navigate] = useLocation()
-  const sessions = useMemo(() => allSessions(fleet).filter((s) => s.host === host && s.status !== 'unknown').sort(byLastActivity), [fleet, host])
+  const sessions = useMemo(() => allSessions(overmind).filter((s) => s.host === host && s.status !== 'unknown').sort(byLastActivity), [overmind, host])
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[80vh] gap-0 overflow-hidden p-0 sm:max-w-md">

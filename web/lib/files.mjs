@@ -365,7 +365,7 @@ export function createFiles({ home, run, platform = process.platform, hasBinary 
       'last-modified': new Date(loc.stat.mtimeMs).toUTCString(),
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
-      'x-fleet-kind': kind,
+      'x-overmind-kind': kind,
     };
     // A file opened straight in a tab (an SVG, say) must never run script on this origin.
     // Not for PDFs: Chrome refuses to show a PDF under a sandbox CSP.

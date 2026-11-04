@@ -15,7 +15,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 
 /** A fake $HOME with a project, a secret store, a symlink out and a cwd outside home. */
 function fixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-files-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-files-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   const proj = path.join(home, 'proj');
@@ -179,9 +179,9 @@ async function startPair(t, fx) {
       { self: name, hosts: { laptop: { web: urls.laptop }, workstation: { web: urls.workstation } } },
       { env: {}, home: '/home/tester' },
     );
-    const fleet = { localHost: async () => ({ name, ok: true, sessions: sessions[name] }), invalidate() {} };
+    const overmind = { localHost: async () => ({ name, ok: true, sessions: sessions[name] }), invalidate() {} };
     const files = createFiles({ home: fx.home, platform: 'darwin', run: async (bin, args) => (opened.push([name, bin, args]), { stdout: '', stderr: '' }) });
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, files, warmFleet: false });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, files, warmOvermind: false });
     t.after(() => api.stop());
     handles[name] = api;
   }
@@ -218,7 +218,7 @@ test('HTTP: stat / raw / open, locally and through a peer (raw streamed)', async
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.match(res.headers.get('content-security-policy'), /^sandbox/);
     assert.match(res.headers.get('content-disposition'), /^inline; filename="README.md"/);
-    assert.equal(res.headers.get('x-fleet-kind'), 'markdown');
+    assert.equal(res.headers.get('x-overmind-kind'), 'markdown');
     assert.equal(await res.text(), fs.readFileSync(path.join(fx.proj, 'README.md'), 'utf8'));
 
     const img = await fetch(`${s}/files/raw?path=shot.png`);
@@ -265,8 +265,8 @@ test('HTTP: a server without the files service answers 501; an unreachable peer 
   const url = await listen(server);
   t.after(() => server.close());
   const config = normalizeConfig({ self: 'laptop', hosts: { gone: { web: 'http://127.0.0.1:9' } } }, { env: {}, home: '/home/tester' });
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [{ session_id: 'aaaaaaaa-1', cwd: '/tmp' }] }) };
-  const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, warmFleet: false });
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [{ session_id: 'aaaaaaaa-1', cwd: '/tmp' }] }) };
+  const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, warmOvermind: false });
   t.after(() => api.stop());
   assert.equal((await post(`${url}/api/hosts/laptop/sessions/aaaaaaaa-1/files/stat`, { paths: [] })).status, 501);
   const r = await fetch(`${url}/api/hosts/gone/sessions/x/files/raw?path=a`);

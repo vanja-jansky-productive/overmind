@@ -4,11 +4,11 @@
 //
 // One host's server runs it (config `inbox.host`; peers proxy /api/inbox there). Sources:
 //
-// - github      `fleet --local prs --json` (gh, no model): review requests, unseen @mentions,
+// - github      `overmind --local prs --json` (gh, no model): review requests, unseen @mentions,
 //               your PRs that are approved, have changes requested or a failing CI
-// - productive  `fleet --local tasks --json` (REST, no model): due / overdue tasks, tasks in
+// - productive  `overmind --local tasks --json` (REST, no model): due / overdue tasks, tasks in
 //               progress you touched lately
-// - sessions    the merged fleet (no model): sessions on any host waiting for your answer
+// - sessions    the merged overmind (no model): sessions on any host waiting for your answer
 // - comms       Slack + Gmail through the claude.ai connectors — one `claude -p` with read-only
 //               tools, every `scanMinutes` in work hours, fed the items it found last time so
 //               ids stay stable and answered threads drop off
@@ -17,7 +17,7 @@
 // approved PR to merge); the scan rates Slack and mail itself. The brief (a few bullets over the
 // whole list) is one more model call, only when the list changed and at most every `briefMinutes`.
 //
-// State (`<fleet state>/inbox.json`): the comms items and when they were scanned, the brief, and
+// State (`<overmind state>/inbox.json`): the comms items and when they were scanned, the brief, and
 // when each item was first seen.
 
 import crypto from 'node:crypto';
@@ -95,7 +95,7 @@ export function isDismissed(item, d) {
 
 const fileCount = (n) => `${n} file${n === 1 ? '' : 's'}`;
 
-/** `fleet prs --json` → items. Pure. */
+/** `overmind prs --json` → items. Pure. */
 export function prItems(body) {
   const out = [];
   for (const p of body?.prs ?? []) {
@@ -162,7 +162,7 @@ export function localDate(ms) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** `fleet tasks --json` → items. Pure. */
+/** `overmind tasks --json` → items. Pure. */
 export function taskItems(body, now = Date.now()) {
   const out = [];
   const today = localDate(now);
@@ -191,10 +191,10 @@ export function taskItems(body, now = Date.now()) {
   return out;
 }
 
-/** The merged `/api/fleet` body → sessions waiting for an answer, any host but a shared one. Pure. */
-export function sessionItems(fleetBody) {
+/** The merged `/api/overmind` body → sessions waiting for an answer, any host but a shared one. Pure. */
+export function sessionItems(overmindBody) {
   const out = [];
-  for (const h of fleetBody?.hosts ?? []) {
+  for (const h of overmindBody?.hosts ?? []) {
     if (h?.shared === true) continue; // a shared shed's sessions are not the user's to answer
     if (h?.ok === false) continue;
     for (const s of h?.sessions ?? []) {
@@ -427,8 +427,8 @@ function saveState(file, state) {
 /**
  * deps:
  *   settings   config.inbox
- *   cli        lib/fleet-cli.mjs — prs(), tasks()
- *   getFleet   () => Promise<the merged /api/fleet body>
+ *   cli        lib/overmind-cli.mjs — prs(), tasks()
+ *   getOvermind   () => Promise<the merged /api/overmind body>
  *   ask        ({ prompt, model }) => Promise<string>   (briefs' createClaudeAsk)
  *   agent      ({ prompt, model, tools }) => Promise<{ text, costUsd }>   (createAgentAsk)
  *   file       the state file
@@ -437,7 +437,7 @@ function saveState(file, state) {
 export function createInbox({
   settings,
   cli,
-  getFleet,
+  getOvermind,
   ask,
   agent,
   file,
@@ -581,7 +581,7 @@ export function createInbox({
       await Promise.all([
         readSource('github', async () => prItems(await cli.prs({ refresh }))),
         readSource('productive', async () => taskItems(await cli.tasks({ refresh }), now())),
-        readSource('sessions', async () => sessionItems(await getFleet())),
+        readSource('sessions', async () => sessionItems(await getOvermind())),
       ]);
       merge();
       if (scanDue(now())) scan();

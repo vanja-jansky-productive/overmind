@@ -154,7 +154,7 @@ export function createDiffer({ run, tmpDir = os.tmpdir(), home = os.homedir() })
   /** The working tree as a tree object: copy the index, `add -A` into the copy, write it. */
   async function worktreeTree(root) {
     const indexPath = path.resolve(root, (await revParse(root, ['--git-path', 'index'])) ?? '.git/index');
-    const tmp = path.join(tmpDir, `fleet-diff-${process.pid}-${Math.random().toString(16).slice(2)}.index`);
+    const tmp = path.join(tmpDir, `overmind-diff-${process.pid}-${Math.random().toString(16).slice(2)}.index`);
     try {
       await fsp.copyFile(indexPath, tmp).catch((err) => {
         if (err?.code !== 'ENOENT') throw err; // a repo without an index yet: start empty
@@ -323,7 +323,7 @@ export function createDiffer({ run, tmpDir = os.tmpdir(), home = os.homedir() })
 
   /**
    * A pull request's diff from a local clone, with no worktree and no checkout: its head and
-   * base are fetched into private refs (`refs/fleet/pr/<n>/head`, `…/base`) and diffed from
+   * base are fetched into private refs (`refs/overmind/pr/<n>/head`, `…/base`) and diffed from
    * their merge-base, like GitHub's "Files changed". Fetches at most every `fetchEveryMs` unless
    * `refetch`. → the same shape as one checkout of diffAll: { root, branch, head, base, tree,
    * fingerprint, unchanged, files, stats, truncated }
@@ -333,8 +333,8 @@ export function createDiffer({ run, tmpDir = os.tmpdir(), home = os.homedir() })
     if (!validRef(baseBranch)) throw new DiffError('invalid base branch', 400);
     const top = await revParse(root, ['--show-toplevel']);
     if (!top) throw new DiffError('the local clone is not a git repository', 409);
-    const headRef = `refs/fleet/pr/${number}/head`;
-    const baseRef = `refs/fleet/pr/${number}/base`;
+    const headRef = `refs/overmind/pr/${number}/head`;
+    const baseRef = `refs/overmind/pr/${number}/base`;
     const key = `${top}#${number}`;
     const have = await revParse(top, ['--verify', '--quiet', `${headRef}^{commit}`]);
     if (refetch || !have || now - (prFetched.get(key) ?? 0) > fetchEveryMs) {

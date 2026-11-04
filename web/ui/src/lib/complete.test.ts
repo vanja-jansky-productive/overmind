@@ -66,12 +66,12 @@ describe('toSuggestions', () => {
     expect(toSuggestions('files', { host: 'h', id: 'i', kind: 'files', files: ['a.md'] })).toEqual([{ insert: '@a.md', label: 'a.md' }])
     const notes = [
       { ref: 'sheds', path: 'sheds.md', title: 'Sheds setup' },
-      { ref: 'fleet', path: 'dev/fleet/fleet.md' },
+      { ref: 'overmind', path: 'dev/overmind/overmind.md' },
       { ref: 'log', path: 'log.md', title: 'log' },
     ]
     expect(toSuggestions('brain', { host: 'h', id: 'i', kind: 'brain', notes }).map((s) => [s.insert, s.detail])).toEqual([
       ['brain:sheds', 'Sheds setup'],
-      ['brain:fleet', 'dev/fleet/fleet.md'],
+      ['brain:overmind', 'dev/overmind/overmind.md'],
       ['brain:log', undefined],
     ])
     expect(toSuggestions('files', null)).toEqual([])

@@ -1,6 +1,6 @@
 // Settings → Start directories: GET/PUT /api/hosts/:host/spawn-dirs. Two API servers on
 // ephemeral ports (laptop + workstation), each with its own temp config file and home;
-// the `fleet` CLI is faked (its `config set` patches the file like the real one).
+// the `overmind` CLI is faked (its `config set` patches the file like the real one).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,8 +10,8 @@ import { Readable } from 'node:stream';
 
 import { createApi } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
-import { createFleet } from '../lib/fleet.mjs';
-import { createFleetCli } from '../lib/fleet-cli.mjs';
+import { createOvermind } from '../lib/overmind.mjs';
+import { createOvermindCli } from '../lib/overmind-cli.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
 import { canonicalSpawnDirs, createSpawnDirsEditor, validateSpawnDirs, SPAWN_DIRS_LIMITS } from '../lib/spawn-dirs.mjs';
 
@@ -30,25 +30,25 @@ async function call(url, method = 'GET', body) {
   return { status: res.status, body: await res.json() };
 }
 
-/** A fake `fleet` binary: `list --json` → [], `--local config set <key> <json>` → patch the file. */
+/** A fake `overmind` binary: `list --json` → [], `--local config set <key> <json>` → patch the file. */
 function fakeRun(calls) {
   return async (bin, args, opts = {}) => {
-    calls.push({ args, configFile: opts.env?.FLEET_CONFIG });
+    calls.push({ args, configFile: opts.env?.OVERMIND_CONFIG });
     if (args[0] === 'list') return { stdout: '[]', stderr: '' };
     if (args[0] === '--local' && args[1] === 'config' && args[2] === 'set') {
-      const file = opts.env.FLEET_CONFIG;
+      const file = opts.env.OVERMIND_CONFIG;
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       raw[args[3]] = JSON.parse(args[4]);
       fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(raw, null, 2)}\n`);
       fs.renameSync(`${file}.tmp`, file);
       return { stdout: `${args[3]} = ${args[4]}\n`, stderr: '' };
     }
-    throw new Error(`unexpected fleet ${args.join(' ')}`);
+    throw new Error(`unexpected overmind ${args.join(' ')}`);
   };
 }
 
 async function startPair(t) {
-  const root = tmpdir(t, 'fleet-spawn-dirs-');
+  const root = tmpdir(t, 'overmind-spawn-dirs-');
   const hosts = {};
   for (const name of ['laptop', 'workstation']) {
     const home = path.join(root, name, 'home');
@@ -74,21 +74,21 @@ async function startPair(t) {
         { label: 'Work', paths: { laptop: '~/Code/work', workstation: '~/Code/work' } },
         { label: 'Brain', paths: { laptop: '~/brain', workstation: '~/brain' } },
       ],
-      web: { port: 7777 },
+      web: { port: 7878 },
     };
     fs.writeFileSync(h.configFile, `${JSON.stringify(raw, null, 2)}\n`);
     const config = normalizeConfig(raw, { env: {}, home: h.home });
-    const cli = createFleetCli({ run: fakeRun(h.calls) });
+    const cli = createOvermindCli({ run: fakeRun(h.calls) });
     const spawner = { spawn: async (req) => (h.spawns.push(req), { name: 'x', dir: req.dir, tmuxSession: 'x', command: 'claude', trusted: false }) };
     const api = createApi({
       config,
       cli,
-      fleet: createFleet({ cli, self: name }),
+      overmind: createOvermind({ cli, self: name }),
       backend: {},
       transcripts: {},
       spawner,
       spawnDirs: createSpawnDirsEditor({ config, configFile: h.configFile, cli, home: h.home }),
-      fleetRefreshMs: 60_000,
+      overmindRefreshMs: 60_000,
     });
     t.after(() => api.stop());
     handles[name] = api;
@@ -99,11 +99,11 @@ async function startPair(t) {
 
 const next = (extra = {}) => [
   { label: 'Work', paths: { laptop: '~/Code/work', workstation: '~/Code/work' } },
-  { label: 'Fleet', paths: { laptop: '~/brain', workstation: '' }, ...extra },
+  { label: 'Overmind', paths: { laptop: '~/brain', workstation: '' }, ...extra },
 ];
 
 test('validateSpawnDirs: labels, paths, limits, and this host\'s dirs must exist', async (t) => {
-  const home = tmpdir(t, 'fleet-sd-home-');
+  const home = tmpdir(t, 'overmind-sd-home-');
   fs.mkdirSync(path.join(home, 'a'));
   fs.writeFileSync(path.join(home, 'file'), 'x');
   const v = (list) => validateSpawnDirs(list, { self: 'laptop', home });
@@ -173,14 +173,14 @@ test('GET spawn-dirs: the stored list + this host\'s checks, served locally or p
   assert.equal((await call(`${urls.laptop}/api/hosts/nope/spawn-dirs`)).status, 404);
 });
 
-test('PUT spawn-dirs writes through `fleet config set`, keeps other keys and hot-reloads', async (t) => {
+test('PUT spawn-dirs writes through `overmind config set`, keeps other keys and hot-reloads', async (t) => {
   const { hosts, urls } = await startPair(t);
   const lap = hosts.laptop;
   const res = await call(`${urls.laptop}/api/hosts/laptop/spawn-dirs`, 'PUT', { spawnDirs: next() });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.saved, true);
-  assert.deepEqual(res.body.spawnDirs, [next()[0], { label: 'Fleet', paths: { laptop: '~/brain' } }]);
-  assert.deepEqual(res.body.offered.map((d) => d.label), ['Work', 'Fleet']);
+  assert.deepEqual(res.body.spawnDirs, [next()[0], { label: 'Overmind', paths: { laptop: '~/brain' } }]);
+  assert.deepEqual(res.body.offered.map((d) => d.label), ['Work', 'Overmind']);
 
   const set = lap.calls.find((c) => c.args[1] === 'config');
   assert.deepEqual(set.args.slice(0, 4), ['--local', 'config', 'set', 'spawnDirs']);
@@ -188,15 +188,15 @@ test('PUT spawn-dirs writes through `fleet config set`, keeps other keys and hot
   const raw = JSON.parse(fs.readFileSync(lap.configFile, 'utf8'));
   assert.deepEqual(raw.somethingNew, { keep: true });
   assert.deepEqual(Object.keys(raw), ['version', 'self', 'somethingNew', 'hosts', 'spawnDirs', 'web']);
-  assert.equal(raw.spawnDirs[1].label, 'Fleet');
+  assert.equal(raw.spawnDirs[1].label, 'Overmind');
 
-  // /api/fleet advertises the new list at once (merged snapshot and ?local=1)
-  const fleet = await call(`${urls.laptop}/api/fleet`);
-  assert.deepEqual(fleet.body.hosts.find((h) => h.name === 'laptop').spawnDirs.map((d) => d.label), ['Work', 'Fleet']);
-  const local = await call(`${urls.laptop}/api/fleet?local=1`);
-  assert.deepEqual(local.body.hosts[0].spawnDirs.map((d) => d.label), ['Work', 'Fleet']);
+  // /api/overmind advertises the new list at once (merged snapshot and ?local=1)
+  const overmind = await call(`${urls.laptop}/api/overmind`);
+  assert.deepEqual(overmind.body.hosts.find((h) => h.name === 'laptop').spawnDirs.map((d) => d.label), ['Work', 'Overmind']);
+  const local = await call(`${urls.laptop}/api/overmind?local=1`);
+  assert.deepEqual(local.body.hosts[0].spawnDirs.map((d) => d.label), ['Work', 'Overmind']);
 
-  // the spawn allow-list follows: Brain's old path is still allowed only because Fleet points there
+  // the spawn allow-list follows: Brain's old path is still allowed only because Overmind points there
   const brain = path.join(lap.home, 'brain');
   assert.equal((await call(`${urls.laptop}/api/hosts/laptop/spawn`, 'POST', { dir: brain })).status, 200);
   await call(`${urls.laptop}/api/hosts/laptop/spawn-dirs`, 'PUT', { spawnDirs: [next()[0]] });
@@ -205,7 +205,7 @@ test('PUT spawn-dirs writes through `fleet config set`, keeps other keys and hot
   assert.match(refused.body.error, /spawn dirs/);
 });
 
-test('hidden spawn dirs: kept on rewrite, allowed for spawns, not offered in /api/fleet', async (t) => {
+test('hidden spawn dirs: kept on rewrite, allowed for spawns, not offered in /api/overmind', async (t) => {
   const { hosts, urls } = await startPair(t);
   const lap = hosts.laptop;
   const brain = path.join(lap.home, 'brain');
@@ -221,12 +221,12 @@ test('hidden spawn dirs: kept on rewrite, allowed for spawns, not offered in /ap
   assert.deepEqual(JSON.parse(fs.readFileSync(lap.configFile, 'utf8')).spawnDirs, list);
   assert.deepEqual((await call(`${urls.laptop}/api/hosts/laptop/spawn-dirs`)).body.spawnDirs, list);
 
-  // /api/fleet: the menu (`spawnDirs`) leaves it out; `hiddenSpawnDirs` lists it (merged and ?local=1)
-  const fleet = await call(`${urls.laptop}/api/fleet`);
-  const self = fleet.body.hosts.find((h) => h.name === 'laptop');
+  // /api/overmind: the menu (`spawnDirs`) leaves it out; `hiddenSpawnDirs` lists it (merged and ?local=1)
+  const overmind = await call(`${urls.laptop}/api/overmind`);
+  const self = overmind.body.hosts.find((h) => h.name === 'laptop');
   assert.deepEqual(self.spawnDirs.map((d) => d.label), ['Work']);
   assert.deepEqual(self.hiddenSpawnDirs, [{ label: 'Brain', path: brain }]);
-  assert.equal(fleet.body.hosts.find((h) => h.name === 'workstation').hiddenSpawnDirs, undefined, 'none hidden there');
+  assert.equal(overmind.body.hosts.find((h) => h.name === 'workstation').hiddenSpawnDirs, undefined, 'none hidden there');
 
   // still on the allow-list (an embed panel's spawn), beneath it too
   assert.equal((await call(`${urls.laptop}/api/hosts/laptop/spawn`, 'POST', { dir: brain, embed: 'brain' })).status, 200);
@@ -237,7 +237,7 @@ test('hidden spawn dirs: kept on rewrite, allowed for spawns, not offered in /ap
   // only hidden entries → Home is offered (and allowed), the hidden dir stays allowed
   const onlyHidden = [list[1]];
   assert.equal((await call(`${urls.laptop}/api/hosts/laptop/spawn-dirs`, 'PUT', { spawnDirs: onlyHidden })).status, 200);
-  const local = await call(`${urls.laptop}/api/fleet?local=1`);
+  const local = await call(`${urls.laptop}/api/overmind?local=1`);
   assert.deepEqual(local.body.hosts[0].spawnDirs, [{ label: 'Home', path: lap.home }]);
   assert.equal((await call(`${urls.laptop}/api/hosts/laptop/spawn`, 'POST', { dir: brain })).status, 200);
   assert.equal((await call(`${urls.laptop}/api/hosts/laptop/spawn`, 'POST', { dir: lap.home })).status, 200);
@@ -273,17 +273,17 @@ test('PUT spawn-dirs: 400 with per-entry errors, dry runs write nothing', async 
   assert.equal((await call(`${urls.laptop}/api/hosts/laptop/spawn-dirs`, 'PUT', { nope: 1 })).status, 400);
 });
 
-test('PUT spawn-dirs to a peer writes the peer\'s config and our merged fleet shows it', async (t) => {
+test('PUT spawn-dirs to a peer writes the peer\'s config and our merged overmind shows it', async (t) => {
   const { hosts, urls } = await startPair(t);
-  // The workstation checks its own paths: Fleet has none there, so only Work is validated.
+  // The workstation checks its own paths: Overmind has none there, so only Work is validated.
   const res = await call(`${urls.laptop}/api/hosts/workstation/spawn-dirs`, 'PUT', { spawnDirs: next() });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.host, 'workstation');
   assert.deepEqual(res.body.offered.map((d) => d.label), ['Work']);
   assert.equal(JSON.parse(fs.readFileSync(hosts.workstation.configFile, 'utf8')).spawnDirs.length, 2);
   assert.equal(JSON.parse(fs.readFileSync(hosts.laptop.configFile, 'utf8')).spawnDirs[1].label, 'Brain', 'laptop untouched');
-  const fleet = await call(`${urls.laptop}/api/fleet`);
-  assert.deepEqual(fleet.body.hosts.find((h) => h.name === 'workstation').spawnDirs.map((d) => d.label), ['Work']);
+  const overmind = await call(`${urls.laptop}/api/overmind`);
+  assert.deepEqual(overmind.body.hosts.find((h) => h.name === 'workstation').spawnDirs.map((d) => d.label), ['Work']);
 
   // a path that does not exist on the peer is rejected by the peer
   const bad = await call(`${urls.laptop}/api/hosts/workstation/spawn-dirs`, 'PUT', { spawnDirs: [{ label: 'X', paths: { workstation: '~/nope' } }] });
@@ -292,13 +292,13 @@ test('PUT spawn-dirs to a peer writes the peer\'s config and our merged fleet sh
 });
 
 test('PUT spawn-dirs reports a CLI failure (502) and keeps the old list', async (t) => {
-  const home = tmpdir(t, 'fleet-sd-cli-');
+  const home = tmpdir(t, 'overmind-sd-cli-');
   const configFile = path.join(home, 'config.json');
   fs.writeFileSync(configFile, '{"self":"solo","spawnDirs":[]}\n');
   const config = normalizeConfig({ self: 'solo' }, { env: {}, home });
-  const cli = { configSet: async () => { throw new Error('fleet config set: not rewriting a config that doesn\'t parse'); } };
+  const cli = { configSet: async () => { throw new Error('overmind config set: not rewriting a config that doesn\'t parse'); } };
   const editor = createSpawnDirsEditor({ config, configFile, cli, home });
-  const api = createApi({ config, cli, fleet: { localHost: async () => ({ name: 'solo', ok: true, sessions: [] }) }, spawnDirs: editor, warmFleet: false });
+  const api = createApi({ config, cli, overmind: { localHost: async () => ({ name: 'solo', ok: true, sessions: [] }) }, spawnDirs: editor, warmOvermind: false });
   const body = JSON.stringify({ spawnDirs: [{ label: 'Home', paths: { solo: '~' } }] });
   const req = Object.assign(Readable.from([Buffer.from(body)]), { method: 'PUT', headers: { 'content-type': 'application/json' } });
   await assert.rejects(api(req, new URL('http://x/api/hosts/solo/spawn-dirs')), (err) => err.status === 502 && /doesn't parse/.test(err.message));

@@ -1,5 +1,5 @@
 // Session list logic: status metadata, filtering, search, sorting — pure, unit-tested.
-import type { FleetResponse, Session, SessionStatus, SlackLink } from '@/api/types'
+import type { OvermindResponse, Session, SessionStatus, SlackLink } from '@/api/types'
 
 export type StatusKey = SessionStatus
 export interface StatusMeta {
@@ -21,7 +21,7 @@ export function statusMeta(status: string | null | undefined): StatusMeta {
 }
 
 /**
- * Its `fleet done` mark, while it sits idle on it: a session that works or waits again is not
+ * Its `overmind done` mark, while it sits idle on it: a session that works or waits again is not
  * done (the CLI already drops a mark the user prompted past). null = not done.
  */
 export function sessionDone(s: Pick<Session, 'status' | 'done'> | null | undefined): Session['done'] {
@@ -66,7 +66,7 @@ export const STATUS_FILTERS: StatusFilter[] = [
   // other filter leaves them out unless waiting).
   { id: 'scheduled', label: 'Bots', match: (s) => isJobSession(s), title: 'Sessions started by bots' },
   { id: 'slack', label: 'Slack', match: (s, slack) => isSlackSession(s, slack), title: 'Sessions linked to Slack: people in a thread talk to them' },
-  { id: 'embedded', label: 'Apps', match: (s) => isEmbedSession(s), title: "Sessions started from an app's Fleet panel (embed view)" },
+  { id: 'embedded', label: 'Apps', match: (s) => isEmbedSession(s), title: "Sessions started from an app's Overmind panel (embed view)" },
 ]
 
 /** The filters worth a chip: Bots / Apps only when there are such sessions, or it is the one picked. */
@@ -79,9 +79,9 @@ export function findStatusFilter(id: string | null | undefined): StatusFilter {
 }
 
 /** Every session across hosts (unreachable hosts contribute none), voice operators left out (they live in #/operator). */
-export function allSessions(fleet: FleetResponse | null | undefined): Session[] {
+export function allSessions(overmind: OvermindResponse | null | undefined): Session[] {
   const out: Session[] = []
-  for (const host of fleet?.hosts ?? []) for (const s of host.sessions ?? []) if (!s.operator) out.push({ ...s, host: s.host ?? host.name })
+  for (const host of overmind?.hosts ?? []) for (const s of host.sessions ?? []) if (!s.operator) out.push({ ...s, host: s.host ?? host.name })
   return out
 }
 
@@ -133,7 +133,7 @@ export function isJobSession(s: Pick<Session, 'origin'>): boolean {
   return Boolean(s.origin?.job)
 }
 
-/** A session an app's embedded Fleet panel started (`embed`, docs/architecture.md → Embed view). */
+/** A session an app's embedded Overmind panel started (`embed`, docs/architecture.md → Embed view). */
 export function isEmbedSession(s: Pick<Session, 'embed'>): boolean {
   return Boolean(s.embed)
 }
@@ -163,7 +163,7 @@ export function setAside(s: Session, slack: ReadonlySet<string> = NO_SLACK): boo
  * the other filters show the rest, plus those waiting on you.
  */
 export function listView(
-  fleet: FleetResponse | null | undefined,
+  overmind: OvermindResponse | null | undefined,
   {
     query = '',
     hosts = null,
@@ -171,7 +171,7 @@ export function listView(
     slack = NO_SLACK,
   }: { query?: string; hosts?: ReadonlySet<string> | null; status?: StatusFilterId; slack?: ReadonlySet<string> },
 ): ListView {
-  const matched = allSessions(fleet).filter((s) => (hosts == null || hosts.has(s.host)) && matchesSearch(s, query))
+  const matched = allSessions(overmind).filter((s) => (hosts == null || hosts.has(s.host)) && matchesSearch(s, query))
   const visible = matched.filter((s) => !setAside(s, slack))
   const scope = (f: StatusFilter) => (SET_ASIDE.includes(f.id) ? matched : visible).filter((s) => f.match(s, slack))
   const counts = Object.fromEntries(STATUS_FILTERS.map((f) => [f.id, scope(f).length])) as Record<StatusFilterId, number>
@@ -179,9 +179,9 @@ export function listView(
 }
 
 /** Every session by status, job sessions included — the header's counters. `hosts`: only those. */
-export function statusSummary(fleet: FleetResponse | null | undefined, hosts: ReadonlySet<string> | null = null): Record<'waiting' | 'busy' | 'idle', number> {
+export function statusSummary(overmind: OvermindResponse | null | undefined, hosts: ReadonlySet<string> | null = null): Record<'waiting' | 'busy' | 'idle', number> {
   const out = { waiting: 0, busy: 0, idle: 0 }
-  for (const s of allSessions(fleet)) {
+  for (const s of allSessions(overmind)) {
     if (hosts && !hosts.has(s.host)) continue
     const k = statusMeta(s.status).key
     if (k === 'waiting' || k === 'busy' || k === 'idle') out[k] += 1
@@ -224,8 +224,8 @@ export function clusterByStack(sessions: Session[]): Session[] {
   return out
 }
 
-export function findSession(fleet: FleetResponse | null | undefined, host: string, id: string): Session | null {
-  const entry = fleet?.hosts?.find((h) => h.name === host)
+export function findSession(overmind: OvermindResponse | null | undefined, host: string, id: string): Session | null {
+  const entry = overmind?.hosts?.find((h) => h.name === host)
   return entry?.sessions?.find((s) => s.session_id === id) ?? null
 }
 
@@ -235,41 +235,41 @@ export function sessionHref(s: Pick<Session, 'host' | 'session_id'>): string {
 }
 
 /** Hosts a session can be spawned on: reachable ones, with the directories each advertises. */
-export function spawnTargets(fleet: FleetResponse | null | undefined): { name: string; dirs: { label: string; path: string }[] }[] {
-  return (fleet?.hosts ?? [])
+export function spawnTargets(overmind: OvermindResponse | null | undefined): { name: string; dirs: { label: string; path: string }[] }[] {
+  return (overmind?.hosts ?? [])
     .filter((h) => h.ok !== false)
     .map((h) => ({ name: h.name, dirs: Array.isArray(h.spawnDirs) ? h.spawnDirs : [] }))
 }
 
 /** The freshly spawned session, once Claude registered it: its tmux session (or name) matches. */
 export function findSpawned(
-  fleet: FleetResponse | null | undefined,
+  overmind: OvermindResponse | null | undefined,
   host: string,
   spawned: { tmuxSession?: string; name?: string },
 ): Session | null {
-  const entry = fleet?.hosts?.find((h) => h.name === host)
+  const entry = overmind?.hosts?.find((h) => h.name === host)
   const tmux = spawned.tmuxSession || spawned.name
   return (
     entry?.sessions?.find((s) => (tmux && s.tmux_session === tmux) || (spawned.name && s.name === spawned.name)) ?? null
   )
 }
 
-/** The fleet minus one session (optimistic update after closing it). */
-export function withoutSession(fleet: FleetResponse, host: string, id: string): FleetResponse {
+/** The overmind minus one session (optimistic update after closing it). */
+export function withoutSession(overmind: OvermindResponse, host: string, id: string): OvermindResponse {
   return {
-    ...fleet,
-    hosts: fleet.hosts.map((h) => (h.name === host ? { ...h, sessions: h.sessions.filter((s) => s.session_id !== id) } : h)),
+    ...overmind,
+    hosts: overmind.hosts.map((h) => (h.name === host ? { ...h, sessions: h.sessions.filter((s) => s.session_id !== id) } : h)),
   }
 }
 
 /** The key `withoutClosed` matches on: host + session id. */
 export const closedKey = (host: string, id: string) => `${host}\u0000${id}`
 
-/** The fleet minus the sessions closed recently (`closed`: closedKey → hide-until ms); same object when nothing matches. */
-export function withoutClosed(fleet: FleetResponse, closed: ReadonlyMap<string, number>, now = Date.now()): FleetResponse {
+/** The overmind minus the sessions closed recently (`closed`: closedKey → hide-until ms); same object when nothing matches. */
+export function withoutClosed(overmind: OvermindResponse, closed: ReadonlyMap<string, number>, now = Date.now()): OvermindResponse {
   const hidden = (h: string, id: string) => (closed.get(closedKey(h, id)) ?? 0) > now
-  if (!fleet.hosts.some((h) => h.sessions.some((s) => hidden(h.name, s.session_id)))) return fleet
-  return { ...fleet, hosts: fleet.hosts.map((h) => ({ ...h, sessions: h.sessions.filter((s) => !hidden(h.name, s.session_id)) })) }
+  if (!overmind.hosts.some((h) => h.sessions.some((s) => hidden(h.name, s.session_id)))) return overmind
+  return { ...overmind, hosts: overmind.hosts.map((h) => ({ ...h, sessions: h.sessions.filter((s) => !hidden(h.name, s.session_id)) })) }
 }
 
 /** A list entry: one session, or the adjacent members of one stack (2 or more) shown as a group. */

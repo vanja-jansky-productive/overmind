@@ -1,6 +1,6 @@
 // Dormant sessions, the web side (docs/architecture.md → Session recovery). After a reboot the
-// CLI's snapshot holds what the old boot ran; `fleet --local restore … --json` lists, restores
-// and forgets it (lib/fleet-cli.mjs#restore). The server never reads snapshot.json itself: it
+// CLI's snapshot holds what the old boot ran; `overmind --local restore … --json` lists, restores
+// and forgets it (lib/overmind-cli.mjs#restore). The server never reads snapshot.json itself: it
 // passes the CLI's JSON through and maps its exit codes to HTTP statuses. The same routes carry
 // the recently closed sessions (ended within a boot): `closed` in the list, `closed: true` on a
 // restore / forget (→ `--closed`). Those are never part of `all` nor of restore.onBoot.
@@ -21,12 +21,12 @@ export function ambiguityCandidates(message) {
   return m[1].split(', ').map((s) => s.trim()).filter(Boolean);
 }
 
-/** A FleetCliError from `fleet restore` → the HttpError the API answers with. */
+/** A OvermindCliError from `overmind restore` → the HttpError the API answers with. */
 export function dormantHttpError(err) {
   if (err instanceof HttpError) return err;
   const msg = String(err?.message ?? err);
-  if (err?.timedOut) return new HttpError(`fleet restore timed out: ${msg}`, 504);
-  if (err?.missing) return new HttpError("this host's fleet CLI has no `restore` command (or no `restore --closed`) — update fleet there", 501);
+  if (err?.timedOut) return new HttpError(`overmind restore timed out: ${msg}`, 504);
+  if (err?.missing) return new HttpError("this host's overmind CLI has no `restore` command (or no `restore --closed`) — update overmind there", 501);
   if (err?.exitCode === 2) {
     // Ambiguous: a restore starts agents, so it never guesses — the candidates go back to the UI.
     const e = new HttpError(msg, 409);
@@ -34,7 +34,7 @@ export function dormantHttpError(err) {
     return e;
   }
   if (err?.exitCode === 3) return new HttpError(msg, 404);
-  return new HttpError(`fleet restore failed: ${msg}`, 502);
+  return new HttpError(`overmind restore failed: ${msg}`, 502);
 }
 
 /**
@@ -62,7 +62,7 @@ export function validateDormantRequest(body, { allowDryRun = false, allowAll = t
 
 /**
  * @param deps
- *   cli   lib/fleet-cli.mjs instance (`restore`)
+ *   cli   lib/overmind-cli.mjs instance (`restore`)
  *   log   (line) => void
  */
 export function createDormant({ cli, log = () => {} }) {
@@ -106,7 +106,7 @@ export function createDormant({ cli, log = () => {} }) {
 
   /**
    * Config `restore.onBoot`: at server start, bring back whatever the last boot left dormant
-   * (`fleet --local restore --all`) — once per boot: `markerFile` remembers the boot id it ran
+   * (`overmind --local restore --all`) — once per boot: `markerFile` remembers the boot id it ran
    * for, so a server restart within the same boot leaves what you chose not to resume alone.
    * Never throws; resolves the report or null.
    */

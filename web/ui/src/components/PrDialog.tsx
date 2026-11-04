@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { editorLabel } from '@/lib/brief'
 import { copyText } from '@/lib/clipboard'
 import { shortCwd } from '@/lib/format'
@@ -46,7 +46,7 @@ export function PrDialog({
   onChanged: () => void
 }) {
   const [, navigate] = useLocation()
-  const { applyFleet } = useFleet()
+  const { applyOvermind } = useOvermind()
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState<null | 'spawn' | 'checkout'>(null)
   const [error, setError] = useState<string | null>(null)
@@ -101,7 +101,7 @@ export function PrDialog({
           tmuxSession: res.spawn?.tmuxSession ?? name,
         },
         {
-          onFleet: applyFleet,
+          onOvermind: applyOvermind,
           onFound: (s) => {
             toast.success(`${name} is up`, { id, description: undefined })
             navigate(sessionHref(s))
@@ -245,7 +245,7 @@ export function PrDialog({
             <Button
               variant="outline"
               size="sm"
-              title={`The diff from the clone on ${host} — no session, no worktree. Notes stay in Fleet; post them to GitHub or hand them to a session.`}
+              title={`The diff from the clone on ${host} — no session, no worktree. Notes stay in Overmind; post them to GitHub or hand them to a session.`}
               onClick={() => {
                 onClose()
                 navigate(prReviewHref(host, pr))

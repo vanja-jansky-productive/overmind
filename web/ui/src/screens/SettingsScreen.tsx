@@ -52,7 +52,7 @@ const SECTIONS: { id: SectionId; label: string; hint: string; icon: ReactNode }[
   { id: 'general', label: 'General', hint: 'Text size, theme, chat — this browser', icon: <PaletteIcon /> },
   { id: 'models', label: 'Models', hint: 'Default model and effort per harness', icon: <BotIcon /> },
   { id: 'start-dirs', label: 'Start directories', hint: 'Where new sessions can start', icon: <FolderOpenIcon /> },
-  { id: 'repos', label: 'Git repos', hint: 'Repos fleet keeps in sync', icon: <GitBranchIcon /> },
+  { id: 'repos', label: 'Git repos', hint: 'Repos overmind keeps in sync', icon: <GitBranchIcon /> },
   { id: 'inbox', label: 'Inbox', hint: 'When Slack and email are scanned', icon: <InboxIcon /> },
   { id: 'slack', label: 'Slack', hint: 'Sessions started from a mention', icon: <MessageSquareIcon /> },
   { id: 'status', label: 'Status', hint: 'Hosts and diagnostics', icon: <ActivityIcon /> },
@@ -191,7 +191,7 @@ function SectionBody({ id }: { id: SectionId }) {
     case 'status':
       return (
         <>
-          <FleetStatus />
+          <OvermindStatus />
           <ViewportInfo />
         </>
       )
@@ -365,7 +365,7 @@ function InboxSchedule() {
   if (!cur) {
     return (
       <Section title="Inbox">
-        <p className="py-3 text-sm text-dimmer">{data ? 'The inbox is not set up on this fleet.' : 'Loading…'}</p>
+        <p className="py-3 text-sm text-dimmer">{data ? 'The inbox is not set up on this overmind.' : 'Loading…'}</p>
       </Section>
     )
   }
@@ -522,7 +522,7 @@ function ViewportInfo() {
 }
 
 /** Connection status: how fresh the list is and which hosts answer (the list header only shows a ⚠ on trouble). */
-function FleetStatus() {
+function OvermindStatus() {
   const now = useNow(5_000)
   const { note, hosts } = useSessionList(now)
   return (

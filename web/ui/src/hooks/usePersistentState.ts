@@ -3,7 +3,7 @@ import { useCallback, useState } from 'react'
 import { storage } from '@/lib/storage'
 
 /**
- * useState backed by localStorage (`fleet.*` keys). `parse` validates the stored
+ * useState backed by localStorage (`overmind.*` keys). `parse` validates the stored
  * string and returns the fallback for anything unexpected.
  */
 export function usePersistentState<T extends string | number | boolean>(

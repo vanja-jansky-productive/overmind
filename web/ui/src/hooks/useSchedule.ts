@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 
 import { ApiError, api, isAbortError } from '@/api/client'
 import type { ScheduledEntry } from '@/api/types'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { usePoller } from '@/hooks/usePoller'
 import { pendingEntries } from '@/lib/schedule'
 
@@ -18,8 +18,8 @@ let last: HostSchedule[] = []
 
 /** Every reachable host's scheduled sessions (GET …/schedule), polled while shown. Hosts too old to have them are left out. */
 export function useSchedule(enabled = true) {
-  const { fleet } = useFleet()
-  const hosts = useMemo(() => (fleet?.hosts ?? []).filter((h) => h.ok !== false).map((h) => h.name), [fleet])
+  const { overmind } = useOvermind()
+  const hosts = useMemo(() => (overmind?.hosts ?? []).filter((h) => h.ok !== false).map((h) => h.name), [overmind])
   const [results, setResults] = useState<HostSchedule[]>(last)
   const hostsKey = hosts.join('\n')
 

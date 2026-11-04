@@ -2,7 +2,7 @@
 // that hosted it (the tmux window, and the tmux session when that was its only window,
 // or the iTerm tab).
 //
-// This lives in the web backend layer (next to lib/backends.mjs), not in the `fleet` CLI:
+// This lives in the web backend layer (next to lib/backends.mjs), not in the `overmind` CLI:
 // it needs nothing discovery doesn't already hand us (pid, backend, handle, tmux_session),
 // and the tmux half is the same few tmux calls the backends make directly.
 
@@ -84,7 +84,7 @@ export function createKiller({ run, tmux = 'tmux', killProcess = process.kill.bi
   }
 
   /**
-   * @param session a `fleet list --json` row { pid, backend, handle, tmux_session }
+   * @param session a `overmind list --json` row { pid, backend, handle, tmux_session }
    * @returns {{ process, terminal }} what happened to each half
    *   process:  'terminated' | 'killed' | 'gone' | 'skipped'
    *   terminal: 'tmux-session-killed' | 'tmux-window-killed' | 'tmux-pane-gone'

@@ -44,7 +44,7 @@ export interface ChatViewProps {
   outboxKey?: string
   /** Answer / dismiss Claude's pending question from its card; absent = the card is read-only. */
   questionActions?: QuestionActions | null
-  /** It reported its work finished (`fleet done`, see sessionDone): a Done card ends the conversation. */
+  /** It reported its work finished (`overmind done`, see sessionDone): a Done card ends the conversation. */
   done?: SessionDone | null
   /** Close the session from the Done card (the card arms it first); absent = no Close button. */
   onCloseDone?: () => Promise<void>

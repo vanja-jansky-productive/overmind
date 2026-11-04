@@ -4,7 +4,7 @@ import { api } from '@/api/client'
 import type { SlackBridge, SlackSpawn, SlackStatus } from '@/api/types'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useSettings } from '@/hooks/useSettings'
 import { refreshSlack, useSlack } from '@/hooks/useSlack'
 import { spawnTargets } from '@/lib/sessions'
@@ -38,7 +38,7 @@ export function SlackSpawnEditor() {
   const status = useSlack()
   const bridges = slackBridges(status)
   if (!status) return <p className="py-3 text-sm text-dimmer">Loading…</p>
-  if (!bridges.length) return <p className="py-3 text-sm text-dimmer">Slack links are not set up on this fleet (slack.host).</p>
+  if (!bridges.length) return <p className="py-3 text-sm text-dimmer">Slack links are not set up on this overmind (slack.host).</p>
   return (
     <div className="flex flex-col gap-3 py-2">
       {bridges.map((b) => (
@@ -49,11 +49,11 @@ export function SlackSpawnEditor() {
 }
 
 function BridgeCard({ bridge }: { bridge: SlackBridge }) {
-  const { fleet } = useFleet()
+  const { overmind } = useOvermind()
   const { models } = useSettings()
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const targets = spawnTargets(fleet)
+  const targets = spawnTargets(overmind)
   const cur = bridge.spawn ?? null
   const appName = bridge.bot?.name ? `@${bridge.bot.name}` : 'Slack app'
 

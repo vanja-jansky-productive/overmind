@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSpawner, isWithin, launchCommand, paneTail, resolveAllowedDir, sanitizeName, shq, shqTyped, validateSpawnRequest } from '../lib/spawn.mjs';
 
-test('shq quotes like the fleet CLI', () => {
+test('shq quotes like the overmind CLI', () => {
   assert.equal(shq('a b'), "'a b'");
   assert.equal(shq("it's"), "'it'\\''s'");
 });
 
-test('sanitizeName mirrors fleet tmux new', () => {
+test('sanitizeName mirrors overmind tmux new', () => {
   assert.equal(sanitizeName('  Fix Login Bug! '), 'fix-login-bug');
   assert.equal(sanitizeName('---'), '');
   assert.equal(sanitizeName('x'.repeat(60)).length, 40);
@@ -53,7 +53,7 @@ test('validateSpawnRequest defaults, sanitizes and rejects bad input', () => {
   assert.equal(ok.name, 'my-job');
   assert.equal(ok.dir, '/tmp');
   const auto = validateSpawnRequest({}, { spawnDirs: ['/tmp'] });
-  assert.match(auto.name, /^fw-\d{6}$/);
+  assert.match(auto.name, /^om-\d{6}$/);
   assert.equal(auto.nameGiven, false);
   assert.equal(ok.nameGiven, true);
   assert.equal(validateSpawnRequest({ name: '!!!' }, { spawnDirs: ['/tmp'] }).nameGiven, false, 'nothing usable typed');
@@ -90,8 +90,8 @@ test('spawner types --model when one was picked', async () => {
     return { stdout: '', stderr: '' };
   };
   const sp = createSpawner({ run, tmux: 'tmux', launcher: 'claude', sleep: async () => {} });
-  const res = await sp.spawn({ name: 'fw-101010', dir: '/tmp', prompt: 'go', nameGiven: false, model: 'claude-haiku-4-5-20251001' });
-  assert.deepEqual(calls.find((c) => c[1] === 'send-keys'), ['tmux', 'send-keys', '-t', 'fw-101010:', '-l', '--', "claude --model 'claude-haiku-4-5-20251001' 'go'"]);
+  const res = await sp.spawn({ name: 'om-101010', dir: '/tmp', prompt: 'go', nameGiven: false, model: 'claude-haiku-4-5-20251001' });
+  assert.deepEqual(calls.find((c) => c[1] === 'send-keys'), ['tmux', 'send-keys', '-t', 'om-101010:', '-l', '--', "claude --model 'claude-haiku-4-5-20251001' 'go'"]);
   assert.equal(res.model, 'claude-haiku-4-5-20251001');
 });
 
@@ -127,7 +127,7 @@ test('spawner launches codex with its configured command and accepts its trust p
 });
 
 test('spawner passes a prompt too long to type via a file', async (t) => {
-  const promptDir = mkdtempSync(path.join(os.tmpdir(), 'fleet-prompts-'));
+  const promptDir = mkdtempSync(path.join(os.tmpdir(), 'overmind-prompts-'));
   t.after(() => rmSync(promptDir, { recursive: true, force: true }));
   const calls = [];
   const run = async (bin, args) => {
@@ -232,7 +232,7 @@ test('isWithin is path-segment aware', () => {
 });
 
 test('resolveAllowedDir allows roots and subdirs, rejects .. and symlink escapes', async (t) => {
-  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'fleet-spawn-')));
+  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'overmind-spawn-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const root = path.join(base, 'root');
   const outside = path.join(base, 'outside');
@@ -263,10 +263,10 @@ test('spawner omits -n for an auto-generated name', async () => {
     return { stdout: '', stderr: '' };
   };
   const sp = createSpawner({ run, sleep: async () => {} });
-  const res = await sp.spawn({ name: 'fw-101010', dir: '/tmp', prompt: 'go', nameGiven: false });
+  const res = await sp.spawn({ name: 'om-101010', dir: '/tmp', prompt: 'go', nameGiven: false });
   const typed = calls.find((a) => a[0] === 'send-keys' && a.includes('-l'));
   assert.equal(typed.at(-1), "claude 'go'");
-  assert.equal(res.tmuxSession, 'fw-101010');
+  assert.equal(res.tmuxSession, 'om-101010');
 });
 
 test('validateSpawnRequest takes a GitHub identity for Claude only', () => {
@@ -294,13 +294,13 @@ test('spawner launches under a GitHub identity: wrapped launcher, pane option, u
     ghIdentities: [{ name: 'bot', login: 'my-app[bot]' }],
     ghIdentityLauncher: async (name, launcher) => {
       asked.push([name, launcher]);
-      return `export FLEET_GH_IDENTITY=${name} && ${launcher} --append-system-prompt x`;
+      return `export OVERMIND_GH_IDENTITY=${name} && ${launcher} --append-system-prompt x`;
     },
   });
   const res = await sp.spawn({ name: 'job', dir: '/tmp', prompt: 'go', ghIdentity: 'bot' });
   assert.deepEqual(asked, [['bot', 'claude']]);
-  assert.deepEqual(calls.find((c) => c[1] === 'send-keys'), ['tmux', 'send-keys', '-t', 'job:', '-l', '--', "export FLEET_GH_IDENTITY=bot && claude --append-system-prompt x -n 'job' 'go'"]);
-  assert.ok(calls.some((c) => c.join(' ') === 'tmux set-option -p -t job: @fleet_gh_identity bot'));
+  assert.deepEqual(calls.find((c) => c[1] === 'send-keys'), ['tmux', 'send-keys', '-t', 'job:', '-l', '--', "export OVERMIND_GH_IDENTITY=bot && claude --append-system-prompt x -n 'job' 'go'"]);
+  assert.ok(calls.some((c) => c.join(' ') === 'tmux set-option -p -t job: @overmind_gh_identity bot'));
   assert.equal(res.ghIdentity, 'bot');
   await assert.rejects(sp.spawn({ name: 'job2', dir: '/tmp', prompt: '', ghIdentity: 'nope' }), /no GitHub identity "nope"/);
 });
@@ -318,6 +318,6 @@ test('validateSpawnRequest takes an embed label; the spawner puts it on the pane
   };
   const sp = createSpawner({ run, tmux: 'tmux', launcher: 'claude', sleep: async () => {} });
   const res = await sp.spawn({ name: 'emb', dir: '/tmp', prompt: '', embed: 'fin' });
-  assert.ok(calls.some((c) => c.join(' ') === 'tmux set-option -p -t emb: @fleet_embed fin'));
+  assert.ok(calls.some((c) => c.join(' ') === 'tmux set-option -p -t emb: @overmind_embed fin'));
   assert.equal(res.embed, 'fin');
 });

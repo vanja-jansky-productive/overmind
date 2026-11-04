@@ -1,7 +1,7 @@
 // Slack links: for a while, a session talks with the people in one Slack thread (or channel, or
-// DM). You link it — the web UI's "Link to Slack", or `fleet slack link` — with a time limit and
+// DM). You link it — the web UI's "Link to Slack", or `overmind slack link` — with a time limit and
 // the task it may help with; until the link ends, what people write there is typed into the
-// session and the session answers in the thread with `fleet slack reply <link> "…"`.
+// session and the session answers in the thread with `overmind slack reply <link> "…"`.
 //
 // One host's server runs the bridge (config `slack.host`): a Slack App in Socket Mode — a
 // WebSocket out to Slack, so no public URL — with a bot token (SLACK_BOT_TOKEN, `xoxb-…`) and an
@@ -35,12 +35,12 @@
 //
 // Blocked: a linked session that has waited on its owner (a permission prompt, a question in the
 // terminal) for BLOCKED_AFTER_MS says so in the thread — only what kind of prompt, never its
-// details — and DMs its owner (`slack.owner(s)`; see `blockedOwner`) a link to the session in Fleet, so they can unblock
+// details — and DMs its owner (`slack.owner(s)`; see `blockedOwner`) a link to the session in Overmind, so they can unblock
 // it. Messages for it meanwhile get ⏳. Once it moves on, both posts are edited to say so. A
-// linked session never asks with AskUserQuestion (Slack cannot show it): `fleet slack guard`, a
+// linked session never asks with AskUserQuestion (Slack cannot show it): `overmind slack guard`, a
 // PreToolUse hook, denies the call and tells it to ask in the thread.
 //
-// State (`<fleet state>/slack-links.json`, 0600): the links, their undelivered messages, and the
+// State (`<overmind state>/slack-links.json`, 0600): the links, their undelivered messages, and the
 // ended ones (the last MAX_ENDED, for the list).
 import { randomBytes } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
@@ -55,7 +55,7 @@ export const MAX_MINUTES = 7 * 24 * 60;
 /** A link with no end (`until: null`): it lasts until it is unlinked. */
 export const FOREVER = 'forever';
 export const MAX_TASK = 1000;
-/** The owner's first request to a session spawned linked (`fleet spawn --slack`): ends the intro. */
+/** The owner's first request to a session spawned linked (`overmind spawn --slack`): ends the intro. */
 export const MAX_FIRST = 4000;
 export const MODES = Object.freeze(['mention', 'proactive']);
 /** After the session replied, this long counts as an ongoing exchange (mention mode). */
@@ -92,10 +92,10 @@ const TS_RE = /^\d{10}\.\d{6}$/;
 const FILE_ID_RE = /^F[A-Z0-9]{6,}$/;
 const USER_RE = /^[UW][A-Z0-9]+$/;
 const MAX_STARTED = 200;
-/** `fleet slack history` / `thread`: messages per page (default, max — Slack's own cap is ~200). */
+/** `overmind slack history` / `thread`: messages per page (default, max — Slack's own cap is ~200). */
 export const READ_LIMIT = 50;
 export const MAX_READ_LIMIT = 200;
-/** `fleet slack file`: the largest file handed to a session. */
+/** `overmind slack file`: the largest file handed to a session. */
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 // Message subtypes that are people writing; edits, joins, deletions… are not delivered.
 const DELIVERED_SUBTYPES = new Set([undefined, 'file_share', 'thread_broadcast']);
@@ -207,7 +207,7 @@ export function plainText(text, names = {}) {
     .replace(/&amp;/g, '&');
 }
 
-/** The name a session goes by in Fleet: its chosen title (`/rename`), else its derived name. */
+/** The name a session goes by in Overmind: its chosen title (`/rename`), else its derived name. */
 function sessionTitle(s) {
   return s?.display_title || s?.gen_title || s?.name || null;
 }
@@ -244,7 +244,7 @@ function fitNewest(lines, budget) {
  */
 export function linkPrompt(link, { history = [], names = {}, first = '' } = {}) {
   const where = link.threadTs ? 'a Slack thread' : link.dm ? `a Slack DM with ${link.dm.name}` : 'a Slack conversation';
-  const reply = `fleet slack reply ${link.id} "<text>"`;
+  const reply = `overmind slack reply ${link.id} "<text>"`;
   const proactive = link.mode === 'proactive';
   const lines = [
     `[slack ${link.id}] You are linked to ${where} until ${ends(link)}: ${link.permalink}`,
@@ -253,11 +253,11 @@ export function linkPrompt(link, { history = [], names = {}, first = '' } = {}) 
     proactive
       ? `You now follow what is said there: every new message arrives here as "[slack ${link.id}] …". Step in when you can really help — the owner's instructions say how much — or when someone talks to you; otherwise post nothing.`
       : `You now follow it in the background: messages arrive here as "[slack ${link.id}] …" when one mentions you or is a DM to you, and also when one comes in a thread you have posted in — together with what was said in between, for context. A message in your thread is not necessarily for you: judge from the conversation whether it is (an answer to you, a follow-up question) or people talking among themselves, and post only in the first case. The rest is context, not something to react to.`,
-    `Each message carries who wrote it (their Slack name and id, checked by fleet; "→ mentions you" / "→ to you" when it mentions you or is a DM to you). Until the link ends:`,
+    `Each message carries who wrote it (their Slack name and id, checked by overmind; "→ mentions you" / "→ to you" when it mentions you or is a DM to you). Until the link ends:`,
     ...(link.dm ? [`This is a direct conversation between ${link.dm.name} and you (the app): what they write there is for you. They may not know they can write to you yet — if the instructions say to start, post a short opener now.`] : []),
     `- Post in Slack only with \`${reply}\`${link.threadTs || link.dm || !oneOnOne(link) ? '' : ' (add `--thread <ts>` to answer in a message\'s thread)'} — Slack mrkdwn, short, in the language they write in. Never post to Slack any other way; your answer here in the terminal is not seen there.`,
-    ...(oneOnOne(link) || link.threadTs ? [] : [`- Threads first (the company's rule: several people read this conversation, and posts in it bury each other). Answer a message in its thread: \`${reply} --thread <its ts>\` (that opens the thread if it has none). To bring up something new, post one short headline line first, then the details in its thread (\`--thread <the ts the headline printed>\`). Fleet refuses a longer post outside a thread.`]),
-    `- To catch up on or look something up in ${link.threadTs ? 'the thread' : 'the conversation'} (read-only): \`fleet slack history ${link.id}\` (a page at a time, \`--cursor\` for the next)${link.threadTs ? '' : `, \`fleet slack thread ${link.id} <ts>\` for a thread`}, \`fleet slack file ${link.id} <file-id>\` for a file it lists. Read only when it helps you answer, not every message.`,
+    ...(oneOnOne(link) || link.threadTs ? [] : [`- Threads first (the company's rule: several people read this conversation, and posts in it bury each other). Answer a message in its thread: \`${reply} --thread <its ts>\` (that opens the thread if it has none). To bring up something new, post one short headline line first, then the details in its thread (\`--thread <the ts the headline printed>\`). Overmind refuses a longer post outside a thread.`]),
+    `- To catch up on or look something up in ${link.threadTs ? 'the thread' : 'the conversation'} (read-only): \`overmind slack history ${link.id}\` (a page at a time, \`--cursor\` for the next)${link.threadTs ? '' : `, \`overmind slack thread ${link.id} <ts>\` for a thread`}, \`overmind slack file ${link.id} <file-id>\` for a file it lists. Read only when it helps you answer, not every message.`,
     '- When nothing calls for a post, post nothing: end your turn here with one short line (e.g. "observed — nothing for me"), no summary of the conversation.',
     '- Help only within the instructions above: questions, investigating, debugging, small changes within them. Decline anything else in the thread, and say here what was asked.',
     '- Stay free to talk: messages reach you only while your main thread is free. Anything that takes more than a couple of minutes (an investigation, test runs, a deploy, an analysis) goes to a background subagent (the Agent tool with run_in_background) or a background shell — say in the thread that it is under way, and post the result when it lands.',
@@ -294,7 +294,7 @@ export function messagesPrompt(link, messages, { names = {} } = {}) {
       : messages.some((m) => m.joined)
         ? 'in a thread you posted in — answer only if it is for you'
         : 'context';
-  const head = `[slack ${link.id}] New in ${link.threadTs ? 'the thread' : link.dm ? `the DM with ${link.dm.name}` : 'the conversation'} — ${why} (until ${ends(link)}; post with \`fleet slack reply ${link.id} "…"${link.threadTs || oneOnOne(link) ? '' : ' --thread <ts>'}\`${link.threadTs || oneOnOne(link) ? '' : " in the message's thread"}, or post nothing):`;
+  const head = `[slack ${link.id}] New in ${link.threadTs ? 'the thread' : link.dm ? `the DM with ${link.dm.name}` : 'the conversation'} — ${why} (until ${ends(link)}; post with \`overmind slack reply ${link.id} "…"${link.threadTs || oneOnOne(link) ? '' : ' --thread <ts>'}\`${link.threadTs || oneOnOne(link) ? '' : " in the message's thread"}, or post nothing):`;
   const { shown, left } = fitNewest(messages.map((m) => messageLine(m, link, names)), MAX_PROMPT - head.length - 60);
   return [head, ...(left ? [`(${left} earlier messages left out)`] : []), ...shown].join('\n');
 }
@@ -316,7 +316,7 @@ export function blockedText(what) {
 /** The owner's DM: which session, where it is linked, and where to unblock it. */
 export function ownerText({ name, what, link, url }) {
   const where = link.dm ? `your DM with ${link.dm.name}` : `<${link.permalink}|its Slack thread>`;
-  const open = url ? `<${url}|Open it in Fleet>` : 'Attach to it in its terminal';
+  const open = url ? `<${url}|Open it in Overmind>` : 'Attach to it in its terminal';
   return `:double_vertical_bar: *${short(name)}* is blocked (${what}), linked to ${where} (${link.id}). ${open} to unblock it.`;
 }
 
@@ -500,8 +500,8 @@ export function createSocketClient({ getAppToken, onEvent, fetch = globalThis.fe
  *   listSessions  async (host) => that host's sessions (fresh)
  *   send          async (session, text, host) — types a prompt into it, on its host
  *   file          the state file
- *   download      async (url) => { bytes, type } — a Slack file (createSlackDownload); none = no `fleet slack file`
- *   sessionUrl    (host, sessionId) => the session's page in Fleet's web UI, for the owner's DM (null: none)
+ *   download      async (url) => { bytes, type } — a Slack file (createSlackDownload); none = no `overmind slack file`
+ *   sessionUrl    (host, sessionId) => the session's page in Overmind's web UI, for the owner's DM (null: none)
  */
 export function createSlackBridge({ settings = {}, self = null, call, socket = null, listSessions, send, spawn = null, file, download = null, sessionUrl = null, now = Date.now, log = () => {}, tickMs = TICK_MS }) {
   let links = []; // active
@@ -848,7 +848,7 @@ export function createSlackBridge({ settings = {}, self = null, call, socket = n
   /** POST reply: the linked session (identified by its pane or id, when given) posts in the thread. */
   /**
    * The active link `id`, for its own session: a call that names its pane / session (as a linked
-   * session's `fleet slack …` does) must be that link's. `nothing`: what did not happen, for the errors.
+   * session's `overmind slack …` does) must be that link's. `nothing`: what did not happen, for the errors.
    */
   async function ownLink({ link: id, pane, session: sessionId, host }, nothing) {
     await load();
@@ -965,7 +965,7 @@ export function createSlackBridge({ settings = {}, self = null, call, socket = n
   /** POST file: a file shared in the linked conversation (a thread link: in its thread) → its bytes, base64. */
   async function getFile({ file: fileId, ...who }) {
     const l = await ownLink(who, 'nothing read');
-    if (!FILE_ID_RE.test(String(fileId ?? ''))) throw new SlackError('file must be a Slack file id like F0123ABCDEF (fleet slack history lists them)');
+    if (!FILE_ID_RE.test(String(fileId ?? ''))) throw new SlackError('file must be a Slack file id like F0123ABCDEF (overmind slack history lists them)');
     if (!download) throw new SlackError('files are not set up on this server', 501);
     let f;
     try {

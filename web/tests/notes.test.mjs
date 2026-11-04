@@ -28,7 +28,7 @@ const AGE = '-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0
 
 /** A synthetic notes dir with a secret-ish store, a symlink out and ignored folders. */
 function fixture(t) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-notes-')));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-notes-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const home = path.join(base, 'home');
   const root = path.join(home, 'notes');
@@ -260,10 +260,10 @@ test('HTTP: tree / search / file / raw locally and through a peer; 501 when off;
       { self: name, hosts: { laptop: { web: urls.laptop, ssh: 'laptop' }, workstation: { web: urls.workstation, ssh: 'workstation' } } },
       { env: {}, home: '/home/tester' },
     );
-    const fleet = { localHost: async () => ({ name, ok: true, sessions: [] }), invalidate() {} };
+    const overmind = { localHost: async () => ({ name, ok: true, sessions: [] }), invalidate() {} };
     // Only the workstation has notes configured.
     const notes = name === 'workstation' ? notesFor(fx) : null;
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, notes, warmFleet: false });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, notes, warmOvermind: false });
     t.after(() => api.stop());
     handles[name] = api;
   }
@@ -305,7 +305,7 @@ test('HTTP: tree / search / file / raw locally and through a peer; 501 when off;
   assert.equal((await get(`${urls.laptop}/api/hosts/nowhere/notes/tree`)).status, 404);
   assert.deepEqual((await get(`${urls.laptop}/api/settings`)).body.notes, { enabled: false });
   // Each host entry says whether it has notes (the UI's nav + host picker).
-  const fleet = (await get(`${urls.laptop}/api/fleet`)).body;
-  assert.deepEqual(fleet.hosts.map((h) => [h.name, h.notes ?? null]), [['laptop', null], ['workstation', { name: 'notes' }]]);
+  const overmind = (await get(`${urls.laptop}/api/overmind`)).body;
+  assert.deepEqual(overmind.hosts.map((h) => [h.name, h.notes ?? null]), [['laptop', null], ['workstation', { name: 'notes' }]]);
   assert.deepEqual((await get(`${urls.workstation}/api/settings`)).body.notes, { enabled: true, name: 'notes' });
 });

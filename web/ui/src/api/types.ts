@@ -1,11 +1,11 @@
-// Types for the fleet web HTTP API (see web/ARCHITECTURE.md → "HTTP API").
+// Types for the overmind web HTTP API (see web/ARCHITECTURE.md → "HTTP API").
 // The API is a stable contract: fields are only ever added, so unknown extra
 // fields are fine and everything a UI does not strictly need is optional.
 
 export type SessionStatus = 'busy' | 'idle' | 'waiting' | 'unknown'
 export type Backend = 'iterm' | 'tmux' | 'unknown'
 
-/** One Claude Code session: a `fleet list --json` row plus the host it runs on. */
+/** One Claude Code session: a `overmind list --json` row plus the host it runs on. */
 /** A subagent of a session (`background.agents[]`). */
 export interface BackgroundAgent {
   id: string
@@ -59,43 +59,43 @@ export interface Session {
   /** Context-window usage from the transcript tail; null when unknown (older CLIs omit it). */
   context?: ContextUsage | null
   /**
-   * Subagents and background shells it runs (`fleet list --json` → `background`); null / absent =
+   * Subagents and background shells it runs (`overmind list --json` → `background`); null / absent =
    * none. With them a session whose main turn has ended is `idle`: it takes input.
    */
   background?: SessionBackground | null
   /** "Open in editor" link for the cwd (like Brief.editorUrl, without the git-root lookup). Older servers omit it. */
   editorUrl?: string | null
   /**
-   * The session stack this session belongs to (`fleet list --json` → `stack`); null = in none.
+   * The session stack this session belongs to (`overmind list --json` → `stack`); null = in none.
    * Older CLIs omit the field entirely (undefined = this host knows no stacks).
    */
   stack?: StackRef | null
-  /** The coding agent running it (`fleet list --json` → `harness`); older CLIs omit it (= claude). */
+  /** The coding agent running it (`overmind list --json` → `harness`); older CLIs omit it (= claude). */
   harness?: HarnessId | string | null
   /** The model it runs, when known. */
   model?: string | null
   /** Absolute transcript path (Codex / pi only). */
   transcript?: string | null
   /**
-   * The scheduled job run that started it (`fleet list --json` → `origin`, docs/cli.md → Jobs);
+   * The scheduled job run that started it (`overmind list --json` → `origin`, docs/cli.md → Jobs);
    * null = started by hand. Older CLIs omit it.
    */
   origin?: SessionOrigin | null
   /**
-   * The GitHub identity (a GitHub App) it acts as on GitHub (`fleet list --json` → `gh_identity`,
+   * The GitHub identity (a GitHub App) it acts as on GitHub (`overmind list --json` → `gh_identity`,
    * docs/cli.md → GitHub identities); null = the user's own. Older CLIs omit it.
    */
   gh_identity?: string | null
-  /** The app whose embedded Fleet panel started it (`fleet list --json` → `embed`, the pane's `@fleet_embed`); null / absent = none. */
+  /** The app whose embedded Overmind panel started it (`overmind list --json` → `embed`, the pane's `@overmind_embed`); null / absent = none. */
   embed?: string | null
   /**
-   * The git checkout its cwd is in (`fleet list --json` → `git`): branch (null = detached),
+   * The git checkout its cwd is in (`overmind list --json` → `git`): branch (null = detached),
    * root, linked worktree or main checkout, GitHub `owner/name` of origin. Null outside one;
    * older CLIs omit it.
    */
   git?: { branch: string | null; root: string; linked: boolean; repo: string | null } | null
   /**
-   * It reported its work finished (`fleet done`, `fleet list --json` → `done`) and was not
+   * It reported its work finished (`overmind done`, `overmind list --json` → `done`) and was not
    * prompted since; null / absent = not done. Older CLIs omit it.
    */
   done?: SessionDone | null
@@ -115,10 +115,10 @@ export interface SessionOrigin {
   run: string
 }
 
-/** The coding agents fleet drives — see docs/cli.md → Harnesses. */
+/** The coding agents overmind drives — see docs/cli.md → Harnesses. */
 export type HarnessId = 'claude' | 'codex' | 'pi'
 
-/** GET /api/hosts/:host/harnesses → `harnesses[]` (`fleet harness list --json`). */
+/** GET /api/hosts/:host/harnesses → `harnesses[]` (`overmind harness list --json`). */
 export interface HarnessInfo {
   id: HarnessId | string
   label: string
@@ -240,8 +240,8 @@ export interface Host {
   sessions: Session[]
 }
 
-/** GET /api/fleet — self first, then peers. */
-export interface FleetResponse {
+/** GET /api/overmind — self first, then peers. */
+export interface OvermindResponse {
   self: string
   hosts: Host[]
   /** When the merged snapshot was built (epoch ms); absent on `?local=1`. */
@@ -376,7 +376,7 @@ export interface Settings {
   operator?: { enabled: boolean; hosts?: string[] }
 }
 
-/** GET/POST /api/operator — this server's operator session (null until it shows in the fleet). */
+/** GET/POST /api/operator — this server's operator session (null until it shows in the overmind). */
 export interface OperatorStatus {
   host: string
   dir: string
@@ -674,7 +674,7 @@ export interface KillResponse {
   terminal: string
 }
 
-/** POST /api/hosts/:host/sessions/:id/sleep → `fleet sleep`: ended, kept dormant until resumed. */
+/** POST /api/hosts/:host/sessions/:id/sleep → `overmind sleep`: ended, kept dormant until resumed. */
 export interface SleepResponse {
   ok: true
   host: string
@@ -686,7 +686,7 @@ export interface SleepResponse {
   dormant?: DormantView | null
 }
 
-/** POST /api/hosts/:host/sessions/:id/autoname → `fleet name <id> --apply --refresh` (409 when held). */
+/** POST /api/hosts/:host/sessions/:id/autoname → `overmind name <id> --apply --refresh` (409 when held). */
 export interface RegenerateNameResponse {
   ok: boolean
   host: string
@@ -695,7 +695,7 @@ export interface RegenerateNameResponse {
   name: string | null
 }
 
-/** POST /api/hosts/:host/sessions/:id/rename → `fleet rename --json` (409 when held). */
+/** POST /api/hosts/:host/sessions/:id/rename → `overmind rename --json` (409 when held). */
 export interface RenameResponse {
   ok: boolean
   host: string
@@ -722,7 +722,7 @@ export interface GroupMember {
   dormant?: boolean
 }
 
-/** A smart group of sessions (`fleet group`). Ids are stable across runs. */
+/** A smart group of sessions (`overmind group`). Ids are stable across runs. */
 export interface SessionGroup {
   id: string
   label: string
@@ -799,7 +799,7 @@ export interface StackMember {
   briefExists?: boolean
 }
 
-/** `fleet stack show --json` (+ the server's `editorUrl`). */
+/** `overmind stack show --json` (+ the server's `editorUrl`). */
 export interface StackView {
   host: string
   id: string
@@ -814,7 +814,7 @@ export interface StackView {
   editedAt: string | null
   /** The sentence every sibling's first prompt starts with (on the stack's home host). */
   contextLine: string
-  /** The same for a sibling on another host (`fleet -H <home> stack …`); older CLIs omit it. */
+  /** The same for a sibling on another host (`overmind -H <home> stack …`); older CLIs omit it. */
   remoteContextLine?: string
   members: StackMember[]
   /** The whole file, frontmatter included (what the editor edits). */
@@ -1023,7 +1023,7 @@ export interface NoteFile {
   editorUrl: string | null
 }
 
-// --- Subscription usage (GET /api/hosts/:host/usage → `fleet usage --json`) -------------------
+// --- Subscription usage (GET /api/hosts/:host/usage → `overmind usage --json`) -------------------
 
 export interface UsageAccount {
   uuid: string | null
@@ -1084,7 +1084,7 @@ export interface UsageResponse extends UsageRead {
   openai?: UsageRead | null
 }
 
-/** A Claude session inside a dormant entry (`fleet restore --json`). */
+/** A Claude session inside a dormant entry (`overmind restore --json`). */
 export interface DormantSession {
   sessionId: string
   name: string | null
@@ -1095,7 +1095,7 @@ export interface DormantSession {
 /** One dormant tmux session (`kind: tmux`) or lone Claude session (`kind: claude`) a reboot left. */
 export interface DormantView {
   kind: 'tmux' | 'claude' | string
-  /** What `fleet restore <target>` takes: the tmux name, or the full session id. */
+  /** What `overmind restore <target>` takes: the tmux name, or the full session id. */
   target: string
   /** The tmux name, or the Claude title. */
   name: string
@@ -1104,7 +1104,7 @@ export interface DormantView {
   windows: number
   panes: number
   sessions: DormantSession[]
-  /** Put to sleep on purpose (Sleep in the app, `fleet sleep`), not left by a reboot: Resume all skips it. */
+  /** Put to sleep on purpose (Sleep in the app, `overmind sleep`), not left by a reboot: Resume all skips it. */
   slept?: boolean
 }
 
@@ -1154,7 +1154,7 @@ export interface ForgetResponse {
   forgotten: string[]
 }
 
-// --- Git repos (Settings → Git repos; GET/PUT /api/hosts/:host/repos → `fleet repos`) -----------
+// --- Git repos (Settings → Git repos; GET/PUT /api/hosts/:host/repos → `overmind repos`) -----------
 
 /** Config `repos` on one host (defaults filled in). Keys of `overrides` / `exclude`: a dir name or a `~/…` path. */
 export interface ReposSettings {
@@ -1167,7 +1167,7 @@ export interface ReposSettings {
 
 export type RepoOutcome = 'updated' | 'current' | 'ahead' | 'diverged' | 'blocked' | 'busy' | 'noUpstream' | 'noRemote' | 'fetchFailed'
 
-/** One row of `fleet repos --json --all`. */
+/** One row of `overmind repos --json --all`. */
 export interface RepoRow {
   name: string
   /** `~/…` */
@@ -1199,7 +1199,7 @@ export interface ReposResponse {
   saved?: boolean
 }
 
-/** One result of `fleet repos sync --json`. */
+/** One result of `overmind repos sync --json`. */
 export interface RepoSyncResult {
   name: string
   path: string
@@ -1210,7 +1210,7 @@ export interface RepoSyncResult {
   detail?: string
 }
 
-/** A `fleet prs` column id (docs/cli.md → Pull requests). */
+/** A `overmind prs` column id (docs/cli.md → Pull requests). */
 export type PrColumnId = 'unseenMentions' | 'waitingOnMe' | 'reviewMine' | 'readyToMergeMine' | 'draftMine' | 'waitingOnAuthor'
 
 export interface PrColumn {
@@ -1283,7 +1283,7 @@ export interface PrsResponse {
   prs: PullRequest[]
 }
 
-/** A `fleet tasks` column id (docs/cli.md → Tasks). */
+/** A `overmind tasks` column id (docs/cli.md → Tasks). */
 export type TaskColumnId = 'due' | 'inProgress' | 'toDo'
 
 export interface TaskColumn {
@@ -1302,7 +1302,7 @@ export interface TaskStatus {
   position: number
 }
 
-/** One of your open Productive tasks (`fleet tasks --json` → `tasks[]`). */
+/** One of your open Productive tasks (`overmind tasks --json` → `tasks[]`). */
 export interface Task {
   id: string
   /** The project-scoped number (`#123`). */
@@ -1345,7 +1345,7 @@ export interface TasksResponse {
 }
 
 /** POST /api/hosts/:host/tasks/spawn */
-/** A session started later (`fleet schedule --json`): at a time, or on a task's start date. */
+/** A session started later (`overmind schedule --json`): at a time, or on a task's start date. */
 export interface ScheduledEntry {
   id: string
   /** ms epoch; null while a linked task has no start date. */
@@ -1390,7 +1390,7 @@ export interface TaskSpawnResponse {
   spawn: SpawnResponse
 }
 
-/** A PR checked out in a worktree (`fleet pr checkout --json`). */
+/** A PR checked out in a worktree (`overmind pr checkout --json`). */
 export interface PrWorktree {
   owner: string
   repo: string
@@ -1443,7 +1443,7 @@ export interface JobRun {
   subject?: { kind: string; repo: string; branch: string; sha: string; url: string; goneAt: number | null }
 }
 
-/** A GitHub bot's poll state (`fleet bots --json` → `github`). */
+/** A GitHub bot's poll state (`overmind bots --json` → `github`). */
 export interface JobGithubState {
   lastPoll: number | null
   lastOk: number | null
@@ -1456,7 +1456,7 @@ export interface JobGithubState {
   >
 }
 
-/** A live session of a job (`fleet jobs --json` → `live[]`). */
+/** A live session of a job (`overmind jobs --json` → `live[]`). */
 export interface JobLive {
   run: string | null
   sessionId: string
@@ -1465,7 +1465,7 @@ export interface JobLive {
   title: string | null
 }
 
-/** One job (`fleet jobs --json` / `fleet jobs show <name> --json`) plus the host it lives on. */
+/** One job (`overmind jobs --json` / `overmind jobs show <name> --json`) plus the host it lives on. */
 export interface Job {
   host?: string
   name: string
@@ -1730,7 +1730,7 @@ export interface PrDiffResponse extends Omit<DiffsResponse, 'id'> {
   pr: PrReviewInfo
 }
 
-/** A review note on a PR without a session: a draft thread kept in Fleet; `posted` once it went to GitHub. */
+/** A review note on a PR without a session: a draft thread kept in Overmind; `posted` once it went to GitHub. */
 export type PrNote = ReviewThread & { posted?: { url: string | null; at: number } | null }
 export interface PrNotesState {
   host: string

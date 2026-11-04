@@ -8,7 +8,7 @@ import { usePoller } from '@/hooks/usePoller'
 export const DIFF_POLL_MS = 2_000
 
 function diffError(err: unknown): string {
-  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s fleet web server predates the diff reviewer — update and restart it'
+  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s overmind web server predates the diff reviewer — update and restart it'
   if (err instanceof ApiError && err.status === 409) return err.message === 'not a git repository' ? 'The session’s folder is not a git checkout' : err.message
   return sessionErrorMessage(err)
 }

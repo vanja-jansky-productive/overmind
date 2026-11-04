@@ -7,7 +7,7 @@ import os from 'node:os'
 
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 export const BASE = process.env.GUIDE_BASE || 'http://127.0.0.1:7799/'
-const SP = process.env.GUIDE_TMP || fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-guide-'))
+const SP = process.env.GUIDE_TMP || fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-guide-'))
 export const OUT = process.env.GUIDE_SHOTS || path.join(SP, 'shots')
 fs.mkdirSync(OUT, { recursive: true })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

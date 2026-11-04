@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * A group member a reboot left dormant, on the Board (and the mobile grouped list): dimmed, with
- * Resume (`fleet restore <session id>` on its host — its whole tmux session comes back).
+ * Resume (`overmind restore <session id>` on its host — its whole tmux session comes back).
  */
 export function DormantCard({ member: m, now, desktop = false }: { member: DormantMember; now: number; desktop?: boolean }) {
   const { busy, resume } = useDormant()

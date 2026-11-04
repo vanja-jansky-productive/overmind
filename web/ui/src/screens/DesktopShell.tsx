@@ -42,7 +42,7 @@ import { TopBar } from '@/components/desktop/TopBar'
 import { NewSessionDialog } from '@/components/NewSessionDrawer'
 import { StatusDot } from '@/components/StatusDot'
 import { Kbd } from '@/components/ui/kbd'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { focusLeft, toggleFocus, useFocus } from '@/hooks/useFocus'
 import { useBoardColumns, useGroups, useViewMode } from '@/hooks/useGroups'
 import { useNotesHosts, useNotesTree } from '@/hooks/useNotes'
@@ -112,7 +112,7 @@ export function DesktopShell() {
   const now = useNow(1000)
   const focus = useFocus()
   const list = useSessionList(now)
-  const { fleet, refresh, dropSession } = useFleet()
+  const { overmind, refresh, dropSession } = useOvermind()
   const { setTheme, setPalette } = useTheme()
   const [location, navigate] = useLocation()
   const [match, params] = useRoute('/s/:host/:id')
@@ -138,17 +138,17 @@ export function DesktopShell() {
   const notesHosts = useNotesHosts()
   const selected = match ? { host: params.host, id: params.id } : null
   const selectedKey = selected ? `${selected.host}/${selected.id}` : null
-  const selectedSession = selected ? findSession(fleet, selected.host, selected.id) : null
+  const selectedSession = selected ? findSession(overmind, selected.host, selected.id) : null
 
-  const [sidebarW, setSidebarW] = usePersistentState<number>('fleet.sidebarWidth', SIDEBAR_DEFAULT_W, (r) => clampSidebarWidth(Number(r)))
+  const [sidebarW, setSidebarW] = usePersistentState<number>('overmind.sidebarWidth', SIDEBAR_DEFAULT_W, (r) => clampSidebarWidth(Number(r)))
 
-  // List | Board (`fleet.view`). Board: the grouped Kanban replaces the sidebar; an open
+  // List | Board (`overmind.view`). Board: the grouped Kanban replaces the sidebar; an open
   // session is a flyout over its right edge (the board never relayouts), so ↑/↓, Enter and
   // Esc work the same way.
   const [mode, setMode] = useViewMode()
   const board = mode === 'board'
   const groups = useGroups(board)
-  const { columns, moveColumn } = useBoardColumns(board, list.view.sessions, groups.groups, fleet, list.hostSet, list.query)
+  const { columns, moveColumn } = useBoardColumns(board, list.view.sessions, groups.groups, overmind, list.hostSet, list.query)
   // The cursor walks the sessions in on-screen order: the list, or the board column by column.
   const ordered = useMemo(() => (board ? boardOrder(columns) : list.view.sessions), [board, columns, list.view.sessions])
 
@@ -235,14 +235,14 @@ export function DesktopShell() {
     if (next && document.activeElement?.closest('[data-session-list]')) setFocusReq((r) => ({ to: 'row', key: next, n: (r?.n ?? 0) + 1 }))
   }
 
-  // --- document title: "(2) name · Fleet" -------------------------------------
+  // --- document title: "(2) name · Overmind" -------------------------------------
   const waiting = list.summary.waiting
   const { title: selectedTitle } = useSessionTitle(selectedSession, selectedKey ?? undefined)
   useEffect(() => {
     const name = selectedSession ? selectedTitle : ''
-    document.title = `${waiting > 0 ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Fleet`
+    document.title = `${waiting > 0 ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Overmind`
   }, [waiting, selectedSession, selectedTitle])
-  useEffect(() => () => void (document.title = 'Fleet'), [])
+  useEffect(() => () => void (document.title = 'Overmind'), [])
 
   // --- keyboard ----------------------------------------------------------------
   const dialogOpen = newOpen || paletteOpen || helpOpen
@@ -397,7 +397,7 @@ export function DesktopShell() {
       if (anyDialog() && action !== 'palette' && !(action === 'help' && dialogRef.current.help && !dialogRef.current.others)) return
       if (runRef.current(action, target)) e.preventDefault()
     }
-    // Fleet.app's native menu (New Session ⌘N — a combo browsers keep for themselves).
+    // Overmind.app's native menu (New Session ⌘N — a combo browsers keep for themselves).
     const onCommand = (e: Event) => {
       const action = (e as CustomEvent<unknown>).detail as ShortcutAction
       if (!APP_COMMANDS.includes(action) || anyDialog()) return
@@ -426,7 +426,7 @@ export function DesktopShell() {
     drag.current = null
   }
 
-  // --- board flyout: width pref (`fleet.flyoutWidth`, 0 = default share), bounded by the board --
+  // --- board flyout: width pref (`overmind.flyoutWidth`, 0 = default share), bounded by the board --
   const boardAreaRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1440))
   useEffect(() => {
@@ -437,7 +437,7 @@ export function DesktopShell() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [board])
-  const [flyoutPref, setFlyoutPref] = usePersistentState<number>('fleet.flyoutWidth', 0, (r) => {
+  const [flyoutPref, setFlyoutPref] = usePersistentState<number>('overmind.flyoutWidth', 0, (r) => {
     const n = Number(r)
     return Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined
   })
@@ -458,7 +458,7 @@ export function DesktopShell() {
   }
 
   // --- palette actions -----------------------------------------------------------
-  const paletteSessions = useMemo(() => allSessions(fleet).sort(byLastActivity), [fleet])
+  const paletteSessions = useMemo(() => allSessions(overmind).sort(byLastActivity), [overmind])
   const attachCmd = sessionAttachCommand(selectedSession)
   const attachLink = canAttachInApp() ? sessionAttachLink(selectedSession) : null
   const editorUrl = selectedSession?.editorUrl ?? null

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 
-import type { FleetResponse, Session } from '@/api/types'
+import type { OvermindResponse, Session } from '@/api/types'
 import { embedHash, isInside, parseEmbedHash, readEmbed, resolveEmbedDir, sessionsIn } from './embed'
 
 test('parseEmbedHash: host + dir required, theme optional', () => {
@@ -63,7 +63,7 @@ test('resolveEmbedDir without home (an older server): a spawn dir with the same 
 
 test('sessionsIn: that host, that dir (worktrees included), latest first', () => {
   const s = (over: Partial<Session>): Session => ({ host: 'w', session_id: 'x', status: 'idle', ...over })
-  const fleet: FleetResponse = {
+  const overmind: OvermindResponse = {
     self: 'w',
     hosts: [
       {
@@ -79,5 +79,5 @@ test('sessionsIn: that host, that dir (worktrees included), latest first', () =>
       { name: 'v', ok: true, sessions: [s({ host: 'v', session_id: 'e', cwd: '/h/app', updated_at: 7 })] },
     ],
   }
-  expect(sessionsIn(fleet, 'w', '/h/app').map((x) => x.session_id)).toEqual(['b', 'a'])
+  expect(sessionsIn(overmind, 'w', '/h/app').map((x) => x.session_id)).toEqual(['b', 'a'])
 })

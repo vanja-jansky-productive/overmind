@@ -3,7 +3,7 @@ import type { Host } from '@/api/types'
 /**
  * Which hosts the session views show. A scope follows the config (`hosts.<name>.shared`): `mine`
  * = the user's own hosts, `shared` = shared sheds, `all` = both. A host list is an explicit pick
- * (multi-select). Persisted as `fleet.hostFilter`: `mine` | `shared` | `all` | `h:<name>,<name>`.
+ * (multi-select). Persisted as `overmind.hostFilter`: `mine` | `shared` | `all` | `h:<name>,<name>`.
  */
 export type HostScope = 'mine' | 'shared' | 'all'
 export type HostSelection = { scope: HostScope } | { hosts: string[] }

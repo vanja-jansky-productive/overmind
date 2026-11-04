@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils'
 const LEVEL_TEXT = { low: 'text-foreground', warn: 'text-status-waiting', hot: 'text-status-error' } as const
 
 /**
- * `#/usage`: the subscription limits of every account logged in across the fleet — Claude
+ * `#/usage`: the subscription limits of every account logged in across the overmind — Claude
  * (current session, weekly, per-model weekly, extra usage) and the ChatGPT plan Codex and pi
  * use (session, weekly, credits). Hosts on one account share one card. `screen` = the mobile page (back, swipe back); `pane` = the desktop main pane.
  */

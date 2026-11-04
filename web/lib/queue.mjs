@@ -10,7 +10,7 @@
 // queue holds through that idle (you read the answer, follow up by hand); it moves again when the
 // next run ends — or at once with "send now".
 //
-// State (`<fleet state>/prompt-queue.json`, 0600): { [session id]: { items, paused, after } }.
+// State (`<overmind state>/prompt-queue.json`, 0600): { [session id]: { items, paused, after } }.
 import { randomBytes } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
@@ -42,7 +42,7 @@ function validText(text) {
 /**
  * @param {object} deps
  *   file          the state file
- *   listSessions  () → the local sessions (fleet list rows) or null when discovery failed
+ *   listSessions  () → the local sessions (overmind list rows) or null when discovery failed
  *   send          (session, text) → typed into the session (lib/backends.mjs#send)
  *   log, now, randomId, tickMs   (tests)
  */

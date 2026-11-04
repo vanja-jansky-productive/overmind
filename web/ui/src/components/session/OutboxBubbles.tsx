@@ -36,7 +36,7 @@ function Ring({ item }: { item: OutboxItem }) {
         strokeWidth={2}
         strokeLinecap="round"
         strokeDasharray={RING_LEN}
-        style={{ ['--ring-len' as string]: `${RING_LEN}`, animation: `fleet-countdown ${total}ms linear -${elapsed}ms forwards` }}
+        style={{ ['--ring-len' as string]: `${RING_LEN}`, animation: `overmind-countdown ${total}ms linear -${elapsed}ms forwards` }}
       />
     </svg>
   )

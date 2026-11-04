@@ -7,7 +7,7 @@ import { HostBadge } from '@/components/HostBadge'
 import { NewSessionDrawer } from '@/components/NewSessionDrawer'
 import { StatusDot } from '@/components/StatusDot'
 import { Button } from '@/components/ui/button'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useNow } from '@/hooks/useNow'
 import { useSessionTitle } from '@/hooks/useTitles'
 import { embedHash, resolveEmbedDir, sessionsIn, type EmbedParams } from '@/lib/embed'
@@ -20,7 +20,7 @@ import { SessionScreen } from '@/screens/SessionScreen'
 
 /**
  * `#/embed?host=…&dir=…` — the sessions working in one directory and their chat, for another app
- * to frame (docs/architecture.md → Embed view). No Fleet navigation: the list, a session
+ * to frame (docs/architecture.md → Embed view). No Overmind navigation: the list, a session
  * (`#/s/…`, the mobile session screen without Review / stacks), back. Every move replaces the
  * history entry, so the framing page's Back button stays its own.
  */
@@ -50,19 +50,19 @@ export function EmbedScreen({ params }: { params: EmbedParams }) {
 }
 
 function EmbedList({ params }: { params: EmbedParams }) {
-  const { fleet, error } = useFleet()
+  const { overmind, error } = useOvermind()
   const [, navigate] = useLocation()
   const now = useNow(5000)
   const [spawning, setSpawning] = useState(false)
-  const hostEntry = fleet?.hosts.find((h) => h.name === params.host) ?? null
+  const hostEntry = overmind?.hosts.find((h) => h.name === params.host) ?? null
   const dir = hostEntry ? resolveEmbedDir(params.dir, hostEntry) : null
-  const sessions = dir?.ok ? sessionsIn(fleet, params.host, dir.path) : []
+  const sessions = dir?.ok ? sessionsIn(overmind, params.host, dir.path) : []
   const name = params.dir.replace(/\/+$/, '').split('/').pop() || params.dir
 
-  const problem = !fleet
+  const problem = !overmind
     ? error
     : !hostEntry
-      ? `${params.host} is not in this Fleet.`
+      ? `${params.host} is not in this Overmind.`
       : hostEntry.ok === false
         ? `${params.host} unreachable: ${hostEntry.error || 'no response'}`
         : dir && !dir.ok
@@ -94,7 +94,7 @@ function EmbedList({ params }: { params: EmbedParams }) {
               <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
               <span className="break-words">{problem}</span>
             </div>
-          ) : !fleet || !dir ? (
+          ) : !overmind || !dir ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-dimmer">
               <Loader2Icon className="size-4 animate-spin" /> Loading sessions…
             </div>

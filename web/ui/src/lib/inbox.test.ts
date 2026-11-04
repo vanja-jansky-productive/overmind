@@ -67,5 +67,5 @@ test('dueChip', () => {
 })
 
 test('briefMarkdown makes in-app links absolute and leaves the rest', () => {
-  expect(briefMarkdown('[a](#/s/laptop/x) [b](https://x.y/1)', 'http://h:7777')).toBe('[a](http://h:7777/#/s/laptop/x) [b](https://x.y/1)')
+  expect(briefMarkdown('[a](#/s/laptop/x) [b](https://x.y/1)', 'http://h:7878')).toBe('[a](http://h:7878/#/s/laptop/x) [b](https://x.y/1)')
 })

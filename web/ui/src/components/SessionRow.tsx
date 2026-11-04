@@ -37,7 +37,7 @@ export interface SessionRowProps {
 
 /**
  * One session in the list: status dot (its label / waiting_for on hover), title, host, first prompt,
- * stack chip (opens the Stack sheet), Done chip + its note in place of the prompt (it ran `fleet done`), job chip (started by a scheduled job), cwd, backend, context, age. The title is editable in place: the pencil on hover
+ * stack chip (opens the Stack sheet), Done chip + its note in place of the prompt (it ran `overmind done`), job chip (started by a scheduled job), cwd, backend, context, age. The title is editable in place: the pencil on hover
  * (desktop), ⌘E / F2 on the cursor row, or a long press (touch). Clicking the row opens it.
  */
 export function SessionRow({ session: s, now, selected, cursor, inStack }: SessionRowProps) {

@@ -214,7 +214,7 @@ export function withStackColumns(columns: BoardColumn[], sessions: Session[]): B
   return [...stackCols, ...rest]
 }
 
-/** How many column ids `fleet.boardOrder` remembers (absent ones are forgotten first). */
+/** How many column ids `overmind.boardOrder` remembers (absent ones are forgotten first). */
 export const BOARD_ORDER_MAX = 100
 
 /**
@@ -336,7 +336,7 @@ export function regroupToast(resp: GroupsResponse): string {
   return `Grouped ${classified} session${classified === 1 ? '' : 's'} into ${n} group${n === 1 ? '' : 's'} · ${calls} model call${calls === 1 ? '' : 's'}`
 }
 
-/** `fleet.groupsCollapsed` (collapsed group ids, mobile board) and `fleet.boardOrder`: a list of ids. */
+/** `overmind.groupsCollapsed` (collapsed group ids, mobile board) and `overmind.boardOrder`: a list of ids. */
 export function parseIdList(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
 }

@@ -1,7 +1,7 @@
-// The embed view (`#/embed?host=<h>&dir=<d>[&theme=dark|light]`): Fleet's session chat for one
+// The embed view (`#/embed?host=<h>&dir=<d>[&theme=dark|light]`): Overmind's session chat for one
 // directory, framed by another app (an iframe panel). Pure helpers; screens/EmbedScreen.tsx is the view.
 
-import type { FleetResponse, Host, Session } from '@/api/types'
+import type { OvermindResponse, Host, Session } from '@/api/types'
 import { allSessions, byLastActivity } from '@/lib/sessions'
 
 export type EmbedTheme = 'dark' | 'light'
@@ -10,7 +10,7 @@ export interface EmbedParams {
   host: string
   /** As given: absolute or `~/…` on `host`. */
   dir: string
-  /** null: follow the OS (and never touch the viewer's Fleet theme setting). */
+  /** null: follow the OS (and never touch the viewer's Overmind theme setting). */
   theme: EmbedTheme | null
   /** The framing app's label (`app`, else the dir's last folder): put on the sessions it spawns (`embed`). */
   app: string
@@ -50,7 +50,7 @@ export function embedHash(p: EmbedParams): string {
 /**
  * The embed params this page was opened with: `#/embed?…`, or the page's own query string (the
  * hash router moves a route's query there — `/?host=…&dir=…#/embed` — and keeps it while the frame
- * moves on to `#/s/…`). Fleet's own pages never have one.
+ * moves on to `#/s/…`). Overmind's own pages never have one.
  */
 export function readEmbed(loc: Pick<Location, 'hash' | 'search'> = window.location): EmbedParams | null {
   return parseEmbedHash(loc.hash) ?? fromQuery(loc.search.replace(/^\?/, ''))
@@ -89,8 +89,8 @@ export function resolveEmbedDir(dir: string, host: Pick<Host, 'home' | 'spawnDir
 }
 
 /** The host's sessions working in `root` (or beneath it), most recently active first. */
-export function sessionsIn(fleet: FleetResponse | null | undefined, host: string, root: string): Session[] {
-  return allSessions(fleet)
+export function sessionsIn(overmind: OvermindResponse | null | undefined, host: string, root: string): Session[] {
+  return allSessions(overmind)
     .filter((s) => s.host === host && isInside(s.cwd, root))
     .sort(byLastActivity)
 }

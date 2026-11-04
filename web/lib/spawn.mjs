@@ -1,5 +1,5 @@
 // Start a fresh agent session — Claude Code, Codex or pi — in a new tmux session (one tmux
-// session = one job, same convention as `fleet tmux new`). Mirrors `fleet spawn` (tmux): open the
+// session = one job, same convention as `overmind tmux new`). Mirrors `overmind spawn` (tmux): open the
 // pane in `dir`, then type `<harness> [--model <id>] [-n <name>] '<prompt>'` into the shell so the
 // user's PATH/profile apply.
 import { promises as fs } from 'node:fs';
@@ -9,7 +9,7 @@ import { GH_IDENTITY_RE, MODEL_ID_RE } from './config.mjs';
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
-/** POSIX single-quote shell escaping (same as the fleet CLI's `shq`). */
+/** POSIX single-quote shell escaping (same as the overmind CLI's `shq`). */
 export function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -25,7 +25,7 @@ export function shqTyped(s) {
   return `$'${esc}'`;
 }
 
-/** Sanitize a user-typed name into a tmux-safe session name (like `fleet tmux new`). */
+/** Sanitize a user-typed name into a tmux-safe session name (like `overmind tmux new`). */
 export function sanitizeName(raw) {
   const cleaned = String(raw ?? '')
     .trim()
@@ -38,7 +38,7 @@ export function sanitizeName(raw) {
 
 export function defaultName(now = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
-  return `fw-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+  return `om-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
 }
 
 /**
@@ -52,7 +52,7 @@ export const TYPED_LINE_MAX = 900;
 export const HARNESSES = ['claude', 'codex', 'pi'];
 export const HARNESS_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi' };
 
-/** Reasoning-effort levels per harness when the host does not say (`fleet harness list` does). */
+/** Reasoning-effort levels per harness when the host does not say (`overmind harness list` does). */
 export const EFFORT_RE = /^[a-z]{1,20}$/;
 
 /** The launcher arguments that set the reasoning effort (`core::harness::Harness::effort_args`). */
@@ -184,7 +184,7 @@ export async function resolveAllowedDir(dir, roots, { home = os.homedir() } = {}
 }
 
 /**
- * `promptDir`: where prompts too long to type are written (like `fleet handoff` briefs,
+ * `promptDir`: where prompts too long to type are written (like `overmind handoff` briefs,
  * they are kept — the record of what the session was started with).
  */
 const SHELLS = new Set(['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'nu']);
@@ -213,7 +213,7 @@ export function createSpawner({
   // Settings → Models updates them without a restart).
   harnessDefaults = () => ({}),
   sleep,
-  promptDir = path.join(os.homedir(), '.claude', 'fleet-prompts'),
+  promptDir = path.join(os.homedir(), '.claude', 'overmind-prompts'),
 }) {
   const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
 
@@ -252,10 +252,10 @@ export function createSpawner({
   /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness, ghIdentity, embed, resume? }} */
   async function spawn({ name, dir, prompt, nameGiven = true, model = '', harness = 'claude', ghIdentity = null, embed = null, resume = null }) {
     if (ghIdentity && !ghIdentities.some((i) => i.name === ghIdentity)) {
-      throw Object.assign(new Error(`no GitHub identity "${ghIdentity}" in this host's fleet config`), { status: 400 });
+      throw Object.assign(new Error(`no GitHub identity "${ghIdentity}" in this host's overmind config`), { status: 400 });
     }
     if (ghIdentity && !ghIdentityLauncher) {
-      throw Object.assign(new Error('GitHub identities need the fleet CLI'), { status: 500 });
+      throw Object.assign(new Error('GitHub identities need the overmind CLI'), { status: 500 });
     }
     let st;
     try {
@@ -287,9 +287,9 @@ export function createSpawner({
     await run(tmux, ['send-keys', '-t', `${name}:`, '-l', '--', command], { timeout: 8000 });
     await wait(150);
     await run(tmux, ['send-keys', '-t', `${name}:`, 'Enter'], { timeout: 8000 });
-    // The `fleet list` label; the shell already carries the identity.
-    if (ghIdentity) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@fleet_gh_identity', ghIdentity], { timeout: 5000 }).catch(() => {});
-    if (embed) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@fleet_embed', embed], { timeout: 5000 }).catch(() => {});
+    // The `overmind list` label; the shell already carries the identity.
+    if (ghIdentity) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@overmind_gh_identity', ghIdentity], { timeout: 5000 }).catch(() => {});
+    if (embed) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@overmind_embed', embed], { timeout: 5000 }).catch(() => {});
     const trusted = await acceptTrustPrompt(name, { harness });
     if (!trusted) await ensureStarted(name, { harness });
     return { name, dir, tmuxSession: name, command, trusted, model: picked.model || null, harness, ghIdentity, embed, ...(resume ? { resume } : {}) };
@@ -297,7 +297,7 @@ export function createSpawner({
 
   /**
    * A directory Claude has never run in stops at "Is this a project you trust?" with
-   * "No, exit" preselected; `fleet list` does not show the session until that is answered.
+   * "No, exit" preselected; `overmind list` does not show the session until that is answered.
    * The user picked the directory explicitly, so answer "Yes" (Down, Enter) for them.
    * Polls the pane for up to ~10s; returns true when the prompt was seen and accepted.
    */

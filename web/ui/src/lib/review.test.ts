@@ -209,7 +209,7 @@ describe('fileKind', () => {
     expect(fileKind('src/lib/review.ts')).toBe('code')
     expect(fileKind('app/models/user.rb')).toBe('code')
     expect(fileKind('Cargo.toml')).toBe('code')
-    for (const t of ['src/lib/review.test.ts', 'web/tests/api.test.mjs', 'spec/models/user_spec.rb', 'pkg/diff_test.go', 'tests/test_api.py', 'src/__tests__/x.tsx', 'crates/fleet/tests/cli.rs', 'e2e/login.spec.ts', 'tests/fixtures/README.md'])
+    for (const t of ['src/lib/review.test.ts', 'web/tests/api.test.mjs', 'spec/models/user_spec.rb', 'pkg/diff_test.go', 'tests/test_api.py', 'src/__tests__/x.tsx', 'crates/overmind/tests/cli.rs', 'e2e/login.spec.ts', 'tests/fixtures/README.md'])
       expect(fileKind(t), t).toBe('tests')
   })
 

@@ -7,7 +7,7 @@
 export type PaletteId = 'suite' | 'graphite' | 'earth' | 'dusk'
 export type PaletteMode = 'light' | 'dark'
 
-export const PALETTE_KEY = 'fleet.palette'
+export const PALETTE_KEY = 'overmind.palette'
 /** What a viewer gets until they pick one (not stored). */
 export const DEFAULT_PALETTE: PaletteId = 'suite'
 /** The palette of index.css's base tokens: no `data-palette` attribute. */
@@ -67,7 +67,7 @@ export const PALETTES: readonly Palette[] = [
   },
 ]
 
-/** A stored `fleet.palette` value → a known palette (anything else → the default, Suite). */
+/** A stored `overmind.palette` value → a known palette (anything else → the default, Suite). */
 export function parsePalette(v: string | null | undefined): PaletteId {
   return PALETTES.some((p) => p.id === v) ? (v as PaletteId) : DEFAULT_PALETTE
 }

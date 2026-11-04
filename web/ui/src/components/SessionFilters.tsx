@@ -45,8 +45,8 @@ export function SessionFilters({ list, spread = false, touch = false, hostPicker
   const seg = cn(segment, touch && TOUCH.segment)
   const trig = cn(trigger, touch && TOUCH.trigger)
   const item = touch ? TOUCH.item : undefined
-  const { fleet, status, setStatus, hostNames, view } = list
-  const counts = fleet ? view.counts : null
+  const { overmind, status, setStatus, hostNames, view } = list
+  const counts = overmind ? view.counts : null
   const kind = KINDS.includes(status) ? status : SESSIONS
   // The status picked under Sessions, restored when coming back from Bots / Slack / Apps.
   const lastStatus = useRef<StatusFilterId>('all')

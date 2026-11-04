@@ -4,10 +4,10 @@ import { storage } from '@/lib/storage'
 // - parked: one-shot text a screen hands to a session it opens (the notes explorer's
 //   "Send to session"); in memory, taken by that session's Composer on mount.
 // - saved: what was typed but not sent, in localStorage so it survives switching sessions
-//   and restarting Fleet; cleared when the text is sent, dropped after DRAFT_TTL_MS.
+//   and restarting Overmind; cleared when the text is sent, dropped after DRAFT_TTL_MS.
 const parked = new Map<string, string>()
 
-const SAVED_KEY = 'fleet.drafts'
+const SAVED_KEY = 'overmind.drafts'
 export const DRAFT_TTL_MS = 14 * 24 * 60 * 60 * 1000
 
 export type SavedDrafts = Record<string, { text: string; at: number }>

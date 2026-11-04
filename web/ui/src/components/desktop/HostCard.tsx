@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * A host's state and the way into its tmux, behind its chip in the top bar (HostRail): name,
- * state, error, terminal. Fleet.app opens an iTerm tab (`fleet://shell` → `fleet -H <host> new`;
+ * state, error, terminal. Overmind.app opens an iTerm tab (`overmind://shell` → `overmind -H <host> new`;
  * the Mac it runs on gets a plain iTerm tab); a browser copies the command.
  */
 export function HostCard({ host: h, self, now }: { host: Host; self: boolean; now: number }) {

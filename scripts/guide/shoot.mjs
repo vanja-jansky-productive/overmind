@@ -8,15 +8,15 @@ const INV = '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000001' // Invoice ro
 const CHK = '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000002' // waiting on a permission
 const RL = '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000003'  // waiting on an AskUserQuestion
 const ONB = '#/s/devbox/b2c3d4e5-2222-4000-8000-000000000001'      // in a stack across two hosts
-const DONE = '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000006'    // reported itself done (fleet done)
+const DONE = '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000006'    // reported itself done (overmind done)
 const SLK = '#/s/workstation/a1b2c3d4-1111-4000-8000-000000000008'     // linked to a Slack thread
-const MUTE = { 'fleet.operator.speak': 'false' }                    // no read-aloud toast on the operator
+const MUTE = { 'overmind.operator.speak': 'false' }                    // no read-aloud toast on the operator
 const focus = `document.querySelector('textarea[aria-label=Message]').focus()`
 const scrollTo = (t) => `(() => { const e = [...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent?.trim() === ${JSON.stringify(t)}); e?.scrollIntoView({ block: 'start' }); return !!e })()`
 const scrollAll = (last) => `(() => { const a = [...document.querySelectorAll('*')].filter((e) => e.scrollHeight > e.clientHeight + 50 && getComputedStyle(e).overflowY !== 'visible'); ${last ? 'a.slice(-1)' : 'a'}.forEach((e) => { e.scrollTop = 1e5 }) })()`
 
 const REV = '#/review/workstation/a1b2c3d4-1111-4000-8000-000000000001' // its diff reviewer: two worktrees, threads
-const UNI = { 'fleet.diffView': 'unified' }
+const UNI = { 'overmind.diffView': 'unified' }
 // Scroll the diff to a file's card (by the end of its path).
 const toCard = (end, block = 'start') => `(() => { const e = [...document.querySelectorAll('[data-file-key]')].find((e) => e.dataset.fileKey.endsWith(${JSON.stringify(end)})); e?.scrollIntoView({ block: ${JSON.stringify(block)} }); return !!e })()`
 // Select the code of new lines a..b in a file's card, as a mouse drag would, and let the reviewer see it.
@@ -34,13 +34,13 @@ const MOBILE = { w: 390, h: 844, mobile: true, scale: 3 }
 const SHOTS = [
   // desktop
   ['d-session', DESKTOP, async (p) => { await p.go(U + INV) }],
-  ['d-term', DESKTOP, async (p) => { await p.go(U + INV, { 'fleet.detailMode': 'term' }) }],
+  ['d-term', DESKTOP, async (p) => { await p.go(U + INV, { 'overmind.detailMode': 'term' }) }],
   ['d-palette', DESKTOP, async (p) => { await p.go(U + INV); await p.key('k', { meta: true }); await p.type('onb') }],
   ['d-help', DESKTOP, async (p) => { await p.go(U + INV); await p.key('?', { meta: true, shift: true }) }],
   ['d-new', DESKTOP, async (p) => { await p.go(U + INV); await p.key('o', { meta: true, shift: true, ms: 1200 }) }],
   ['d-question', DESKTOP, async (p) => { await p.go(U + RL) }],
-  ['d-board-wide', { w: 1800, h: 520 }, async (p) => { await p.go(U + '#/', { 'fleet.view': 'board' }) }],
-  ['d-board-flyout', DESKTOP, async (p) => { await p.go(U + INV, { 'fleet.view': 'board' }) }],
+  ['d-board-wide', { w: 1800, h: 520 }, async (p) => { await p.go(U + '#/', { 'overmind.view': 'board' }) }],
+  ['d-board-flyout', DESKTOP, async (p) => { await p.go(U + INV, { 'overmind.view': 'board' }) }],
   ['d-file', DESKTOP, async (p) => { await p.go(U + INV); await p.click('=docs/billing/rounding.md', { ms: 1500 }) }],
   ['d-stack', DESKTOP, async (p) => { await p.go(U + ONB); await p.click('StackBrief', { ms: 1500 }) }],
   ['d-prs', DESKTOP, async (p) => { await p.go(U + '#/prs') }],
@@ -64,9 +64,9 @@ const SHOTS = [
   ['d-operator', DESKTOP, async (p) => { await p.go(U + '#/operator', MUTE) }],
   ['d-complete', DESKTOP, async (p) => { await p.go(U + INV); await p.eval(focus); await p.type('/', 1200) }],
   ['d-undo', DESKTOP, async (p) => { await p.go(U + INV); await p.eval(focus); await p.type('Also add a test for KWD (3 decimals).'); await p.key('Enter', { ms: 900 }) }],
-  ['d-scratch', DESKTOP, async (p) => { await p.go(U + INV, { 'fleet.scratchpad': 'TODO today\n- review acme-web#1310\n- answer rate limits question\n- ship invoice fix before 16:00\n\nfleet -H workstation enter invoice' }); await p.key('s', { meta: true, shift: true, ms: 1000 }) }],
-  ['d-dusk', { ...DESKTOP, dark: true }, async (p) => { await p.go(U + INV, { 'fleet.palette': 'dusk', 'fleet.theme': 'dark' }) }],
-  ['d-earth', DESKTOP, async (p) => { await p.go(U + '#/', { 'fleet.palette': 'earth', 'fleet.view': 'board' }) }],
+  ['d-scratch', DESKTOP, async (p) => { await p.go(U + INV, { 'overmind.scratchpad': 'TODO today\n- review acme-web#1310\n- answer rate limits question\n- ship invoice fix before 16:00\n\novermind -H workstation enter invoice' }); await p.key('s', { meta: true, shift: true, ms: 1000 }) }],
+  ['d-dusk', { ...DESKTOP, dark: true }, async (p) => { await p.go(U + INV, { 'overmind.palette': 'dusk', 'overmind.theme': 'dark' }) }],
+  ['d-earth', DESKTOP, async (p) => { await p.go(U + '#/', { 'overmind.palette': 'earth', 'overmind.view': 'board' }) }],
   ['d-dormant', DESKTOP, async (p) => { await p.go(U + '#/'); await p.eval(scrollAll(false)); await p.click('Inactive', { sel: 'button' }); await p.click('Closed', { sel: 'button' }); await p.eval(scrollAll(false)); await p.sleep(700) }],
   ['d-details-bottom', DESKTOP, async (p) => { await p.go(U + INV); await p.eval(scrollAll(true)); await p.sleep(700) }],
   ['d-review', DESKTOP, async (p) => { await p.go(U + REV, UNI); await p.eval(toCard('invoice_total.ts')); await p.sleep(800) }],
@@ -74,22 +74,22 @@ const SHOTS = [
   ['d-review-compose', DESKTOP, async (p) => { await p.go(U + REV, UNI); await p.eval(toCard('currency.ts')); await p.sleep(500); await p.eval(selectLines('currency.ts', 23, 25)); await p.sleep(600); await p.click('Comment on lines', { sel: 'button' }); await p.type('Math.round on a float can still be off for x.xx5 amounts. Use a decimal string conversion here?', 900) }],
   ['d-review-ask', DESKTOP, async (p) => { await p.go(U + REV, UNI); await p.eval(toCard('currency.ts')); await p.sleep(500); await p.eval(selectLines('currency.ts', 23, 25)); await p.sleep(600); await p.click('Ask', { sel: 'button' }); await p.type('Why BigInt here?', 600); await p.key('Enter', { meta: true, ms: 1200 }) }],
   ['d-review-pr', DESKTOP, async (p) => { await p.go(U + '#/review/pr/workstation/acme/acme-web/1310', UNI); await p.eval(toCard('currency.ts')); await p.sleep(800) }],
-  ['d-review-split', { ...DESKTOP, dark: true }, async (p) => { await p.go(U + REV, { 'fleet.diffView': 'split', 'fleet.reviewChat': 'false', 'fleet.theme': 'dark' }); await p.eval(toCard('totals.ts', 'center')); await p.sleep(800) }],
+  ['d-review-split', { ...DESKTOP, dark: true }, async (p) => { await p.go(U + REV, { 'overmind.diffView': 'split', 'overmind.reviewChat': 'false', 'overmind.theme': 'dark' }); await p.eval(toCard('totals.ts', 'center')); await p.sleep(800) }],
   // PlainLang specs: the reviewer's Spec view, a term's definition from another module, the preview
-  ['d-plain-review', DESKTOP, async (p) => { await p.go(U + REV, { ...UNI, 'fleet.reviewChat': 'false' }); await p.eval(toCard('invoices.plain')); await p.sleep(800) }],
-  ['d-plain-specs', DESKTOP, async (p) => { await p.go(U + REV, { ...UNI, 'fleet.reviewChat': 'false' }); await p.eval(`document.querySelector('article[id$="plain-1"]')?.scrollIntoView({ block: 'start' })`); await p.sleep(800) }],
-  ['d-plain-term', DESKTOP, async (p) => { await p.go(U + REV, { ...UNI, 'fleet.reviewChat': 'false' }); await p.eval(`document.querySelector('[id$="sec-definitions"]')?.scrollIntoView({ block: 'start' })`); await p.sleep(500); await p.click('=Customer', { sel: 'button', ms: 1500 }) }],
+  ['d-plain-review', DESKTOP, async (p) => { await p.go(U + REV, { ...UNI, 'overmind.reviewChat': 'false' }); await p.eval(toCard('invoices.plain')); await p.sleep(800) }],
+  ['d-plain-specs', DESKTOP, async (p) => { await p.go(U + REV, { ...UNI, 'overmind.reviewChat': 'false' }); await p.eval(`document.querySelector('article[id$="plain-1"]')?.scrollIntoView({ block: 'start' })`); await p.sleep(800) }],
+  ['d-plain-term', DESKTOP, async (p) => { await p.go(U + REV, { ...UNI, 'overmind.reviewChat': 'false' }); await p.eval(`document.querySelector('[id$="sec-definitions"]')?.scrollIntoView({ block: 'start' })`); await p.sleep(500); await p.click('=Customer', { sel: 'button', ms: 1500 }) }],
   ['d-plain-preview', DESKTOP, async (p) => { await p.go(U + INV); await p.click('=docs/specs/invoices.plain', { ms: 1500 }); await p.click('=InvoiceTotal', { sel: 'button', nth: 1, ms: 1200 }) }],
   // mobile
   ['m-list', MOBILE, async (p) => { await p.go(U + '#/') }],
   ['m-filters', MOBILE, async (p) => { await p.go(U + '#/'); await p.swipe(195, 40, 195, 200) }],
-  ['m-board', MOBILE, async (p) => { await p.go(U + '#/', { 'fleet.view': 'board' }) }],
+  ['m-board', MOBILE, async (p) => { await p.go(U + '#/', { 'overmind.view': 'board' }) }],
   ['m-more', MOBILE, async (p) => { await p.go(U + '#/'); await p.click('More') }],
   ['m-new', MOBILE, async (p) => { await p.go(U + '#/'); await p.click('New session', { ms: 1200 }) }],
   ['m-chat', MOBILE, async (p) => { await p.go(U + INV) }],
   ['m-chips', MOBILE, async (p) => { await p.go(U + CHK); await p.click('Show quick replies', { ms: 900 }) }],
   ['m-question', MOBILE, async (p) => { await p.go(U + RL) }],
-  ['m-term', MOBILE, async (p) => { await p.go(U + INV, { 'fleet.detailMode': 'term' }) }],
+  ['m-term', MOBILE, async (p) => { await p.go(U + INV, { 'overmind.detailMode': 'term' }) }],
   ['m-details', MOBILE, async (p) => { await p.go(U + INV); await p.click('=More', { ms: 900 }) }],
   ['m-stack', MOBILE, async (p) => { await p.go(U + ONB); await p.click('StackBrief', { ms: 1500 }) }],
   ['m-operator', MOBILE, async (p) => { await p.go(U + '#/operator', MUTE) }],
@@ -102,7 +102,7 @@ const SHOTS = [
   ['m-inbox', MOBILE, async (p) => { await p.go(U + '#/inbox') }],
   ['m-tasks', MOBILE, async (p) => { await p.go(U + '#/tasks') }],
   ['m-usage', MOBILE, async (p) => { await p.go(U + '#/usage') }],
-  ['m-earth-dark', { ...MOBILE, dark: true }, async (p) => { await p.go(U + '#/', { 'fleet.palette': 'earth', 'fleet.theme': 'dark' }) }],
+  ['m-earth-dark', { ...MOBILE, dark: true }, async (p) => { await p.go(U + '#/', { 'overmind.palette': 'earth', 'overmind.theme': 'dark' }) }],
 ]
 
 const only = process.argv.slice(2)

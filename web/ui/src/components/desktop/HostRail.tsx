@@ -20,7 +20,7 @@ const addKey = (e: MouseEvent) => e.metaKey || e.ctrlKey || e.shiftKey
  * wait, since they stay out of the Inbox and the waiting count.
  */
 export function HostRail({ list, now }: { list: SessionListState; now: number }) {
-  const { fleet, hosts, hostSet, setSelection, hostCounts, sharedWaiting } = list
+  const { overmind, hosts, hostSet, setSelection, hostCounts, sharedWaiting } = list
   if (!hosts.length) return null
   const shown = hostSet ?? new Set(hosts.map((h) => h.name))
   const own = hosts.filter((h) => !isShared(h))
@@ -34,7 +34,7 @@ export function HostRail({ list, now }: { list: SessionListState; now: number })
         on={shown.has(h.name)}
         count={hostCounts.get(h.name) ?? 0}
         waiting={sharedWaiting.get(h.name) ?? 0}
-        self={h.name === fleet?.self}
+        self={h.name === overmind?.self}
         now={now}
         onPick={(add) => setSelection(clickHost(shown, h.name, hosts, add))}
       />

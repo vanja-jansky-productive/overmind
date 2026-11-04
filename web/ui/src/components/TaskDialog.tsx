@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useNow } from '@/hooks/useNow'
 import { useSchedule } from '@/hooks/useSchedule'
 import { shortCwd } from '@/lib/format'
@@ -28,14 +28,14 @@ import { DUE_TONE, dueInfo, promptChips, statusOptions, statusTone } from '@/lib
 import { cn } from '@/lib/utils'
 
 // The directory last used for a project's tasks, else for a new session on that host.
-const projectDirKey = (host: string, project: string) => `fleet.taskDirLabel.${host}.${project}`
-const spawnDirKey = (host: string) => `fleet.spawnDirLabel.${host}`
-const SCHEDULE_TIME_KEY = 'fleet.taskScheduleTime'
+const projectDirKey = (host: string, project: string) => `overmind.taskDirLabel.${host}.${project}`
+const spawnDirKey = (host: string) => `overmind.spawnDirLabel.${host}`
+const SCHEDULE_TIME_KEY = 'overmind.taskScheduleTime'
 
 /**
  * One task's actions on `host`: move it to another status, start a session on it (in one of
  * the host's spawn directories, told what the task is and where it lives) now or on its start
- * date (`fleet schedule --task`), or open it in Productive. Key it by the task so a new task starts with a fresh form.
+ * date (`overmind schedule --task`), or open it in Productive. Key it by the task so a new task starts with a fresh form.
  */
 export function TaskDialog({
   task: t,
@@ -59,7 +59,7 @@ export function TaskDialog({
   onStatus: (t: Task, status: string) => Promise<void>
 }) {
   const [, navigate] = useLocation()
-  const { fleet, applyFleet } = useFleet()
+  const { overmind, applyOvermind } = useOvermind()
   const now = useNow(60_000)
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState<null | 'spawn' | 'status'>(null)
@@ -71,7 +71,7 @@ export function TaskDialog({
   const [dirLabel, setDirLabel] = useState<string | null>(null)
   if (!t || !host) return null
 
-  const dirs = spawnTargets(fleet).find((h) => h.name === host)?.dirs ?? []
+  const dirs = spawnTargets(overmind).find((h) => h.name === host)?.dirs ?? []
   const remembered = dirLabel ?? storage.get(projectDirKey(host, t.project.id)) ?? storage.get(spawnDirKey(host))
   const dir = dirs.find((d) => d.label === remembered) ?? dirs[0] ?? null
   const options = statusOptions(t, statuses)
@@ -127,7 +127,7 @@ export function TaskDialog({
       watchForSpawned(
         { host: res.spawn?.host || host, name, tmuxSession: res.spawn?.tmuxSession ?? name },
         {
-          onFleet: applyFleet,
+          onOvermind: applyOvermind,
           onFound: (s) => {
             toast.success(`${name} is up`, { id, description: undefined })
             navigate(sessionHref(s))

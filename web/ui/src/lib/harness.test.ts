@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { HarnessInfo } from '@/api/types'
 
-import { fleetDefaultLabel, harnessLabel, modelKey, offeredHarnesses, pickHarness, sessionHarness, withFleetDefault } from './harness'
+import { overmindDefaultLabel, harnessLabel, modelKey, offeredHarnesses, pickHarness, sessionHarness, withOvermindDefault } from './harness'
 
 const claudeModels = [
   { id: '', label: 'Default' },
@@ -33,23 +33,23 @@ describe('pickHarness / labels', () => {
     expect(harnessLabel('codex')).toBe('Codex')
     expect(harnessLabel(undefined)).toBe('Claude')
     expect(sessionHarness({})).toBe('claude')
-    expect(modelKey('claude')).toBe('fleet.spawnModel')
-    expect(modelKey('pi')).toBe('fleet.spawnModel.pi')
+    expect(modelKey('claude')).toBe('overmind.spawnModel')
+    expect(modelKey('pi')).toBe('overmind.spawnModel.pi')
   })
 })
 
-describe('fleet defaults in the picker', () => {
+describe('overmind defaults in the picker', () => {
   const models = [
     { id: '', label: 'Default' },
     { id: 'claude-opus-5-5', label: 'Opus 5.5' },
   ]
   it('labels the default entry with the host default model and effort', () => {
-    expect(fleetDefaultLabel({ defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }, models)).toBe('Opus 5.5 · high')
-    expect(fleetDefaultLabel({ defaultModel: 'unknown-x', defaultEffort: null }, models)).toBe('unknown-x')
-    expect(fleetDefaultLabel({ defaultModel: null, defaultEffort: 'low' }, models)).toBe('low')
-    expect(fleetDefaultLabel({}, models)).toBeNull()
-    expect(withFleetDefault(models, { defaultEffort: 'max' })[0]).toEqual({ id: '', label: 'Default · max' })
-    expect(withFleetDefault(models, {})).toBe(models)
+    expect(overmindDefaultLabel({ defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }, models)).toBe('Opus 5.5 · high')
+    expect(overmindDefaultLabel({ defaultModel: 'unknown-x', defaultEffort: null }, models)).toBe('unknown-x')
+    expect(overmindDefaultLabel({ defaultModel: null, defaultEffort: 'low' }, models)).toBe('low')
+    expect(overmindDefaultLabel({}, models)).toBeNull()
+    expect(withOvermindDefault(models, { defaultEffort: 'max' })[0]).toEqual({ id: '', label: 'Default · max' })
+    expect(withOvermindDefault(models, {})).toBe(models)
   })
   it('offeredHarnesses carries it to every harness, Claude included', () => {
     const rows = [

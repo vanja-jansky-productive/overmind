@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Link, useLocation } from 'wouter'
 
 import { ApiError, api } from '@/api/client'
-import type { FleetResponse, Job, JobRun } from '@/api/types'
+import type { OvermindResponse, Job, JobRun } from '@/api/types'
 import { HostBadge, HostDot } from '@/components/HostBadge'
 import { ScheduledList } from '@/components/ScheduledList'
 import { ScreenHeader } from '@/components/ScreenHeader'
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useJobShow, useJobs } from '@/hooks/useJobs'
 import { useNow } from '@/hooks/useNow'
 import { useSchedule } from '@/hooks/useSchedule'
@@ -28,7 +28,7 @@ import { cn } from '@/lib/utils'
 type HostedJob = Job & { host: string }
 
 /**
- * `#/bots`: the bots of every host (`fleet bots`), each with its schedule, next run, an
+ * `#/bots`: the bots of every host (`overmind bots`), each with its schedule, next run, an
  * enabled switch, Run now and its last run; expanding one lists its runs and the sessions each run
  * started, as a tree. `screen` = the mobile page (back, swipe back); `pane` = the desktop main pane.
  */
@@ -36,7 +36,7 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
   const pane = layout === 'pane'
   const [, navigate] = useLocation()
   const { jobs, errors, loading, reload, patch } = useJobs()
-  const { fleet, refresh: refreshFleet } = useFleet()
+  const { overmind, refresh: refreshOvermind } = useOvermind()
   const now = useNow(30_000)
   const { pending: scheduled, reload: reloadSchedule } = useSchedule()
   const [open, setOpen] = useState<Set<string>>(() => new Set())
@@ -105,7 +105,7 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
           key={jobKey(j)}
           job={j}
           now={now}
-          fleet={fleet}
+          overmind={overmind}
           open={open.has(jobKey(j))}
           runEpoch={runEpoch}
           onToggle={() => toggle(jobKey(j))}
@@ -126,11 +126,11 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
         </ul>
       ) : null}
       {!loading && !jobs.length && !errors.length ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">No bots. Add one under <span className="font-mono">bots</span> in a host’s fleet config.</p>
+        <p className="py-8 text-center text-sm text-muted-foreground">No bots. Add one under <span className="font-mono">bots</span> in a host’s overmind config.</p>
       ) : null}
       <p className="text-xs text-dimmer">
-        Bots live in each host’s fleet config; that host’s <span className="font-mono">fleet bots tick</span> service starts them on schedule, and the
-        one-off sessions scheduled from New session or a task (<span className="font-mono">fleet schedule</span>).
+        Bots live in each host’s overmind config; that host’s <span className="font-mono">overmind bots tick</span> service starts them on schedule, and the
+        one-off sessions scheduled from New session or a task (<span className="font-mono">overmind schedule</span>).
       </p>
     </div>
   )
@@ -144,7 +144,7 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
         setOpen((prev) => new Set(prev).add(jobKey(confirm)))
         setRunEpoch((n) => n + 1)
         reload()
-        refreshFleet()
+        refreshOvermind()
       }}
     />
   ) : null
@@ -190,7 +190,7 @@ export function JobsScreen({ layout = 'screen' }: { layout?: 'screen' | 'pane' }
 function JobCard({
   job: j,
   now,
-  fleet,
+  overmind,
   open,
   runEpoch,
   onToggle,
@@ -199,7 +199,7 @@ function JobCard({
 }: {
   job: HostedJob
   now: number
-  fleet: FleetResponse | null
+  overmind: OvermindResponse | null
   open: boolean
   runEpoch: number
   onToggle: () => void
@@ -296,7 +296,7 @@ function JobCard({
             <dt className="text-dimmer">sessions</dt>
             <dd>{keepLabel(j.keep)} (when idle)</dd>
           </dl>
-          <JobRuns host={j.host} name={j.name} now={now} fleet={fleet} runEpoch={runEpoch} />
+          <JobRuns host={j.host} name={j.name} now={now} overmind={overmind} runEpoch={runEpoch} />
         </div>
       ) : null}
     </section>
@@ -313,12 +313,12 @@ function openPromptFile(prompt: Job['prompt']) {
   window.setTimeout(() => window.location.assign(url), 1500)
 }
 
-function JobRuns({ host, name, now, fleet, runEpoch }: { host: string; name: string; now: number; fleet: FleetResponse | null; runEpoch: number }) {
+function JobRuns({ host, name, now, overmind, runEpoch }: { host: string; name: string; now: number; overmind: OvermindResponse | null; runEpoch: number }) {
   // Re-key on a new run so the poller starts over at once.
-  return <JobRunsInner key={runEpoch} host={host} name={name} now={now} fleet={fleet} />
+  return <JobRunsInner key={runEpoch} host={host} name={name} now={now} overmind={overmind} />
 }
 
-function JobRunsInner({ host, name, now, fleet }: { host: string; name: string; now: number; fleet: FleetResponse | null }) {
+function JobRunsInner({ host, name, now, overmind }: { host: string; name: string; now: number; overmind: OvermindResponse | null }) {
   const { job, error } = useJobShow(host, name, true)
   if (error && !job) return <p className="text-xs text-destructive">{error}</p>
   if (!job) {
@@ -332,13 +332,13 @@ function JobRunsInner({ host, name, now, fleet }: { host: string; name: string; 
   return (
     <ol className="space-y-2.5" aria-label={`Runs of ${name}`}>
       {job.runs.map((r) => (
-        <RunItem key={r.id} run={r} host={host} now={now} fleet={fleet} />
+        <RunItem key={r.id} run={r} host={host} now={now} overmind={overmind} />
       ))}
     </ol>
   )
 }
 
-function RunItem({ run: r, host, now, fleet }: { run: JobRun; host: string; now: number; fleet: FleetResponse | null }) {
+function RunItem({ run: r, host, now, overmind }: { run: JobRun; host: string; now: number; overmind: OvermindResponse | null }) {
   const rows = runTree(r)
   const tone = outcomeTone(r.outcome)
   return (
@@ -361,7 +361,7 @@ function RunItem({ run: r, host, now, fleet }: { run: JobRun; host: string; now:
       {rows.length ? (
         <ul className="mt-1.5 space-y-0.5">
           {rows.map(({ session: rs, depth }) => {
-            const s = liveSession(fleet, host, rs.tmuxSession)
+            const s = liveSession(overmind, host, rs.tmuxSession)
             const indent = { paddingLeft: `${depth * 1.1}rem` }
             if (s) {
               const meta = statusMeta(s.status)

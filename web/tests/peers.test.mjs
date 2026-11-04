@@ -9,11 +9,11 @@ function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
 }
 
-// A peer fleet web server and a forward proxy that counts what goes through it.
+// A peer overmind web server and a forward proxy that counts what goes through it.
 async function fixtures() {
   const peer = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
-    if (url.pathname === '/api/fleet') {
+    if (url.pathname === '/api/overmind') {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ hosts: [{ name: 'studio', ok: true, fetchedAt: 1, sessions: [{ name: 's1' }] }] }));
     } else if (url.pathname === '/api/echo') {
@@ -52,7 +52,7 @@ test('a peer with webProxy is reached through the proxy, others directly', async
     assert.equal(s.status, 200);
     s.stream.resume();
     assert.equal(seen.length, 3);
-    assert.match(seen[0], /\/api\/fleet\?local=1$/);
+    assert.match(seen[0], /\/api\/overmind\?local=1$/);
 
     setPeerProxies({});
     assert.equal((await fetchPeerHost('studio', peerUrl)).ok, true);
@@ -80,12 +80,12 @@ test('config: hosts.<name>.webProxy maps the peer origin to the proxy and is val
   const raw = {
     self: 'laptop',
     hosts: {
-      laptop: { web: 'http://100.x.y.z:7777' },
-      studio: { ssh: 'studio', web: 'https://fleet.studio.example/', webProxy: 'http://localhost:1056/' },
+      laptop: { web: 'http://100.x.y.z:7878' },
+      studio: { ssh: 'studio', web: 'https://overmind.studio.example/', webProxy: 'http://localhost:1056/' },
     },
   };
   const cfg = normalizeConfig(raw, { home: '/home/tester', log: { warn() {} } });
-  assert.deepEqual(cfg.peerProxies, { 'https://fleet.studio.example': 'http://localhost:1056' });
+  assert.deepEqual(cfg.peerProxies, { 'https://overmind.studio.example': 'http://localhost:1056' });
   raw.hosts.studio.webProxy = 'localhost:1056';
   assert.throws(() => normalizeConfig(raw, { home: '/home/tester', log: { warn() {} } }), /webProxy must be an http\(s\) url/);
 });
@@ -100,18 +100,18 @@ test('a peer with webConnect is dialled at that address, keeping its own name as
   const peerUrl = await listen(peer);
   const port = new URL(peerUrl).port;
   // The web url names a host that does not resolve; webConnect points at the real listener.
-  const base = `http://fleet.studio.invalid:${port}`;
+  const base = `http://overmind.studio.invalid:${port}`;
   setPeerConnects({ [base]: `127.0.0.1:${port}` });
   try {
     const host = await fetchPeerHost('studio', base);
     assert.equal(host.ok, true);
-    const proxied = await proxyToPeer(base, { pathname: '/api/fleet' });
+    const proxied = await proxyToPeer(base, { pathname: '/api/overmind' });
     assert.equal(proxied.status, 200);
     assert.equal(proxied.body.local, '1');
-    const streamed = await streamFromPeer(base, { pathname: '/api/fleet' });
+    const streamed = await streamFromPeer(base, { pathname: '/api/overmind' });
     assert.equal(streamed.status, 200);
     streamed.stream.resume();
-    assert.deepEqual(hosts, Array(3).fill(`fleet.studio.invalid:${port}`));
+    assert.deepEqual(hosts, Array(3).fill(`overmind.studio.invalid:${port}`));
   } finally {
     setPeerConnects({});
     peer.closeAllConnections();
@@ -123,12 +123,12 @@ test('config: hosts.<name>.webConnect maps the peer origin to the address and is
   const raw = {
     self: 'laptop',
     hosts: {
-      laptop: { web: 'http://100.x.y.z:7777' },
-      studio: { ssh: 'studio', web: 'https://fleet.studio.example/', webConnect: 'studio.tailnet.example' },
+      laptop: { web: 'http://100.x.y.z:7878' },
+      studio: { ssh: 'studio', web: 'https://overmind.studio.example/', webConnect: 'studio.tailnet.example' },
     },
   };
   const cfg = normalizeConfig(raw, { home: '/home/tester', log: { warn() {} } });
-  assert.deepEqual(cfg.peerConnects, { 'https://fleet.studio.example': 'studio.tailnet.example' });
+  assert.deepEqual(cfg.peerConnects, { 'https://overmind.studio.example': 'studio.tailnet.example' });
   raw.hosts.studio.webConnect = 'https://studio.tailnet.example';
   assert.throws(() => normalizeConfig(raw, { home: '/home/tester', log: { warn() {} } }), /webConnect must be a host or host:port/);
 });

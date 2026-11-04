@@ -1,4 +1,4 @@
-// Dormant sessions (a reboot left them; `fleet restore` brings them back) — pure helpers for the
+// Dormant sessions (a reboot left them; `overmind restore` brings them back) — pure helpers for the
 // Dormant section and the Board's dimmed cards. Unit-tested in dormant.test.ts.
 import { ApiError } from '@/api/client'
 import type { ClosedView, DormantView, GroupMember, RestoreResponse } from '@/api/types'
@@ -37,7 +37,7 @@ export function closedMeta(v: ClosedView, now = Date.now()): string {
 /** A dormant Claude session as the Board shows it: resume it by its session id. */
 export interface DormantMember {
   host: string
-  /** The session id (also what `fleet restore` takes as a target). */
+  /** The session id (also what `overmind restore` takes as a target). */
   id: string
   title: string
   since: number | null

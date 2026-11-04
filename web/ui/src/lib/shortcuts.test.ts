@@ -69,8 +69,8 @@ describe('matchShortcut', () => {
     expect(cmd('e', { altKey: true })).toBeNull()
   })
 
-  it('never matches browser-reserved or Fleet.app menu combos', () => {
-    // ⌘N is Fleet.app's native menu item (it dispatches fleet:command), never the page's keydown.
+  it('never matches browser-reserved or Overmind.app menu combos', () => {
+    // ⌘N is Overmind.app's native menu item (it dispatches overmind:command), never the page's keydown.
     for (const k of ['n', 't', 'w', 'q', 'l', 'r', '1', '9', '[', ']']) expect(cmd(k)).toBeNull()
     expect(cmd('N', { shiftKey: true })).toBeNull()
     expect(cmd('T', { shiftKey: true })).toBeNull()

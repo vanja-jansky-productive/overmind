@@ -3,7 +3,7 @@ import { CircleAlertIcon, Loader2Icon } from 'lucide-react'
 
 import { ApiError, api } from '@/api/client'
 import type { HarnessId, HarnessInfo, ModelOption } from '@/api/types'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { invalidateHarnesses } from '@/hooks/useHarnesses'
 import { useSettings } from '@/hooks/useSettings'
 import { cn } from '@/lib/utils'
@@ -19,14 +19,14 @@ const select =
  * Settings → Models: the default model and reasoning effort each harness (Claude Code, Codex,
  * pi) starts with when a spawn picks none — web, CLI, bots and scheduled sessions alike. Stored
  * per host (`harnesses.<id>.model` / `.effort`); a change is written to every reachable host so
- * the fleet stays in step. "Harness default" clears it: the harness's own config decides.
+ * the overmind stays in step. "Harness default" clears it: the harness's own config decides.
  */
 export function ModelsEditor() {
-  const { fleet } = useFleet()
+  const { overmind } = useOvermind()
   const { models: claudeModels } = useSettings()
-  const hostsKey = (fleet?.hosts ?? []).map((h) => h.name).join('\n')
+  const hostsKey = (overmind?.hosts ?? []).map((h) => h.name).join('\n')
   const hosts = useMemo(() => (hostsKey ? hostsKey.split('\n') : []), [hostsKey])
-  const self = fleet?.self ?? hosts[0]
+  const self = overmind?.self ?? hosts[0]
 
   const [loads, setLoads] = useState<Record<string, Load>>({})
   const [saving, setSaving] = useState<HarnessId | null>(null)
@@ -74,7 +74,7 @@ export function ModelsEditor() {
           await api.saveHarnessDefaults(h, { harness: id, model: next.model, effort: next.effort })
           ok.push(h)
         } catch (err) {
-          failed.push(`${h}: ${err instanceof ApiError && err.status === 404 ? 'update fleet there' : (err as Error)?.message || 'failed'}`)
+          failed.push(`${h}: ${err instanceof ApiError && err.status === 404 ? 'update overmind there' : (err as Error)?.message || 'failed'}`)
         }
       }),
     )

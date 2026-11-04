@@ -1,18 +1,18 @@
 // Smart grouping for the Board view. One host's server (config `grouping.host`, or the
-// one with `web.grouping.enabled`) runs `fleet group` over the whole merged fleet on a
+// one with `web.grouping.enabled`) runs `overmind group` over the whole merged overmind on a
 // schedule and serves the result as GET /api/groups; every other server proxies there.
 //
 // The CLI owns the logic and the state file (stable ids, incremental classification,
 // hourly consolidation, repo fallback — docs/architecture.md → "Smart grouping"); this
-// module only decides *when* to run it and feeds it the merged `/api/fleet` snapshot on
+// module only decides *when* to run it and feeds it the merged `/api/overmind` snapshot on
 // stdin, so the grouping host needs no ssh to its peers. A run with nothing new costs no
 // model call (the CLI checks), so the schedule can be frequent; on top of it a cheap
 // check runs the pass early when live sessions show up that no group knows yet.
 
-/** Keys `host/id` of every live session in a `/api/fleet` body (ok hosts only). */
-export function liveKeys(fleet) {
+/** Keys `host/id` of every live session in a `/api/overmind` body (ok hosts only). */
+export function liveKeys(overmind) {
   const keys = new Set();
-  for (const h of fleet?.hosts ?? []) {
+  for (const h of overmind?.hosts ?? []) {
     if (h?.ok === false) continue;
     for (const s of h?.sessions ?? []) {
       const id = s?.session_id || (s?.pid != null ? String(s.pid) : null);
@@ -22,7 +22,7 @@ export function liveKeys(fleet) {
   return keys;
 }
 
-/** Keys `host/id` of every member of a `fleet group --json` report. */
+/** Keys `host/id` of every member of a `overmind group --json` report. */
 export function memberKeys(report) {
   const keys = new Set();
   for (const g of report?.groups ?? []) for (const m of g?.members ?? []) keys.add(`${m.host}/${m.id}`);
@@ -53,9 +53,9 @@ export const DISABLED_GROUPS = Object.freeze({
 
 /**
  * @param deps
- *   cli          lib/fleet-cli.mjs instance (`groupRun`, `groupCached`)
- *   getFleet     () => Promise<fleet body> — a fresh merged fleet (`handleApi.buildFleet`)
- *   peekFleet    () => fleet body|null — the warm snapshot, if any (`handleApi.peekFleet`); the
+ *   cli          lib/overmind-cli.mjs instance (`groupRun`, `groupCached`)
+ *   getOvermind     () => Promise<overmind body> — a fresh merged overmind (`handleApi.buildOvermind`)
+ *   peekOvermind    () => overmind body|null — the warm snapshot, if any (`handleApi.peekOvermind`); the
  *                change check uses only this, so it never causes discovery on its own
  *   self         this host's name (the `host` field of the response)
  *   intervalMs   scheduled run period; checkMs: the "new sessions?" check period
@@ -63,8 +63,8 @@ export const DISABLED_GROUPS = Object.freeze({
  */
 export function createGrouper({
   cli,
-  getFleet,
-  peekFleet = () => null,
+  getOvermind,
+  peekOvermind = () => null,
   self = 'local',
   intervalMs = 10 * 60 * 1000,
   initialDelayMs = 20 * 1000,
@@ -76,7 +76,7 @@ export function createGrouper({
   clearTimer = clearTimeout,
 }) {
   if (!cli || typeof cli.groupRun !== 'function') throw new TypeError('cli.groupRun must be a function');
-  if (typeof getFleet !== 'function') throw new TypeError('getFleet must be a function');
+  if (typeof getOvermind !== 'function') throw new TypeError('getOvermind must be a function');
   let report = null;
   let lastRun = null;
   let inFlight = null;
@@ -102,8 +102,8 @@ export function createGrouper({
       if (editing) await editing; // the pass must start from the state an edit just wrote
       const at = now();
       try {
-        const fleet = await getFleet();
-        const r = await cli.groupRun({ fleet, refresh });
+        const overmind = await getOvermind();
+        const r = await cli.groupRun({ overmind, refresh });
         report = r;
         const s = r?.lastRun ?? {};
         lastRun = {
@@ -154,10 +154,10 @@ export function createGrouper({
   async function checkChanges() {
     if (inFlight || !report) return false;
     if (lastRun && now() - lastRun.at < minGapMs) return false;
-    const fleet = await Promise.resolve(peekFleet()).catch(() => null);
-    if (!fleet) return false; // nobody is watching: the schedule will do
+    const overmind = await Promise.resolve(peekOvermind()).catch(() => null);
+    if (!overmind) return false; // nobody is watching: the schedule will do
     const known = memberKeys(report);
-    const unknown = [...liveKeys(fleet)].filter((k) => !known.has(k));
+    const unknown = [...liveKeys(overmind)].filter((k) => !known.has(k));
     if (unknown.length === 0) return false;
     await runOnce('changes');
     return true;

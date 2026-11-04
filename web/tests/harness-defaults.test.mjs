@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { createApi } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
-import { createFleet } from '../lib/fleet.mjs';
+import { createOvermind } from '../lib/overmind.mjs';
 import { harnessDefaultsOf, normalizeConfig } from '../lib/config.mjs';
 import { applyHarnessDefaults, launchCommand } from '../lib/spawn.mjs';
 
@@ -45,7 +45,7 @@ async function startPair(t) {
         { id: 'codex', label: 'Codex', command: 'codex', installed: true, models: [] },
       ],
     };
-    const api = createApi({ config, cli, fleet: createFleet({ cli, self: name }), backend: {}, transcripts: {}, spawner: {}, fleetRefreshMs: 60_000 });
+    const api = createApi({ config, cli, overmind: createOvermind({ cli, self: name }), backend: {}, transcripts: {}, spawner: {}, overmindRefreshMs: 60_000 });
     t.after(() => api.stop());
     handles[name] = api;
     hosts[name] = { config, sets };

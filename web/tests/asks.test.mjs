@@ -120,10 +120,10 @@ test('HTTP: …/ask starts a fork in the session cwd, /asks/:id polls and cancel
   const fx = fixture();
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
   const session = { session_id: SID, cwd: '/w/meta', status: 'idle', backend: 'tmux' };
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [session] }) };
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [session] }) };
   const base = {};
   for (const [k, asks] of [['on', fx.asks], ['off', null]]) {
-    const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner: {}, asks, warmFleet: false });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, asks, warmOvermind: false });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));

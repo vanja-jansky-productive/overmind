@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 
 import { ApiError, api } from '@/api/client'
 import type { RenameResponse, Session } from '@/api/types'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { sessionKey } from '@/lib/shortcuts'
 import { PENDING_TTL_MS, renameFailure, sessionTitle, tmuxNote, validateTitle, type PendingTitle } from '@/lib/title'
 
@@ -76,7 +76,7 @@ export function useSessionTitle(s: Session | null | undefined, fallbackKey?: str
  * true when `/rename` went out.
  */
 export function useRename(): (s: Session, raw: string) => Promise<boolean> {
-  const { refresh } = useFleet()
+  const { refresh } = useOvermind()
   return useCallback(
     async (s: Session, raw: string) => {
       const check = validateTitle(raw)
@@ -89,7 +89,7 @@ export function useRename(): (s: Session, raw: string) => Promise<boolean> {
       setPending(key, { title: check.title, at, saving: true })
       try {
         const res: RenameResponse = await api.rename(s.host, s.session_id, check.title)
-        // Keep the optimistic title until the fleet shows it (sessionTitle drops it then).
+        // Keep the optimistic title until the overmind shows it (sessionTitle drops it then).
         setPending(key, { title: check.title, at, saving: false })
         setTimeout(() => {
           if (state.pending.get(key)?.at === at) setPending(key, null)

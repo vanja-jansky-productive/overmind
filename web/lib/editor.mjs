@@ -104,7 +104,7 @@ export function withBriefEditor(body, host, config) {
   return out;
 }
 
-/** Each session row of a fleet host gets `editorUrl` (its cwd; no git lookup — the brief has the root). */
+/** Each session row of an overmind host gets `editorUrl` (its cwd; no git lookup — the brief has the root). */
 export function withSessionEditors(hostEntry, config) {
   if (!hostEntry || !Array.isArray(hostEntry.sessions)) return hostEntry;
   return {

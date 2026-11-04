@@ -12,7 +12,7 @@ export const MAX_TAIL_BYTES = 6 * 1024 * 1024;
 /** "Load older" grows the tail (doubling) up to this when it holds too few messages (screenshots bloat transcripts). */
 export const MAX_GROWN_TAIL_BYTES = 64 * 1024 * 1024;
 
-/** Mirror of the fleet CLI's `encode_cwd`: `/` and `.` become `-`. */
+/** Mirror of the overmind CLI's `encode_cwd`: `/` and `.` become `-`. */
 export function encodeCwd(cwd) {
   return String(cwd).replace(/[/.]/g, '-');
 }
@@ -316,7 +316,7 @@ const PARSERS = { claude: parseTranscript, codex: parseCodexTranscript, pi: pars
 
 /**
  * Cached transcript reader. `messages(session, limit)` returns the last `limit` chat
- * messages of a `fleet list --json` session object ({ session_id, cwd }).
+ * messages of a `overmind list --json` session object ({ session_id, cwd }).
  */
 export function createTranscriptReader({ home = claudeHome(), maxBytes = MAX_TAIL_BYTES, maxGrownBytes = MAX_GROWN_TAIL_BYTES } = {}) {
   const cache = new Map(); // sessionId -> { file, size, mtimeMs, bytes, messages, truncated }

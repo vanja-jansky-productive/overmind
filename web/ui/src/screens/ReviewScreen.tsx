@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useDiff } from '@/hooks/useDiff'
 import { useReview } from '@/hooks/useReview'
 import { useNow } from '@/hooks/useNow'
@@ -82,7 +82,7 @@ interface ReviewSource {
  * (its cwd's, and the worktrees it edits from there — a meta repo's PRs), following it live. Desktop (`pane`): file tree | diff | the session itself (chat + composer), so the
  * review and the conversation sit side by side. Mobile: the diff alone.
  * `#/review/pr/<host>/<owner>/<repo>/<n>`: the same over a PR from the host's clone, with no
- * session: comments are notes kept in Fleet (post one to GitHub, or hand them all to a session).
+ * session: comments are notes kept in Overmind (post one to GitHub, or hand them all to a session).
  */
 export function ReviewScreen({ layout = 'screen' }: { layout?: Layout }) {
   const [location] = useLocation()
@@ -95,8 +95,8 @@ export function ReviewScreen({ layout = 'screen' }: { layout?: Layout }) {
 
 function SessionReview({ host, id, layout }: { host: string; id: string; layout: Layout }) {
   const [, navigate] = useLocation()
-  const { fleet } = useFleet()
-  const session = findSession(fleet, host, id)
+  const { overmind } = useOvermind()
+  const session = findSession(overmind, host, id)
   const plainSession = useMemo(() => ({ host, id }), [host, id])
   const { title } = useSessionTitle(session, `${host}/${id}`)
   const { data, error, changedAt } = useDiff(host, id)
@@ -132,7 +132,7 @@ function SessionReview({ host, id, layout }: { host: string; id: string; layout:
 
 function PrReview({ host, pr, layout }: { host: string; pr: PrKey; layout: Layout }) {
   const [, navigate] = useLocation()
-  const { applyFleet } = useFleet()
+  const { applyOvermind } = useOvermind()
   const { data, error, changedAt, refetch } = usePrDiff(host, pr)
   const notes = usePrNotes(host, pr)
   const info = data?.pr ?? notes.review?.pr ?? null
@@ -153,7 +153,7 @@ function PrReview({ host, pr, layout }: { host: string; pr: PrKey; layout: Layou
       watchForSpawned(
         { host: res.spawn?.host || host, name, tmuxSession: res.spawn?.tmuxSession ?? name },
         {
-          onFleet: applyFleet,
+          onOvermind: applyOvermind,
           onFound: (s) => {
             toast.success(`${name} is up`, { id: tid })
             navigate(sessionHref(s))
@@ -203,7 +203,7 @@ function PrReview({ host, pr, layout }: { host: string; pr: PrKey; layout: Layou
       placeholder: 'What should it do with them? (optional, e.g. “turn the good ones into review comments”)',
       run: handoff,
     },
-    hint: 'Notes stay in Fleet: select code (or click a line number) to write one, post any of them to GitHub, or hand them all to a session. Ask asks Claude about the lines on the side.',
+    hint: 'Notes stay in Overmind: select code (or click a line number) to write one, post any of them to GitHub, or hand them all to a session. Ask asks Claude about the lines on the side.',
     empty: 'This PR changes no files.',
     headerActions: (
       <>
@@ -228,11 +228,11 @@ function ReviewView({ layout, source }: { layout: Layout; source: ReviewSource }
   const { host, data, error, changedAt, plainSession } = source
   const now = useNow(5_000)
 
-  const [view, setView] = usePersistentState<DiffView>('fleet.diffView', pane ? 'split' : 'unified', parseView)
-  const [showTree, setShowTree] = usePersistentState<boolean>('fleet.reviewTree', true, parseBool)
-  const [showChat, setShowChat] = usePersistentState<boolean>('fleet.reviewChat', true, parseBool)
+  const [view, setView] = usePersistentState<DiffView>('overmind.diffView', pane ? 'split' : 'unified', parseView)
+  const [showTree, setShowTree] = usePersistentState<boolean>('overmind.reviewTree', true, parseBool)
+  const [showChat, setShowChat] = usePersistentState<boolean>('overmind.reviewChat', true, parseBool)
 
-  const [shownRaw, setShownRaw] = usePersistentState<string>('fleet.reviewKinds', DEFAULT_SHOWN, parseKinds)
+  const [shownRaw, setShownRaw] = usePersistentState<string>('overmind.reviewKinds', DEFAULT_SHOWN, parseKinds)
   const shown = useMemo(() => {
     const on = new Set(shownRaw.split(','))
     return Object.fromEntries(FILE_KINDS.map((k) => [k.kind, on.has(k.kind)])) as Record<FileKind, boolean>
@@ -254,7 +254,7 @@ function ReviewView({ layout, source }: { layout: Layout; source: ReviewSource }
   )
 
   // Viewed: per session, path → the diff's signature when ticked (a new change unticks it).
-  const viewedKey = `fleet.reviewViewed:${source.storageKey}`
+  const viewedKey = `overmind.reviewViewed:${source.storageKey}`
   const [viewedMap, setViewedMap] = useState<Record<string, string>>(() => storage.getJSON<Record<string, string>>(viewedKey) ?? {})
   const isViewed = useCallback((path: string) => viewedMap[path] != null && viewedMap[path] === signatures.get(path), [viewedMap, signatures])
   const toggleViewed = useCallback(

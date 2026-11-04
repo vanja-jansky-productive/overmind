@@ -1,23 +1,23 @@
 #!/bin/sh
-# Build the Fleet feature guide (an HTML page + its screenshots) from demo data.
+# Build the Overmind feature guide (an HTML page + its screenshots) from demo data.
 #
 #   scripts/guide/build.sh                 # everything → scripts/guide/out/
 #   scripts/guide/build.sh d-prs m-prs     # re-shoot only these (the rest of out/img stays)
 #
 # 1. builds the web UI (web/ui/dist), 2. serves it from mock.mjs (invented data only),
-# 3. shoots every screen with headless Chrome (shoot.mjs), 4. captures `fleet watch` on the same
-# fleet (FLEET_FIXTURE, in a throwaway tmux session `fleet-test-guide`), 5. converts to webp and
-# writes out/fleet-guide.html with out/img/. See scripts/guide/README.md.
+# 3. shoots every screen with headless Chrome (shoot.mjs), 4. captures `overmind watch` on the same
+# overmind (OVERMIND_FIXTURE, in a throwaway tmux session `overmind-test-guide`), 5. converts to webp and
+# writes out/overmind-guide.html with out/img/. See scripts/guide/README.md.
 #
 # Needs: macOS, Google Chrome, Node >= 22, ImageMagick (`magick`), tmux, cargo.
-# FLEET_GUIDE_SETUP_URL: where the "setup i arhitektura" links point (default: docs/setup.md on GitHub).
+# OVERMIND_GUIDE_SETUP_URL: where the "setup i arhitektura" links point (default: docs/setup.md on GitHub).
 set -eu
 
 cd "$(dirname "$0")"
 here=$(pwd)
 repo=$(cd ../.. && pwd)
 out="$here/out"
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/fleet-guide.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/overmind-guide.XXXXXX")
 port=${GUIDE_PORT:-7799}
 say() { printf '\033[1mguide:\033[0m %s\n' "$*"; }
 
@@ -26,7 +26,7 @@ for bin in node magick tmux cargo; do command -v "$bin" >/dev/null || { echo "gu
 mock_pid=
 cleanup() {
   [ -n "$mock_pid" ] && kill "$mock_pid" 2>/dev/null || true
-  tmux kill-session -t fleet-test-guide 2>/dev/null || true
+  tmux kill-session -t overmind-test-guide 2>/dev/null || true
   rm -rf "$tmp"
 }
 trap cleanup EXIT INT TERM
@@ -43,15 +43,15 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do curl -fs "http://127.0.0.1:$port/api/health" >
 tui_html=
 if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx tui; then
   say "capturing the TUI"
-  cargo build -q -p fleet --manifest-path "$repo/Cargo.toml"
+  cargo build -q -p overmind --manifest-path "$repo/Cargo.toml"
   curl -fs "http://127.0.0.1:$port/demo/fixture.json" >"$tmp/fixture.json"
   echo '{"self":"workstation","hosts":{}}' >"$tmp/config.json"
-  tmux kill-session -t fleet-test-guide 2>/dev/null || true
-  tmux new-session -d -s fleet-test-guide -x 132 -y 34 \
-    "cd '$tmp' && FLEET_CONFIG='$tmp/config.json' FLEET_FIXTURE='$tmp/fixture.json' '$repo/target/debug/fleet' watch"
+  tmux kill-session -t overmind-test-guide 2>/dev/null || true
+  tmux new-session -d -s overmind-test-guide -x 132 -y 34 \
+    "cd '$tmp' && OVERMIND_CONFIG='$tmp/config.json' OVERMIND_FIXTURE='$tmp/fixture.json' '$repo/target/debug/overmind' watch"
   sleep 3
-  tmux capture-pane -e -p -t fleet-test-guide >"$tmp/tui.ansi"
-  tmux kill-session -t fleet-test-guide
+  tmux capture-pane -e -p -t overmind-test-guide >"$tmp/tui.ansi"
+  tmux kill-session -t overmind-test-guide
   node "$here/ansi.mjs" "$tmp/tui.ansi" "$tmp/tui.html"
   tui_html="$tmp/tui.html"
 fi
@@ -71,12 +71,12 @@ for f in "$tmp"/shots/*.png; do
   esac
 done
 
-setup_url=${FLEET_GUIDE_SETUP_URL:-https://github.com/ilucin/fleet/blob/main/docs/setup.md}
-sed "s|{{SETUP_URL}}|$setup_url|g" "$here/guide.html" >"$out/fleet-guide.html"
+setup_url=${OVERMIND_GUIDE_SETUP_URL:-https://github.com/vanja-jansky-productive/overmind/blob/main/docs/setup.md}
+sed "s|{{SETUP_URL}}|$setup_url|g" "$here/guide.html" >"$out/overmind-guide.html"
 
 missing=0
-for img in $(grep -o 'img/[a-z0-9-]*\.webp' "$out/fleet-guide.html" | sort -u); do
+for img in $(grep -o 'img/[a-z0-9-]*\.webp' "$out/overmind-guide.html" | sort -u); do
   [ -f "$out/$img" ] || { echo "guide: missing $img" >&2; missing=1; }
 done
 [ $missing -eq 0 ] || exit 1
-say "done: $out/fleet-guide.html + $(ls "$out/img" | wc -l | tr -d ' ') images ($(du -sh "$out/img" | cut -f1))"
+say "done: $out/overmind-guide.html + $(ls "$out/img" | wc -l | tr -d ' ') images ($(du -sh "$out/img" | cut -f1))"

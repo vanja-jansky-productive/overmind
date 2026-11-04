@@ -66,7 +66,7 @@ describe('waiting sessions', () => {
   })
   it('announces them in one sentence', () => {
     expect(waitingAnnouncement([])).toBe('')
-    expect(waitingAnnouncement([ses('a', 'waiting', 'fleet docs')])).toBe('fleet docs te čeka.')
+    expect(waitingAnnouncement([ses('a', 'waiting', 'overmind docs')])).toBe('overmind docs te čeka.')
     expect(waitingAnnouncement([ses('a', 'waiting', 'A'), ses('b', 'waiting', 'B'), ses('c', 'waiting', 'C')])).toBe('Čekaju te: A, B i C.')
   })
 })
@@ -74,7 +74,7 @@ describe('waiting sessions', () => {
 describe('browser voice', () => {
   it('reads plain text in the right language', async () => {
     const { plainSpeech, speechLang } = await import('./operator')
-    expect(plainSpeech('## Stanje\n- **fleet** [PR](http://x)\n```\ncode\n```')).toBe('Stanje fleet PR')
+    expect(plainSpeech('## Stanje\n- **overmind** [PR](http://x)\n```\ncode\n```')).toBe('Stanje overmind PR')
     expect(speechLang('Dvije sesije te čekaju.')).toBe('hr-HR')
     expect(speechLang('Two sessions are waiting.')).toBe('en-US')
   })
@@ -83,9 +83,9 @@ describe('browser voice', () => {
 describe('session lists', () => {
   it('leave the voice operators out', async () => {
     const { allSessions, findSession } = await import('./sessions')
-    const fleet = { self: 'a', hosts: [{ name: 'a', ok: true, sessions: [ses('x', 'idle'), { ...ses('op', 'idle'), operator: true }] }] }
-    expect(allSessions(fleet as never).map((s) => s.session_id)).toEqual(['x'])
-    expect(findSession(fleet as never, 'a', 'op')?.session_id).toBe('op')
+    const overmind = { self: 'a', hosts: [{ name: 'a', ok: true, sessions: [ses('x', 'idle'), { ...ses('op', 'idle'), operator: true }] }] }
+    expect(allSessions(overmind as never).map((s) => s.session_id)).toEqual(['x'])
+    expect(findSession(overmind as never, 'a', 'op')?.session_id).toBe('op')
   })
 })
 

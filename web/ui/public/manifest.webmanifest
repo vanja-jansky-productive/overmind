@@ -1,7 +1,7 @@
 {
-  "name": "Fleet — Claude sessions",
-  "short_name": "Fleet",
-  "description": "Supervise and steer the Claude Code fleet across machines.",
+  "name": "Overmind — Claude sessions",
+  "short_name": "Overmind",
+  "description": "Supervise and steer the Claude Code overmind across machines.",
   "start_url": "/#/",
   "scope": "/",
   "display": "standalone",

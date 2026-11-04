@@ -7,7 +7,7 @@ import { StackUi } from '@/components/stack/StackUi'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { DormantProvider } from '@/providers/DormantProvider'
-import { FleetProvider } from '@/providers/FleetProvider'
+import { OvermindProvider } from '@/providers/OvermindProvider'
 import { PrefsProvider } from '@/providers/PrefsProvider'
 import { PrsProvider } from '@/providers/PrsProvider'
 import { SettingsProvider } from '@/providers/SettingsProvider'
@@ -35,7 +35,7 @@ import { UsageScreen } from '@/screens/UsageScreen'
 
 /**
  * Hash routing: `#/` (list), `#/s/<host>/<session_id>` (detail),
- * plus `#/embed?host=…&dir=…` (one directory's sessions, for another app to frame: its own tree, below), `#/settings[/<section>]` (General, Models, Start directories, Git repos, Inbox, Status), `#/usage` (the subscription limits), `#/inbox` (everything waiting on you), `#/bots` (agent sessions from a recipe; `#/jobs` is its old name), `#/operator` (talk to the fleet by voice), `#/prs` (the GitHub PRs that need you), `#/tasks` (your open Productive tasks), `#/memos[/<id>]` (voice memos) and `#/notes[/<host>[/<path>]]` (the notes explorer) `#/review/<host>/<session_id>` (the diff reviewer) and `#/review/pr/<host>/<owner>/<repo>/<n>` (the diff reviewer over a PR, with no session).
+ * plus `#/embed?host=…&dir=…` (one directory's sessions, for another app to frame: its own tree, below), `#/settings[/<section>]` (General, Models, Start directories, Git repos, Inbox, Status), `#/usage` (the subscription limits), `#/inbox` (everything waiting on you), `#/bots` (agent sessions from a recipe; `#/jobs` is its old name), `#/operator` (talk to the overmind by voice), `#/prs` (the GitHub PRs that need you), `#/tasks` (your open Productive tasks), `#/memos[/<id>]` (voice memos) and `#/notes[/<host>[/<path>]]` (the notes explorer) `#/review/<host>/<session_id>` (the diff reviewer) and `#/review/pr/<host>/<owner>/<repo>/<n>` (the diff reviewer over a PR, with no session).
  * No server-side SPA fallback needed; the PWA start_url is `/#/`. Desktop and mobile use the
  * same routes, so links work across both.
  */
@@ -43,23 +43,23 @@ import { UsageScreen } from '@/screens/UsageScreen'
 const embed = readEmbed()
 
 export default function App() {
-  return embed ? <EmbedApp /> : <FleetApp />
+  return embed ? <EmbedApp /> : <OvermindApp />
 }
 
-function FleetApp() {
+function OvermindApp() {
   // ≥ lg: master–detail shell; below it the mobile screens, untouched. Crossing the
   // breakpoint swaps trees (the hash route is shared, so the open session stays open).
   const desktop = useIsDesktop()
   // A file dropped outside a drop zone must not navigate the app away.
   usePreventFileNavigation()
-  // Fleet.app's native actions (the iTerm buttons) report failures as toasts.
+  // Overmind.app's native actions (the iTerm buttons) report failures as toasts.
   useAppErrors()
   return (
     <ThemeProvider>
       <PrefsProvider>
       <SettingsProvider>
       <SpeechProvider>
-        <FleetProvider>
+        <OvermindProvider>
         <DormantProvider>
         <PrsProvider>
         <TasksProvider>
@@ -125,7 +125,7 @@ function FleetApp() {
         </TasksProvider>
         </PrsProvider>
         </DormantProvider>
-        </FleetProvider>
+        </OvermindProvider>
       </SpeechProvider>
       </SettingsProvider>
       </PrefsProvider>
@@ -133,7 +133,7 @@ function FleetApp() {
   )
 }
 
-/** The embed view: the providers a session needs, none of Fleet's navigation or global panels. */
+/** The embed view: the providers a session needs, none of Overmind's navigation or global panels. */
 function EmbedApp() {
   usePreventFileNavigation()
   return (
@@ -141,12 +141,12 @@ function EmbedApp() {
       <PrefsProvider>
       <SettingsProvider>
       <SpeechProvider>
-        <FleetProvider>
+        <OvermindProvider>
           <TooltipProvider>
             <Router hook={useHashLocation}>{embed ? <EmbedScreen params={embed} /> : null}</Router>
             <Toaster position="top-center" />
           </TooltipProvider>
-        </FleetProvider>
+        </OvermindProvider>
       </SpeechProvider>
       </SettingsProvider>
       </PrefsProvider>

@@ -14,7 +14,7 @@ import { createPromptQueue } from '../lib/queue.mjs';
 const SID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-queue-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-queue-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const sent = [];
   let clock = 1_000_000;
@@ -30,7 +30,7 @@ function fixture(t) {
       randomId: () => (++ids).toString(16).padStart(6, '0'),
     });
   const queue = make();
-  // A status change: the session's `updated_at` moves with it, as in `fleet list`.
+  // A status change: the session's `updated_at` moves with it, as in `overmind list`.
   const set = (status) => {
     clock += 1000;
     session.status = status;
@@ -137,11 +137,11 @@ test('edit, move, remove; validation; the state survives a restart', async (t) =
 test('HTTP: …/queue routes, the chat poll carries the queue, 501 without one', async (t) => {
   const fx = fixture(t);
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [fx.session] }) };
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [fx.session] }) };
   const transcripts = { messages: async () => ({ messages: [], total: 0, truncated: false, updatedAt: 0 }) };
   const urls = {};
   for (const [k, queue] of [['on', fx.queue], ['off', null]]) {
-    const api = createApi({ config, fleet, backend: {}, transcripts, spawner: {}, queue, warmFleet: false });
+    const api = createApi({ config, overmind, backend: {}, transcripts, spawner: {}, queue, warmOvermind: false });
     t.after(() => api.stop());
     const server = createHttpServer({ handleApi: api, uiDir: null });
     await new Promise((res) => server.listen(0, '127.0.0.1', res));

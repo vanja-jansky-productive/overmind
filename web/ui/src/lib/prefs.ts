@@ -2,14 +2,14 @@
 // prefs.test.ts. Stored per viewer in localStorage.
 import { CHAT_FONT_SIZES, TERM_FONT_SIZES, parseSize } from '@/lib/chat'
 
-export const TEXT_SIZE_KEY = 'fleet.chatFont'
-export const TERM_FONT_KEY = 'fleet.termFont'
-export const HIDE_NOTES_KEY = 'fleet.chatHideNotes'
+export const TEXT_SIZE_KEY = 'overmind.chatFont'
+export const TERM_FONT_KEY = 'overmind.termFont'
+export const HIDE_NOTES_KEY = 'overmind.chatHideNotes'
 /** Composer send delay (ms: 0 / 3000 / 5000, lib/outbox.ts SEND_DELAYS) — the undo window. */
-export const SEND_DELAY_KEY = 'fleet.sendDelay'
+export const SEND_DELAY_KEY = 'overmind.sendDelay'
 
 /**
- * Text size steps, named by the chat text size they give (the stored `fleet.chatFont`
+ * Text size steps, named by the chat text size they give (the stored `overmind.chatFont`
  * values). The whole UI scales with it: the root font-size is set so the chat's 0.9375rem
  * comes out at exactly this many px, and every rem-based size scales along.
  */
@@ -35,5 +35,5 @@ export function rootFontSize(size: number): string {
   return `${+((size / DEFAULT_TEXT_SIZE) * 100).toFixed(3)}%`
 }
 
-/** The terminal's font-size for a `fleet.termFont` value (px at the default text size), in rem. */
+/** The terminal's font-size for a `overmind.termFont` value (px at the default text size), in rem. */
 export const termFontRem = (px: number) => `${px / 16}rem`

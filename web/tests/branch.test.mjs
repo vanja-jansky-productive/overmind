@@ -106,7 +106,7 @@ test('validateBranchRequest', () => {
 });
 
 async function setup() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fleet-branch-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'overmind-branch-'));
   const home = path.join(root, 'claude');
   const codex = path.join(root, 'codex');
   const cwd = path.join(root, 'w');

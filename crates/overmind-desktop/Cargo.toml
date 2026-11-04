@@ -1,0 +1,36 @@
+[package]
+name = "overmind-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Overmind web app as a macOS desktop app (Tauri 2)"
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "overmind-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+overmind = { path = "../overmind" }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-window-state = "2"
+tauri-plugin-single-instance = "2"
+dirs = "6"
+url = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+default = ["custom-protocol"]
+# Serve the bundled start page from the binary (what `cargo tauri build` turns on).
+custom-protocol = ["tauri/custom-protocol"]

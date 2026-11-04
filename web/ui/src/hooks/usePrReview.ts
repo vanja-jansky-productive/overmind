@@ -10,7 +10,7 @@ export const PR_DIFF_POLL_MS = 30_000
 export const PR_NOTES_POLL_MS = 30_000
 
 function prError(err: unknown): string {
-  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s fleet web server predates reviewing PRs without a session — update and restart it'
+  if (err instanceof ApiError && err.status === 404 && err.message === 'not found') return 'This host’s overmind web server predates reviewing PRs without a session — update and restart it'
   return sessionErrorMessage(err)
 }
 
@@ -51,7 +51,7 @@ export function usePrDiff(host: string, pr: PrKey) {
 }
 
 /**
- * The PR's review notes (kept in Fleet on the host), with the same actions as a session's
+ * The PR's review notes (kept in Overmind on the host), with the same actions as a session's
  * review threads where they make sense — plus `post` (one note → a GitHub review comment).
  */
 export function usePrNotes(host: string, pr: PrKey) {

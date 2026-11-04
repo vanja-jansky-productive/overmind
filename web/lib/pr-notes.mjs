@@ -1,9 +1,9 @@
 // Review notes on someone's pull request, made in the diff reviewer with no session behind it:
-// anchored like a review thread (path, side, start–end, the selected code) but kept in Fleet,
+// anchored like a review thread (path, side, start–end, the selected code) but kept in Overmind,
 // for a session spawned later to work through ("Hand to a session"). Any one of them can also
 // go straight to GitHub as a PR review comment, as the host's `gh` login.
 //
-// Storage: one JSON file per PR under `<state>/fleet/pr-notes/<owner>__<repo>__<n>.json` on the
+// Storage: one JSON file per PR under `<state>/overmind/pr-notes/<owner>__<repo>__<n>.json` on the
 // host that has the clone (dir 0700, files 0600, atomic temp + rename).
 //
 // A note answers in the shape of a review thread (status: draft, one entry, no replies), so the

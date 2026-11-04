@@ -27,22 +27,22 @@ export function offeredHarnesses(rows: HarnessInfo[] | null | undefined, claudeM
   const list = (rows ?? []).filter((h) => h && typeof h.id === 'string' && h.installed)
   const out = list.map((h) => {
     const models = h.id === 'claude' ? claudeModels : h.models?.length ? normalizeModels(h.models) : [{ id: '', label: 'Default' }]
-    return { ...h, models: withFleetDefault(models, h) }
+    return { ...h, models: withOvermindDefault(models, h) }
   })
   if (!out.some((h) => h.id === 'claude')) out.unshift(...claudeOnly(claudeModels))
   return out.sort((a, b) => Number(b.id === 'claude') - Number(a.id === 'claude'))
 }
 
-/** "Opus 5.5 · high": the host's fleet default for a harness (Settings → Models), or null when none. */
-export function fleetDefaultLabel(h: Pick<HarnessInfo, 'defaultModel' | 'defaultEffort'>, models: ModelOption[]): string | null {
+/** "Opus 5.5 · high": the host's overmind default for a harness (Settings → Models), or null when none. */
+export function overmindDefaultLabel(h: Pick<HarnessInfo, 'defaultModel' | 'defaultEffort'>, models: ModelOption[]): string | null {
   const model = h.defaultModel ? (models.find((m) => m.id === h.defaultModel)?.label ?? h.defaultModel) : null
   const parts = [model, h.defaultEffort].filter(Boolean)
   return parts.length ? parts.join(' · ') : null
 }
 
-/** The picker's default entry (`id: ''`) names the fleet default it starts, when one is set. */
-export function withFleetDefault(models: ModelOption[], h: Pick<HarnessInfo, 'defaultModel' | 'defaultEffort'>): ModelOption[] {
-  const label = fleetDefaultLabel(h, models)
+/** The picker's default entry (`id: ''`) names the overmind default it starts, when one is set. */
+export function withOvermindDefault(models: ModelOption[], h: Pick<HarnessInfo, 'defaultModel' | 'defaultEffort'>): ModelOption[] {
+  const label = overmindDefaultLabel(h, models)
   return label ? models.map((m) => (m.id === '' ? { ...m, label: `Default · ${label}` } : m)) : models
 }
 
@@ -54,5 +54,5 @@ export function pickHarness(offered: HarnessInfo[], remembered: string | null): 
 
 /** Where the picked model is remembered: Claude keeps the old key. */
 export function modelKey(harness: string): string {
-  return harness === 'claude' ? 'fleet.spawnModel' : `fleet.spawnModel.${harness}`
+  return harness === 'claude' ? 'overmind.spawnModel' : `overmind.spawnModel.${harness}`
 }

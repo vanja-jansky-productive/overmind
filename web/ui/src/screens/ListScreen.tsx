@@ -34,14 +34,14 @@ import { cn } from '@/lib/utils'
 export function ListScreen() {
   const now = useNow(1000)
   const list = useSessionList(now)
-  const { fleet, error, query, setQuery, status, setStatus, selection, setSelection, hosts, hostSet, view, summary, unreachable, note } = list
+  const { overmind, error, query, setQuery, status, setStatus, selection, setSelection, hosts, hostSet, view, summary, unreachable, note } = list
   const [newOpen, setNewOpen] = useState(false)
   const [, navigate] = useLocation()
   const [mode, setMode] = useViewMode()
   const settings = useSettings()
   const board = mode === 'board'
   const groups = useGroups(board)
-  const { columns } = useBoardColumns(board, view.sessions, groups.groups, fleet, hostSet, query)
+  const { columns } = useBoardColumns(board, view.sessions, groups.groups, overmind, hostSet, query)
   const rowsRef = useRef<HTMLDivElement>(null)
   useFlip(rowsRef, view.sessions.map((s) => `${s.host}/${s.session_id}`).join(' '))
   // The filter rows live in a drawer under the search field, closed by default: swipe down on
@@ -72,8 +72,8 @@ export function ListScreen() {
       <ScreenHeader>
         <div onTouchStart={onTouchStart} onTouchEnd={(e) => onTouchEnd(e, false)}>
         <div className="flex min-h-8 items-center gap-0.5 min-[400px]:gap-1 sm:gap-2.5">
-          <h1 className="mr-1 shrink-0 text-xl font-bold tracking-tight sm:mr-0">Fleet</h1>
-          {fleet ? (
+          <h1 className="mr-1 shrink-0 text-xl font-bold tracking-tight sm:mr-0">Overmind</h1>
+          {overmind ? (
             <div className="flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground tabular-nums" aria-label="Status summary">
               {summary.waiting > 0 ? (
                 <span className="flex items-center gap-1 font-semibold text-status-waiting">
@@ -215,7 +215,7 @@ export function ListScreen() {
           {error ? (
             <Alert variant="destructive" className="my-2">
               <AlertDescription>
-                {fleet ? `Refresh failed: ${error} — showing last known data` : `Could not reach fleet web: ${error}`}
+                {overmind ? `Refresh failed: ${error} — showing last known data` : `Could not reach overmind web: ${error}`}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -228,7 +228,7 @@ export function ListScreen() {
             </Alert>
           ))}
 
-          {!fleet ? (
+          {!overmind ? (
             <SessionListSkeleton />
           ) : board && columns.length > 0 ? (
             <GroupedList columns={columns} now={now} />
@@ -248,11 +248,11 @@ export function ListScreen() {
               )}
             </div>
           ) : unreachable.length === 0 ? (
-            <EmptyState anySessions={allSessions(fleet).length > 0} />
+            <EmptyState anySessions={allSessions(overmind).length > 0} />
           ) : null}
 
-          {fleet ? <DormantSection now={now} hosts={hostSet} query={query} className="mt-6" /> : null}
-          {fleet ? <ClosedSection now={now} hosts={hostSet} query={query} className="mt-4" /> : null}
+          {overmind ? <DormantSection now={now} hosts={hostSet} query={query} className="mt-6" /> : null}
+          {overmind ? <ClosedSection now={now} hosts={hostSet} query={query} className="mt-4" /> : null}
         </div>
       </main>
 
@@ -263,7 +263,7 @@ export function ListScreen() {
           <a
             href="#/operator"
             aria-label="Talk to the operator"
-            title="Operator — talk to the fleet"
+            title="Operator — talk to the overmind"
             className="grid size-12 place-items-center rounded-full border bg-background text-foreground shadow-lg transition-transform active:scale-95"
           >
             <MicIcon className="size-5" />

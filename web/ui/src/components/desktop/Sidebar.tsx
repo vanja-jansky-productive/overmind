@@ -25,7 +25,7 @@ export interface SidebarProps {
 
 /** Desktop left column under the top bar (TopBar): the session list, dormant and recently closed. */
 export function Sidebar({ list, now, cursorKey, selectedKey }: SidebarProps) {
-  const { fleet, error, query, hostSet, view, unreachable, setFrozen } = list
+  const { overmind, error, query, hostSet, view, unreachable, setFrozen } = list
   const listRef = useRef<HTMLDivElement>(null)
   useFlip(listRef, view.sessions.map(sessionKey).join(' '))
 
@@ -48,12 +48,12 @@ export function Sidebar({ list, now, cursorKey, selectedKey }: SidebarProps) {
         {error ? (
           <Alert variant="destructive" className="mb-2">
             <AlertDescription>
-              {fleet ? `Refresh failed: ${error} — showing last known data` : `Could not reach fleet web: ${error}`}
+              {overmind ? `Refresh failed: ${error} — showing last known data` : `Could not reach overmind web: ${error}`}
             </AlertDescription>
           </Alert>
         ) : null}
         {/* An unreachable host shows in the top bar (HostRail), not here. */}
-        {!fleet ? (
+        {!overmind ? (
           <SessionListSkeleton />
         ) : view.sessions.length > 0 ? (
           <nav aria-label="Sessions" className="flex flex-col gap-1.5">
@@ -77,11 +77,11 @@ export function Sidebar({ list, now, cursorKey, selectedKey }: SidebarProps) {
           </nav>
         ) : (
           <div className="px-4 py-10 text-center text-sm text-dimmer">
-            {allSessions(fleet).length > 0 ? 'Nothing matches.' : unreachable.length ? 'No sessions from the reachable hosts.' : 'No Claude sessions running.'}
+            {allSessions(overmind).length > 0 ? 'Nothing matches.' : unreachable.length ? 'No sessions from the reachable hosts.' : 'No Claude sessions running.'}
           </div>
         )}
-        {fleet ? <DormantSection now={now} hosts={hostSet} query={query} desktop className="mt-4" /> : null}
-        {fleet ? <ClosedSection now={now} hosts={hostSet} query={query} desktop className="mt-3" /> : null}
+        {overmind ? <DormantSection now={now} hosts={hostSet} query={query} desktop className="mt-4" /> : null}
+        {overmind ? <ClosedSection now={now} hosts={hostSet} query={query} desktop className="mt-3" /> : null}
       </div>
 
     </div>

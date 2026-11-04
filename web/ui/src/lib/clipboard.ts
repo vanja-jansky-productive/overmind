@@ -1,5 +1,5 @@
-// Copying text, and the `fleet enter` command that attaches to a session's tmux session.
-// Fleet.app can also run it: a `fleet://attach` link opens an iTerm tab on this Mac.
+// Copying text, and the `overmind enter` command that attaches to a session's tmux session.
+// Overmind.app can also run it: a `overmind://attach` link opens an iTerm tab on this Mac.
 
 import { toast } from 'sonner'
 
@@ -11,10 +11,10 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
-/** `fleet -H <host> enter <tmux session>` — `--` first when the name looks like a flag. */
+/** `overmind -H <host> enter <tmux session>` — `--` first when the name looks like a flag. */
 export function attachCommand(host: string, tmuxSession: string): string {
   const name = shellQuote(tmuxSession)
-  return `fleet -H ${shellQuote(host)} enter ${tmuxSession.startsWith('-') ? '-- ' : ''}${name}`
+  return `overmind -H ${shellQuote(host)} enter ${tmuxSession.startsWith('-') ? '-- ' : ''}${name}`
 }
 
 /** The attach command for a tmux-backed session; null for any other backend. */
@@ -23,25 +23,25 @@ export function sessionAttachCommand(s: Pick<Session, 'host' | 'backend' | 'tmux
   return attachCommand(s.host, s.tmux_session)
 }
 
-/** The `fleet://attach` link Fleet.app turns into an iTerm tab; null where the attach command is. */
+/** The `overmind://attach` link Overmind.app turns into an iTerm tab; null where the attach command is. */
 export function sessionAttachLink(s: Pick<Session, 'host' | 'backend' | 'tmux_session'> | null | undefined): string | null {
   if (!s || s.backend !== 'tmux' || !s.tmux_session) return null
-  return `fleet://attach?${new URLSearchParams({ host: s.host, session: s.tmux_session })}`
+  return `overmind://attach?${new URLSearchParams({ host: s.host, session: s.tmux_session })}`
 }
 
-/** Inside a Fleet.app that opens `fleet://attach` links (its initialization script sets `data-attach`). */
+/** Inside an Overmind.app that opens `overmind://attach` links (its initialization script sets `data-attach`). */
 export function canAttachInApp(doc: { documentElement?: { dataset?: Record<string, string | undefined> } | null } | undefined = globalThis.document): boolean {
   return doc?.documentElement?.dataset?.attach === 'iterm'
 }
 
-/** A host's tmux rather than one session: `fleet -H <host> new` attaches to (or creates) `main`. */
+/** A host's tmux rather than one session: `overmind -H <host> new` attaches to (or creates) `main`. */
 export function hostShellCommand(host: string): string {
-  return `fleet -H ${shellQuote(host)} new`
+  return `overmind -H ${shellQuote(host)} new`
 }
 
-/** The `fleet://shell` link a Fleet.app that knows it turns into an iTerm tab; else null (copy the command). */
+/** The `overmind://shell` link an Overmind.app that knows it turns into an iTerm tab; else null (copy the command). */
 export function hostShellLink(host: string, doc: { documentElement?: { dataset?: Record<string, string | undefined> } | null } | undefined = globalThis.document): string | null {
-  return doc?.documentElement?.dataset?.hostShell === 'iterm' ? `fleet://shell?${new URLSearchParams({ host })}` : null
+  return doc?.documentElement?.dataset?.hostShell === 'iterm' ? `overmind://shell?${new URLSearchParams({ host })}` : null
 }
 
 /**

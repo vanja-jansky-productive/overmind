@@ -11,9 +11,9 @@ import { sessionKey } from '@/lib/shortcuts'
 import { storage } from '@/lib/storage'
 import { cn } from '@/lib/utils'
 
-const COLLAPSED_KEY = 'fleet.groupsCollapsed'
+const COLLAPSED_KEY = 'overmind.groupsCollapsed'
 
-/** Mobile board: one collapsible section per group / session stack (collapsed ids persist in `fleet.groupsCollapsed`); stacks get a ⋯ menu. */
+/** Mobile board: one collapsible section per group / session stack (collapsed ids persist in `overmind.groupsCollapsed`); stacks get a ⋯ menu. */
 export function GroupedList({ columns, now }: { columns: BoardColumn[]; now: number }) {
   const [collapsed, setCollapsed] = useState<string[]>(() => parseIdList(storage.getJSON(COLLAPSED_KEY)))
   const toggle = (id: string) => {

@@ -11,10 +11,10 @@ import { BackendError } from './backends.mjs';
 const PLACEHOLDER_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>fleet-web</title>
+<title>overmind-web</title>
 <style>body{font:16px -apple-system,system-ui,sans-serif;background:#111;color:#eee;
 display:grid;place-items:center;height:100vh;margin:0}</style>
-</head><body><p>fleet-web: the web UI is not built — run <code>fleet web build</code> (API is at /api/)</p></body></html>
+</head><body><p>overmind-web: the web UI is not built — run <code>overmind web build</code> (API is at /api/)</p></body></html>
 `;
 
 /** Does an If-None-Match header (possibly a list, possibly `*`) match `etag`? Weak comparison. */

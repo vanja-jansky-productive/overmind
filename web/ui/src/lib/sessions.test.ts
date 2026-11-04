@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 
-import type { FleetResponse, Session } from '@/api/types'
+import type { OvermindResponse, Session } from '@/api/types'
 import {
   clusterByStack,
   stackRuns,
@@ -28,7 +28,7 @@ import {
 
 const s = (over: Partial<Session>): Session => ({ host: 'laptop', session_id: 'id', status: 'idle', ...over })
 
-const fleet: FleetResponse = {
+const overmind: OvermindResponse = {
   self: 'laptop',
   hosts: [
     {
@@ -61,13 +61,13 @@ test('statusMeta / statusLabel', () => {
 })
 
 test('listView: flat, sorted by last activity, counts per status', () => {
-  const v = listView(fleet, {})
+  const v = listView(overmind, {})
   expect(v.sessions.map((x) => x.session_id)).toEqual(['b', 'c', 'a'])
   expect(v.counts).toEqual({ all: 3, waiting: 1, busy: 1, idle: 1, scheduled: 0, slack: 0, embedded: 0 })
 })
 
 test('listView: a prompt moves a session, a turn ending does not', () => {
-  const f: FleetResponse = {
+  const f: OvermindResponse = {
     self: 'laptop',
     hosts: [
       {
@@ -93,12 +93,12 @@ test('keepOrder: the frozen order holds, new sessions go on top, gone ones drop'
 })
 
 test('listView: host + status + search filters', () => {
-  expect(listView(fleet, { hosts: new Set(['workstation']) }).sessions.map((x) => x.session_id)).toEqual(['c'])
-  expect(listView(fleet, { hosts: new Set(['workstation']) }).counts.all).toBe(1)
-  expect(listView(fleet, { status: 'waiting' }).sessions.map((x) => x.session_id)).toEqual(['b'])
+  expect(listView(overmind, { hosts: new Set(['workstation']) }).sessions.map((x) => x.session_id)).toEqual(['c'])
+  expect(listView(overmind, { hosts: new Set(['workstation']) }).counts.all).toBe(1)
+  expect(listView(overmind, { status: 'waiting' }).sessions.map((x) => x.session_id)).toEqual(['b'])
   // counts ignore the status filter (the chips show every status)
-  expect(listView(fleet, { status: 'waiting' }).counts.all).toBe(3)
-  expect(listView(fleet, { query: 'srv/API' }).sessions.map((x) => x.session_id)).toEqual(['c'])
+  expect(listView(overmind, { status: 'waiting' }).counts.all).toBe(3)
+  expect(listView(overmind, { query: 'srv/API' }).sessions.map((x) => x.session_id)).toEqual(['c'])
   expect(listView(null, {}).sessions).toEqual([])
 })
 
@@ -109,13 +109,13 @@ test('matchesSearch covers name, titles, cwd, tmux session, host', () => {
 })
 
 test('findSession / sessionHref', () => {
-  expect(findSession(fleet, 'workstation', 'c')?.name).toBe('gamma')
-  expect(findSession(fleet, 'laptop', 'c')).toBeNull()
+  expect(findSession(overmind, 'workstation', 'c')?.name).toBe('gamma')
+  expect(findSession(overmind, 'laptop', 'c')).toBeNull()
   expect(sessionHref({ host: 'a b', session_id: 'x/y' })).toBe('/s/a%20b/x%2Fy')
 })
 
 test('spawnTargets: reachable hosts with their dirs', () => {
-  const fleet = {
+  const overmind = {
     self: 'a',
     hosts: [
       { name: 'a', ok: true, sessions: [], spawnDirs: [{ label: 'Work', path: '/w' }] },
@@ -123,47 +123,47 @@ test('spawnTargets: reachable hosts with their dirs', () => {
       { name: 'c', ok: true, sessions: [] },
     ],
   }
-  expect(spawnTargets(fleet)).toEqual([
+  expect(spawnTargets(overmind)).toEqual([
     { name: 'a', dirs: [{ label: 'Work', path: '/w' }] },
     { name: 'c', dirs: [] },
   ])
 })
 
 test('findSpawned matches tmux session or name on that host', () => {
-  const fleet = {
+  const overmind = {
     self: 'a',
     hosts: [
-      { name: 'a', ok: true, sessions: [{ host: 'a', session_id: '1', tmux_session: 'fw-1', name: 'x' }] },
-      { name: 'b', ok: true, sessions: [{ host: 'b', session_id: '2', tmux_session: 'fw-2', name: 'y' }] },
+      { name: 'a', ok: true, sessions: [{ host: 'a', session_id: '1', tmux_session: 'om-1', name: 'x' }] },
+      { name: 'b', ok: true, sessions: [{ host: 'b', session_id: '2', tmux_session: 'om-2', name: 'y' }] },
     ],
   }
-  expect(findSpawned(fleet, 'a', { tmuxSession: 'fw-1' })?.session_id).toBe('1')
-  expect(findSpawned(fleet, 'a', { tmuxSession: 'fw-2' })).toBeNull()
-  expect(findSpawned(fleet, 'b', { tmuxSession: 'nope', name: 'y' })?.session_id).toBe('2')
+  expect(findSpawned(overmind, 'a', { tmuxSession: 'om-1' })?.session_id).toBe('1')
+  expect(findSpawned(overmind, 'a', { tmuxSession: 'om-2' })).toBeNull()
+  expect(findSpawned(overmind, 'b', { tmuxSession: 'nope', name: 'y' })?.session_id).toBe('2')
 })
 
 test('withoutSession drops only that session', () => {
-  const fleet = {
+  const overmind = {
     self: 'a',
     hosts: [
       { name: 'a', ok: true, sessions: [{ host: 'a', session_id: '1' }, { host: 'a', session_id: '2' }] },
       { name: 'b', ok: true, sessions: [{ host: 'b', session_id: '1' }] },
     ],
   }
-  const out = withoutSession(fleet, 'a', '1')
+  const out = withoutSession(overmind, 'a', '1')
   expect(out.hosts[0].sessions.map((s) => s.session_id)).toEqual(['2'])
   expect(out.hosts[1].sessions).toHaveLength(1)
 })
 
 test('withoutClosed hides recently closed sessions until their deadline', () => {
-  const fleet = {
+  const overmind = {
     self: 'a',
     hosts: [{ name: 'a', ok: true, sessions: [{ host: 'a', session_id: '1' }, { host: 'a', session_id: '2' }] }],
   }
   const closed = new Map([[closedKey('a', '1'), 1000]])
-  expect(withoutClosed(fleet, closed, 999).hosts[0].sessions.map((s) => s.session_id)).toEqual(['2'])
-  expect(withoutClosed(fleet, closed, 1000)).toBe(fleet)
-  expect(withoutClosed(fleet, new Map([[closedKey('b', '1'), 1000]]), 0)).toBe(fleet)
+  expect(withoutClosed(overmind, closed, 999).hosts[0].sessions.map((s) => s.session_id)).toEqual(['2'])
+  expect(withoutClosed(overmind, closed, 1000)).toBe(overmind)
+  expect(withoutClosed(overmind, new Map([[closedKey('b', '1'), 1000]]), 0)).toBe(overmind)
 })
 
 test('clusterByStack: a stack moves up to its first member, everything else keeps its place', () => {
@@ -189,7 +189,7 @@ test('clusterByStack: a stack moves up to its first member, everything else keep
 
 test('listView keeps stacks adjacent after sorting by activity', () => {
   const st = { id: 'st-1', label: 'Login fix' }
-  const f: FleetResponse = {
+  const f: OvermindResponse = {
     self: 'laptop',
     hosts: [
       {
@@ -208,7 +208,7 @@ test('listView keeps stacks adjacent after sorting by activity', () => {
 
 test('listView: job sessions only under Scheduled, except waiting ones', () => {
   const origin = { job: 'triage', run: '20260101-0700' }
-  const f: FleetResponse = {
+  const f: OvermindResponse = {
     self: 'laptop',
     hosts: [
       {
@@ -247,7 +247,7 @@ test('listView: job sessions only under Scheduled, except waiting ones', () => {
 })
 
 test('embed sessions: set aside like bot sessions, in their own Apps filter', () => {
-  const f: FleetResponse = {
+  const f: OvermindResponse = {
     self: 'laptop',
     hosts: [
       {
@@ -271,7 +271,7 @@ test('embed sessions: set aside like bot sessions, in their own Apps filter', ()
 })
 
 test('Slack-linked sessions: set aside like bot sessions, in their own Slack filter', () => {
-  const f: FleetResponse = {
+  const f: OvermindResponse = {
     self: 'laptop',
     hosts: [
       {

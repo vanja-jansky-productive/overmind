@@ -16,7 +16,7 @@ const HEAD = 'a'.repeat(40);
 const anchor = { root: '/w/api', path: 'src/x.ts', side: 'new', start: 3, end: 5, code: ['a', 'b', 'c'] };
 
 function fixture(t, { ghFails = false } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-prnotes-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-prnotes-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const ghCalls = [];
   let ids = 0;
@@ -90,7 +90,7 @@ test('notesPrompt: every note with its file, lines and code, in order', () => {
 test('HTTP: …/prs/:owner/:repo/:n — diff from the clone, notes, ask, handoff spawns with the notes', async (t) => {
   const fx = fixture(t);
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
-  const fleet = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [] }) };
+  const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [] }) };
   const pr = { owner: 'acme', repo: 'api', number: 12, title: 'Fix it', url: 'https://github.com/acme/api/pull/12', author: 'petra', headBranch: 'fix', baseBranch: 'main', headOid: HEAD, draft: false, local: { repoPath: '/w/api', worktree: null } };
   const cli = {
     prs: async () => ({ prs: [pr, { ...pr, number: 13, local: null }] }),
@@ -107,7 +107,7 @@ test('HTTP: …/prs/:owner/:repo/:n — diff from the clone, notes, ask, handoff
   const asks = { start: (o) => (started.push(o), { id: 'q-00000001', status: 'running' }) };
   const spawned = [];
   const spawner = { spawn: async (o) => (spawned.push(o), { tmuxSession: 'fix-review', dir: o.dir, name: o.name }) };
-  const api = createApi({ config, fleet, backend: {}, transcripts: {}, spawner, cli, differ, asks, prNotes: fx.notes, warmFleet: false });
+  const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner, cli, differ, asks, prNotes: fx.notes, warmOvermind: false });
   t.after(() => api.stop());
   const server = createHttpServer({ handleApi: api, uiDir: null });
   await new Promise((res) => server.listen(0, '127.0.0.1', res));

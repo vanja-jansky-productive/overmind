@@ -36,7 +36,7 @@ export function clampFlyoutWidth(w: number, container: number): number {
   return Math.round(Math.max(Math.min(FLYOUT_MIN_W, max), Math.min(max, w)))
 }
 
-// The session pane's Details column: always beside the chat, resizable (`fleet.detailsWidth`).
+// The session pane's Details column: always beside the chat, resizable (`overmind.detailsWidth`).
 export const DETAILS_MIN_W = 260
 export const DETAILS_MAX_W = 560
 export const DETAILS_DEFAULT_W = 320

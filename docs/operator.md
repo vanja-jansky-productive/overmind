@@ -17,11 +17,11 @@ few runs; they move with model load, but the proportions hold.
 | Reply length | 750–1200 chars (45–75 s of audio) | 300–450 chars | "under 400 characters" in the brief |
 | **Question → first sound** | **17–25 s typical, 60 s+ on long turns** | **7–11 s** | |
 
-Tools themselves are not the bottleneck: `./api GET /fleet`, `/inbox` and `messages` answer in
-50–80 ms. The slow ones are `fleet prs` (~10 s) and `fleet list --all-hosts`, which ssh-es to
-each host with an ssh destination and waits out `FLEET_CONNECT_TIMEOUT` (5 s) on one that is
+Tools themselves are not the bottleneck: `./api GET /overmind`, `/inbox` and `messages` answer in
+50–80 ms. The slow ones are `overmind prs` (~10 s) and `overmind list --all-hosts`, which ssh-es to
+each host with an ssh destination and waits out `OVERMIND_CONNECT_TIMEOUT` (5 s) on one that is
 asleep — and sees only hosts with an ssh destination, so on a machine whose config has none it
-reports just itself. The web snapshot (`/api/fleet`) has neither problem.
+reports just itself. The web snapshot (`/api/overmind`) has neither problem.
 
 The model's time is mostly the number of turns (each one 2.5–6 s of model time), then the
 model: Fable 5.1 costs 0.4–0.6 USD a question against 0.01–0.10 for Sonnet 5.5, and is 1.5–3×
@@ -35,8 +35,8 @@ What the operator needs from a harness, and where each one stands:
 | Need | Claude Code | Codex | pi |
 | --- | --- | --- | --- |
 | Reads the brief | `CLAUDE.md` | `AGENTS.md` only | `AGENTS.md` and `CLAUDE.md` |
-| Runs `./api`, `fleet`, `jq` without prompts | `.claude/settings.json` allow list | `--dangerously-bypass-approvals-and-sandbox` (or `-s danger-full-access -a never`) | no approvals by default |
-| Reaches the local web API | yes | **not in the default sandbox**: `./api` fails to connect and `fleet list` returns `[]` silently | yes |
+| Runs `./api`, `overmind`, `jq` without prompts | `.claude/settings.json` allow list | `--dangerously-bypass-approvals-and-sandbox` (or `-s danger-full-access -a never`) | no approvals by default |
+| Reaches the local web API | yes | **not in the default sandbox**: `./api` fails to connect and `overmind list` returns `[]` silently | yes |
 | Turn end is reliable for "read it now" | `stop_reason` on every transcript line | `task_complete`; assistant text is final only until a tool call follows | last message not a tool call |
 | `/clear` (auto-clear) | yes | `/new` | `/new` |
 | Found by `lib/operator.mjs` | yes | no: `isOperator` and `ensure()` assume Claude | no |

@@ -9,7 +9,7 @@ import { shortCwd } from '@/lib/format'
 import { type HostedEntry, scheduleWhat, scheduleWhen } from '@/lib/schedule'
 import { cn } from '@/lib/utils'
 
-/** Pending scheduled sessions (`fleet schedule`), each with its host, when, what and Cancel. */
+/** Pending scheduled sessions (`overmind schedule`), each with its host, when, what and Cancel. */
 export function ScheduledList({ entries, now, onChanged, className }: { entries: HostedEntry[]; now: number; onChanged: () => void; className?: string }) {
   const [busy, setBusy] = useState<string | null>(null)
   if (!entries.length) return null

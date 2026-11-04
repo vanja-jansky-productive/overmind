@@ -16,7 +16,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useFleet } from '@/hooks/useFleet'
+import { useOvermind } from '@/hooks/useOvermind'
 import { useNow } from '@/hooks/useNow'
 import { relTime } from '@/lib/format'
 import {
@@ -46,21 +46,21 @@ const TONE: Record<OutcomeTone, string> = {
 }
 
 function errorText(err: unknown): string {
-  if (err instanceof ApiError && err.status === 501) return err.message || 'this host’s server is too old — update fleet there'
+  if (err instanceof ApiError && err.status === 501) return err.message || 'this host’s server is too old — update overmind there'
   return (err as Error)?.message || 'unreachable'
 }
 
 /**
- * Settings → Git repos: `fleet repos` on each host — which roots it scans, how often each repo
+ * Settings → Git repos: `overmind repos` on each host — which roots it scans, how often each repo
  * is fetched and fast-forwarded, the launchd timer, and every repo's state. Each host has its
  * own settings (Save writes the shown host; "Save to all" writes the same settings everywhere).
  */
 export function ReposEditor() {
-  const { fleet } = useFleet()
-  const hostsKey = (fleet?.hosts ?? []).map((h) => h.name).join('\n')
+  const { overmind } = useOvermind()
+  const hostsKey = (overmind?.hosts ?? []).map((h) => h.name).join('\n')
   const hosts = useMemo(() => (hostsKey ? hostsKey.split('\n') : []), [hostsKey])
   const [host, setHost] = useState<string | null>(null)
-  const current = host ?? fleet?.self ?? hosts[0] ?? null
+  const current = host ?? overmind?.self ?? hosts[0] ?? null
 
   const [loads, setLoads] = useState<Record<string, Load>>({})
   const [drafts, setDrafts] = useState<Record<string, ReposSettings>>({})
@@ -161,7 +161,7 @@ export function ReposEditor() {
     }
   }
 
-  if (!fleet) return <p className="py-3 text-sm text-dimmer">Loading hosts…</p>
+  if (!overmind) return <p className="py-3 text-sm text-dimmer">Loading hosts…</p>
 
   return (
     <div className="space-y-3 py-3">
@@ -212,7 +212,7 @@ export function ReposEditor() {
               <div className="text-xs text-dimmer">
                 {data.service.supported
                   ? `launchd checks every ${data.service.tickMinutes} min (and at login); each repo syncs when its interval is up`
-                  : 'macOS only — elsewhere run `fleet repos sync --due` from cron'}
+                  : 'macOS only — elsewhere run `overmind repos sync --due` from cron'}
               </div>
             </div>
             {busy === 'service' ? <Loader2Icon className="size-4 animate-spin text-dimmer" /> : null}

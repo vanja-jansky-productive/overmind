@@ -34,14 +34,14 @@ export function JobChip({ session: s, className }: { session: Pick<Session, 'ori
 }
 
 /**
- * A session an app's embedded Fleet panel started (`embed`): app icon + the app's name. Nothing
+ * A session an app's embedded Overmind panel started (`embed`): app icon + the app's name. Nothing
  * for any other session.
  */
 export function EmbedChip({ session: s, className }: { session: Pick<Session, 'embed'>; className?: string }) {
   if (!s.embed) return null
   return (
     <span
-      title={`Started from ${s.embed}'s Fleet panel`}
+      title={`Started from ${s.embed}'s Overmind panel`}
       className={cn(
         'inline-flex h-4.5 max-w-[40%] min-w-0 shrink items-center gap-1 rounded-[5px] border border-border px-1 text-[0.6875rem] text-muted-foreground',
         className,

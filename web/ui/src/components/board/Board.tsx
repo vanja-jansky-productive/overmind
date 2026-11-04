@@ -35,7 +35,7 @@ export interface BoardProps {
  * reordered and cards dragged between them (BoardColumns).
  */
 export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, selectedKey, overlayInset, onOpen }: BoardProps) {
-  const { fleet, error, query, hostSet, unreachable } = list
+  const { overmind, error, query, hostSet, unreachable } = list
   const boardRef = useRef<HTMLDivElement>(null)
 
   // The cursor card scrolls into view, clear of the flyout (↑/↓, ⌘K). A click moves the cursor
@@ -67,7 +67,7 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
         <div className="shrink-0 px-4 pt-2">
           <Alert variant="destructive">
             <AlertDescription>
-              {fleet ? `Refresh failed: ${error} — showing last known data` : `Could not reach fleet web: ${error}`}
+              {overmind ? `Refresh failed: ${error} — showing last known data` : `Could not reach overmind web: ${error}`}
             </AlertDescription>
           </Alert>
         </div>
@@ -79,11 +79,11 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
         className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto overscroll-x-contain p-3"
         style={overlayInset ? { scrollPaddingRight: overlayInset + 12 } : undefined}
       >
-        {!fleet ? (
+        {!overmind ? (
           [0, 1, 2].map((i) => <Skeleton key={i} className="h-64 w-72 shrink-0 rounded-xl" />)
         ) : columns.length === 0 ? (
           <div className="w-full px-4 py-10 text-center text-sm text-dimmer">
-            {allSessions(fleet).length > 0 ? 'Nothing matches.' : unreachable.length ? 'No sessions from the reachable hosts.' : 'No Claude sessions running.'}
+            {allSessions(overmind).length > 0 ? 'Nothing matches.' : unreachable.length ? 'No sessions from the reachable hosts.' : 'No Claude sessions running.'}
           </div>
         ) : (
           <BoardColumns
@@ -97,8 +97,8 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
             onMoveColumn={onMoveColumn}
           />
         )}
-        {fleet ? <DormantSection now={now} hosts={hostSet} query={query} desktop className="max-h-full w-72 shrink-0 overflow-y-auto rounded-xl border border-dashed p-2" /> : null}
-        {fleet && columns.length && overlayInset ? <div aria-hidden className="shrink-0" style={{ width: overlayInset }} /> : null}
+        {overmind ? <DormantSection now={now} hosts={hostSet} query={query} desktop className="max-h-full w-72 shrink-0 overflow-y-auto rounded-xl border border-dashed p-2" /> : null}
+        {overmind && columns.length && overlayInset ? <div aria-hidden className="shrink-0" style={{ width: overlayInset }} /> : null}
       </div>
     </div>
   )

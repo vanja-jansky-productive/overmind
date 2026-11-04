@@ -294,7 +294,7 @@ export const FileDiff = memo(function FileDiff({
   const open = !collapsed && !viewed
   // A .plain spec reads as a spec by default; Diff shows its lines.
   const hasSpec = !!file.plain && (file.plain.new != null || file.plain.old != null)
-  const [plainView, setPlainView] = usePersistentState<'spec' | 'diff'>('fleet.plainView', 'spec', parsePlainView)
+  const [plainView, setPlainView] = usePersistentState<'spec' | 'diff'>('overmind.plainView', 'spec', parsePlainView)
   const spec = hasSpec && plainView === 'spec'
   return (
     <section

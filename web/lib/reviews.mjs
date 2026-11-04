@@ -9,7 +9,7 @@
 // `submit`, which sends them all in one prompt (each still with its own marker, so every thread
 // gets the answer to the review).
 //
-// Storage: one JSON file per session under `<state>/fleet/reviews/<session_id>.json` on the
+// Storage: one JSON file per session under `<state>/overmind/reviews/<session_id>.json` on the
 // session's host (dir 0700, files 0600, atomic temp + rename). Replies are copied into the file
 // as they are read, so a thread keeps its answer after the transcript window moves on.
 import { randomBytes } from 'node:crypto';

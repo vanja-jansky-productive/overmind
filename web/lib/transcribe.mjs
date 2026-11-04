@@ -20,7 +20,7 @@ const MISS_TTL_MS = 60 * 1000;
 
 // Steers the model: Latin script for Croatian (it otherwise drifts to Cyrillic), and the
 // vocabulary of a coding session. The UI adds the session's own words (name, repo).
-const BASE_PROMPT = 'Glasovna poruka za AI coding agenta, hrvatski ili engleski, latinica. Pojmovi: Claude, fleet, tmux, commit, PR, branch.';
+const BASE_PROMPT = 'Glasovna poruka za AI coding agenta, hrvatski ili engleski, latinica. Pojmovi: Claude, overmind, tmux, commit, PR, branch.';
 // Voice memos: a conversation between people, not a prompt.
 export const MEMO_PROMPT = 'Razgovor kolega o poslu i idejama, hrvatski ili engleski, latinica.';
 

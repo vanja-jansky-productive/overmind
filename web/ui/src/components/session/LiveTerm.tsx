@@ -17,7 +17,7 @@ const CHAR_EM = 0.6
 export interface LiveTermProps {
   host: string
   id: string
-  /** px at the default text size (`fleet.termFont`): the largest size used; smaller to fit the width. */
+  /** px at the default text size (`overmind.termFont`): the largest size used; smaller to fit the width. */
   fontSize: number
   /** The pane can't be mirrored (not tmux) — the caller falls back to the text view. */
   onUnsupported: () => void

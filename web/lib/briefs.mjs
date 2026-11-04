@@ -10,7 +10,7 @@
 //     brief plus ONLY the conversation since `generatedThrough`, heavily truncated.
 // Model calls are the expensive part, so they are gated hard: an idle session (≥ idleMs), new
 // content (≥ minNewTurns user turns or ≥ minNewChars), ≥ minIntervalMs since that session's last
-// call, one call at a time fleet-host-wide, ≤ maxCallsPerHour. Each call is logged `[briefs] …`.
+// call, one call at a time overmind-host-wide, ≤ maxCallsPerHour. Each call is logged `[briefs] …`.
 import { promises as fsp } from 'node:fs';
 import fs from 'node:fs';
 import crypto from 'node:crypto';

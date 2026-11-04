@@ -31,12 +31,12 @@ import { editorUrl, editorViewer, withBriefEditor } from '../lib/editor.mjs';
 import { run } from '../lib/run.mjs';
 import { createApi } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
-import { createFleet } from '../lib/fleet.mjs';
-import { createFleetCli } from '../lib/fleet-cli.mjs';
+import { createOvermind } from '../lib/overmind.mjs';
+import { createOvermindCli } from '../lib/overmind-cli.mjs';
 
 const SID = 'aaaaaaaa-1111-2222-3333-444444444444';
 
-function tmpdir(t, prefix = 'fleet-briefs-') {
+function tmpdir(t, prefix = 'overmind-briefs-') {
   const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   t.after(() => fs.rmSync(d, { recursive: true, force: true }));
   return d;
@@ -288,8 +288,8 @@ test('extract: origin comes from the first prompt and carries down a continue ch
 });
 
 test('extract: URL filter drops local, templated and schema links', () => {
-  assert.deepEqual(extractUrls('a http://127.0.0.1:7777/api b https://x.io/{id} c https://www.w3.org/2000/svg d https://ok.dev/p).').map((u) => u.url), ['https://ok.dev/p']);
-  const lan = 'http://192.0.2.1:7777 http://laptop:7777 http://laptop.example-tailnet.ts.net:7777 http://nas.local/x https://github.com/…/pull/1';
+  assert.deepEqual(extractUrls('a http://127.0.0.1:7878/api b https://x.io/{id} c https://www.w3.org/2000/svg d https://ok.dev/p).').map((u) => u.url), ['https://ok.dev/p']);
+  const lan = 'http://192.0.2.1:7878 http://laptop:7878 http://laptop.example-tailnet.ts.net:7878 http://nas.local/x https://github.com/…/pull/1';
   assert.deepEqual(extractUrls(lan), [], 'private-network servers and truncated URLs');
 });
 
@@ -613,7 +613,7 @@ test('briefs: store writes atomically and rejects ids that are not file names', 
 // ------------------------------------------------------------------ claude -p runner
 
 function fakeClaude(t, script) {
-  const dir = tmpdir(t, 'fleet-fake-claude-');
+  const dir = tmpdir(t, 'overmind-fake-claude-');
   const bin = path.join(dir, 'claude');
   fs.writeFileSync(bin, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
   return { bin, dir };
@@ -621,7 +621,7 @@ function fakeClaude(t, script) {
 
 test('claude runner: flags, prompt on stdin, neutral cwd', async (t) => {
   const { bin, dir } = fakeClaude(t, `echo "ARGS $*" > "$(dirname "$0")/args"; pwd > "$(dirname "$0")/cwd"; cat > "$(dirname "$0")/stdin"; printf '## Summary\\nok\\n'`);
-  const neutral = tmpdir(t, 'fleet-neutral-');
+  const neutral = tmpdir(t, 'overmind-neutral-');
   const ask = createClaudeAsk({ bin, run, cwd: neutral });
   assert.equal(await ask({ prompt: 'hello brief', model: 'haiku' }), '## Summary\nok\n');
   assert.equal(fs.readFileSync(path.join(dir, 'args'), 'utf8').trim(), 'ARGS -p --model haiku --no-session-persistence --strict-mcp-config --disallowed-tools Bash,Edit,Write,Read,WebFetch,WebSearch,Task');
@@ -657,7 +657,7 @@ test('gitInfo: branch and checkout root from one rev-parse', async () => {
 test('config: web.briefs defaults (off), overrides, validation, env, dir', () => {
   const home = '/home/tester';
   const d = normalizeConfig({}, { env: {}, home });
-  assert.deepEqual(d.briefs, { ...DEFAULT_BRIEFS, dir: '/home/tester/.local/state/fleet/briefs' });
+  assert.deepEqual(d.briefs, { ...DEFAULT_BRIEFS, dir: '/home/tester/.local/state/overmind/briefs' });
   assert.equal(d.briefs.enabled, false);
   const c = normalizeConfig({ web: { briefs: { enabled: true, model: 'claude-haiku-4-5', minIntervalMs: 60000, maxCallsPerHour: 3 } } }, { env: {}, home });
   assert.equal(c.briefs.enabled, true);
@@ -668,10 +668,10 @@ test('config: web.briefs defaults (off), overrides, validation, env, dir', () =>
   assert.throws(() => normalizeConfig({ web: { briefs: { enabled: 'yes' } } }, { env: {}, home }), /briefs\.enabled/);
   assert.throws(() => normalizeConfig({ web: { briefs: { model: 'haiku; rm -rf' } } }, { env: {}, home }), /briefs\.model/);
   assert.throws(() => normalizeConfig({ web: { briefs: { maxCallsPerHour: -1 } } }, { env: {}, home }), /maxCallsPerHour/);
-  assert.equal(normalizeConfig({}, { env: { FLEET_WEB_BRIEFS: '1' }, home }).briefs.enabled, true);
-  assert.equal(normalizeConfig({ web: { briefs: { enabled: true } } }, { env: { FLEET_WEB_BRIEFS: 'off' }, home }).briefs.enabled, false);
-  assert.equal(briefsDir({ FLEET_BRIEFS_DIR: '~/b' }, home), '/home/tester/b');
-  assert.equal(briefsDir({ XDG_STATE_HOME: '/state' }, home), '/state/fleet/briefs');
+  assert.equal(normalizeConfig({}, { env: { OVERMIND_WEB_BRIEFS: '1' }, home }).briefs.enabled, true);
+  assert.equal(normalizeConfig({ web: { briefs: { enabled: true } } }, { env: { OVERMIND_WEB_BRIEFS: 'off' }, home }).briefs.enabled, false);
+  assert.equal(briefsDir({ OVERMIND_BRIEFS_DIR: '~/b' }, home), '/home/tester/b');
+  assert.equal(briefsDir({ XDG_STATE_HOME: '/state' }, home), '/state/overmind/briefs');
 });
 
 // ------------------------------------------------------------------ HTTP
@@ -703,8 +703,8 @@ test('api: GET / PUT / regenerate, locally and through a peer; gone sessions kee
       { self: name, hosts: { laptop: { ssh: null, web: hosts.laptop.url }, workstation: { ssh: 'workstation', web: hosts.workstation.url } } },
       { env: {}, home: '/home/tester' },
     );
-    const cli = createFleetCli({ run: async () => ({ stdout: JSON.stringify(name === 'workstation' ? sessions : []), stderr: '' }) });
-    const api = createApi({ config, fleet: createFleet({ cli, self: name, ttlMs: 0 }), backend: {}, transcripts: {}, spawner: {}, briefs: name === 'workstation' ? briefs : null, warmFleet: false });
+    const cli = createOvermindCli({ run: async () => ({ stdout: JSON.stringify(name === 'workstation' ? sessions : []), stderr: '' }) });
+    const api = createApi({ config, overmind: createOvermind({ cli, self: name, ttlMs: 0 }), backend: {}, transcripts: {}, spawner: {}, briefs: name === 'workstation' ? briefs : null, warmOvermind: false });
     hosts[name].setHandle(api);
   }
   const base = `${hosts.laptop.url}/api/hosts/workstation/sessions/${SID.slice(0, 8)}/brief`;
@@ -724,8 +724,8 @@ test('api: GET / PUT / regenerate, locally and through a peer; gone sessions kee
   assert.equal(body.editorUrl, `vscode://vscode-remote/ssh-remote+workstation${fx.cwd}`);
   const direct = await (await fetch(`${hosts.workstation.url}/api/hosts/workstation/sessions/${SID}/brief`)).json();
   assert.equal(direct.editorUrl, `vscode://file${fx.cwd}`);
-  const fleetBody = await (await fetch(`${hosts.laptop.url}/api/fleet`)).json();
-  const row = fleetBody.hosts.find((h) => h.name === 'workstation').sessions[0];
+  const overmindBody = await (await fetch(`${hosts.laptop.url}/api/overmind`)).json();
+  const row = overmindBody.hosts.find((h) => h.name === 'workstation').sessions[0];
   assert.equal(row.editorUrl, `vscode://vscode-remote/ssh-remote+workstation${fx.cwd}`, 'session rows carry the link too');
 
   res = await fetch(base, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ markdown: '## Summary\nhand written\n\n## Plan\n- [ ] one\n' }) });
@@ -852,7 +852,7 @@ test('briefs: legacy Branch / Worktree auto lines migrate to one Git line on the
 
 test('editor: links are built for the machine the browser is on', () => {
   const cfg = { self: 'workstation', editor: 'vscode', sshHosts: { laptop: 'lt' }, hostAddrs: { laptop: '100.0.0.1', workstation: '100.0.0.2' }, editorSsh: null };
-  const req = (addr, host = '100.0.0.2:7777') => ({ socket: { remoteAddress: addr }, headers: { host } });
+  const req = (addr, host = '100.0.0.2:7878') => ({ socket: { remoteAddress: addr }, headers: { host } });
   const url = (r, host, p = '/w/p') => editorUrl(editorViewer(cfg, r, { user: 'me' }), host, p);
   // On the server's own machine (loopback, or its own tailnet address): local folders.
   assert.equal(url(req('127.0.0.1'), 'workstation'), 'vscode://file/w/p');
@@ -864,14 +864,14 @@ test('editor: links are built for the machine the browser is on', () => {
   // web.editorSsh wins over the guess; an unknown machine (a phone) gets ssh links for all.
   assert.equal(editorUrl(editorViewer({ ...cfg, editorSsh: 'ws' }, req('100.0.0.1')), 'workstation', '/p'), 'vscode://vscode-remote/ssh-remote+ws/p');
   assert.equal(url(req('100.0.0.9'), 'laptop'), 'vscode://vscode-remote/ssh-remote+lt/w/p');
-  assert.equal(url(req('100.0.0.9', '[fd00::1]:7777'), 'workstation'), null, 'an IPv6 literal is not a usable destination');
+  assert.equal(url(req('100.0.0.9', '[fd00::1]:7878'), 'workstation'), null, 'an IPv6 literal is not a usable destination');
   // Behind a local HTTPS proxy (`tailscale serve`): the forwarded address counts, the proxy's own does not.
   const proxied = (xff, host = 'ws.tailnet.ts.net:7443') => ({ socket: { remoteAddress: '127.0.0.1' }, headers: { host, 'x-forwarded-for': xff } });
   assert.equal(url(proxied('100.0.0.1'), 'laptop'), 'vscode://file/w/p');
   assert.equal(url(proxied('100.0.0.1'), 'workstation'), 'vscode://vscode-remote/ssh-remote+me@ws.tailnet.ts.net/w/p');
   assert.equal(url(proxied('100.0.0.9, 100.0.0.1'), 'laptop'), 'vscode://file/w/p', 'the last hop is the one the proxy added');
   assert.equal(url(proxied(''), 'workstation'), 'vscode://file/w/p', 'no forwarded address: loopback');
-  const remoteSpoof = { socket: { remoteAddress: '100.0.0.9' }, headers: { host: '100.0.0.2:7777', 'x-forwarded-for': '100.0.0.1' } };
+  const remoteSpoof = { socket: { remoteAddress: '100.0.0.9' }, headers: { host: '100.0.0.2:7878', 'x-forwarded-for': '100.0.0.1' } };
   assert.equal(url(remoteSpoof, 'laptop'), 'vscode://vscode-remote/ssh-remote+lt/w/p', 'X-Forwarded-For is trusted from loopback only');
   // No request: the config as is.
   assert.equal(editorViewer(cfg, null), cfg);
@@ -901,11 +901,11 @@ test('config: web.editor and the ssh aliases', () => {
   const d = normalizeConfig({}, { env: {}, home });
   assert.equal(d.editor, 'vscode');
   assert.deepEqual(d.sshHosts, {});
-  const c = normalizeConfig({ self: 'laptop', hosts: { laptop: { ssh: null }, workstation: { ssh: ' workstation ', web: 'http://100.x.y.z:7777' } }, web: { editor: 'cursor' } }, { env: {}, home });
+  const c = normalizeConfig({ self: 'laptop', hosts: { laptop: { ssh: null }, workstation: { ssh: ' workstation ', web: 'http://100.x.y.z:7878' } }, web: { editor: 'cursor' } }, { env: {}, home });
   assert.equal(c.editor, 'cursor');
   assert.deepEqual(c.sshHosts, { workstation: 'workstation' });
   // A web-only peer gets its editor alias from `editorSsh`, which also wins over `ssh`.
-  const e = normalizeConfig({ self: 'laptop', hosts: { laptop: { ssh: null }, office: { ssh: null, web: 'http://100.x.y.z:7777', editorSsh: 'office' }, ws: { ssh: 'ws', editorSsh: 'ws-alt' } } }, { env: {}, home });
+  const e = normalizeConfig({ self: 'laptop', hosts: { laptop: { ssh: null }, office: { ssh: null, web: 'http://100.x.y.z:7878', editorSsh: 'office' }, ws: { ssh: 'ws', editorSsh: 'ws-alt' } } }, { env: {}, home });
   assert.deepEqual(e.sshHosts, { office: 'office', ws: 'ws-alt' });
   assert.equal(normalizeConfig({ web: { editor: null } }, { env: {}, home }).editor, null);
   assert.throws(() => normalizeConfig({ web: { editor: 'vim' } }, { env: {}, home }), /web\.editor/);

@@ -95,7 +95,7 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
   const panel = p.variant === 'panel'
   const [naming, setNaming] = useState(false)
 
-  // Regenerate: a fresh model-picked name for this session (`fleet name <id> --apply --refresh`).
+  // Regenerate: a fresh model-picked name for this session (`overmind name <id> --apply --refresh`).
   const regenerate = async () => {
     if (naming) return
     setNaming(true)

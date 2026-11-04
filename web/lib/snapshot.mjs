@@ -1,6 +1,6 @@
-// A warm, stale-while-revalidate snapshot of the merged fleet.
+// A warm, stale-while-revalidate snapshot of the merged overmind.
 //
-// Building the merged fleet means local discovery (`fleet list --json`: one `ps` per
+// Building the merged overmind means local discovery (`overmind list --json`: one `ps` per
 // session plus an osascript for iTerm tab titles, ~1-2s on a busy laptop) and a round-trip
 // to every peer. Instead of making each page load wait on the slowest host, the server
 // keeps the last merged result and refreshes it in the background every `refreshMs` for
@@ -49,7 +49,7 @@ export function createSnapshot({
         return snapshot;
       })
       .catch((err) => {
-        logError(err, 'fleet refresh');
+        logError(err, 'overmind refresh');
         if (!snapshot) throw err;
         return snapshot;
       })

@@ -126,7 +126,7 @@ const under = (cwd: string, dir: string) => cwd === dir || cwd.startsWith(dir.en
 
 /**
  * Sessions ↔ PRs, on any host: a session in a linked worktree of the PR's repo, on its head
- * branch (`pr-<n>` for a fork's PR, as `fleet pr checkout` names it), works on that PR. A
+ * branch (`pr-<n>` for a fork's PR, as `overmind pr checkout` names it), works on that PR. A
  * session from an older CLI (no `git`) falls back to the PR host's worktree paths: on `prHost`,
  * its cwd is a PR's worktree or inside it (the deepest one wins). A repo's main checkout never
  * links: it is on some PR's branch now and then, while its sessions do anything.

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { clockTime } from '@/lib/format'
 
 /**
- * The end of a conversation whose agent reported its work finished (`fleet done`): its note, when,
+ * The end of a conversation whose agent reported its work finished (`overmind done`): its note, when,
  * and Close. Close takes two taps (the first arms it for 5s), like Close in the details panel.
  */
 export function DoneCard({ done, now, onClose }: { done: SessionDone; now: number; onClose?: () => Promise<void> }) {

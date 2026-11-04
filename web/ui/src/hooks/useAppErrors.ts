@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { copyWithToast } from '@/lib/clipboard'
 import { APP_ERROR_EVENT, type AppError } from '@/lib/shortcuts'
 
-/** Show Fleet.app's `fleet:error` events as error toasts; one with a command offers to copy it. */
+/** Show Overmind.app's `overmind:error` events as error toasts; one with a command offers to copy it. */
 export function useAppErrors() {
   useEffect(() => {
     const onError = (e: Event) => {
