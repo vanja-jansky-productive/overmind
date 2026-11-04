@@ -101,7 +101,8 @@ The server reads the **shared overmind config** written by `overmind init`:
 Env overrides: `OVERMIND_CONFIG`, `OVERMIND_WEB_PORT` (or `PORT`), `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
 `OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` / `OVERMIND_WEB_WATCH` (`0`/`false`/`off`/`no` disables, anything else enables;
 `OVERMIND_WEB_STACKS` only turns the background stack sync off — the routes keep working),
-`OVERMIND_BRIEFS_DIR` (where brief files live), `OVERMIND_BIN`, `OVERMIND_TMUX`. The CLI reads `OVERMIND_STACKS_DIR` (where StackBriefs live).
+`OVERMIND_BRIEFS_DIR` (where brief files live), `OVERMIND_BIN`, `OVERMIND_TMUX`. The CLI reads `OVERMIND_STACKS_DIR` (where StackBriefs live);
+both read `OVERMIND_CODEX_HOOKS_DIR` (Codex hook sidecars: the CLI for `waiting`, the watcher as a root).
 
 Missing config → runs as a single host `local` on 127.0.0.1 and logs a hint to run
 `overmind init`. A config that exists but is not valid JSON / has a bad shape → exits with code
@@ -424,7 +425,8 @@ on a 14-session host; every 3 s that was ~5 % of a core). lib/watch.mjs watches 
 and classifies each event: **fast** — `~/.claude/sessions/<pid>.json` (a row appears or goes,
 busy/idle/waiting; headless `claude -p` registrations and `.key` files ignored),
 `~/.claude/overmind-names.json` (only when its content changed: `list` rewrites it), `done.json`,
-the stacks dir; **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
+the stacks dir, the Codex hook sidecars (`<state>/codex-hooks/<thread>.json`, the hook's `*.tmp` before
+its rename ignored; armed by `rearm()` once `codex hooks install` made the dir); **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
 and `<sid>/…`), Codex rollouts and `session_index.jsonl`, pi sessions (any new one while a session of
 that harness has no transcript yet). `snapshot.json*` and its lock (written by `list`) never signal.
 Each class is coalesced 250 ms, then marks the list dirty with `dueAt` = last run start +

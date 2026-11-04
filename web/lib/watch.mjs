@@ -4,7 +4,8 @@
 // Every event is classified, coalesced per class for `coalesceMs`, then reported once:
 //   fast  the Claude registry (`~/.claude/sessions/<pid>.json`: a row appears or goes, busy /
 //         idle / waiting), the names cache (`~/.claude/overmind-names.json`, only when its
-//         content changed), `done.json` and the stacks dir
+//         content changed), `done.json`, the stacks dir and the Codex approval-hook sidecars
+//         (`<state>/codex-hooks/<thread>.json`: a Codex row starts or stops waiting)
 //   slow  transcripts of live sessions (`~/.claude/projects/<enc>/<sid>.jsonl` and `<sid>/…`),
 //         Codex rollouts and `session_index.jsonl`, pi sessions
 // What has no file signal (tmux/iTerm tab names, branches, a crashed process, a Codex start
@@ -32,7 +33,8 @@ const REGISTRY_RE = /^[^.]+\.json$/; // `<pid>.json`, not `<pid>.<hash>.key` or 
 /**
  * The directories to watch, as the CLI resolves them: `~/.claude` (HOME, not CLAUDE_CONFIG_DIR —
  * `claude_home()`), `$CODEX_HOME`, `$PI_CODING_AGENT_DIR`, the state dir (`done.json`,
- * `$OVERMIND_DONE_STATE`), `$OVERMIND_STACKS_DIR`. `required`: without it there is no signal
+ * `$OVERMIND_DONE_STATE`), `$OVERMIND_STACKS_DIR`, `$OVERMIND_CODEX_HOOKS_DIR` (`sidecar_dir()` in
+ * core/codex_hooks.rs: used as given, no `~`). `required`: without it there is no signal
  * for new rows, so the watcher reports `degraded` (and the caller falls back to its TTL).
  */
 export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) {
@@ -42,6 +44,7 @@ export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) 
   const state = overmindStateDir(env, home);
   const done = env.OVERMIND_DONE_STATE ? path.resolve(expandHome(env.OVERMIND_DONE_STATE, home)) : path.join(state, 'done.json');
   const stacks = env.OVERMIND_STACKS_DIR ? path.resolve(expandHome(env.OVERMIND_STACKS_DIR, home)) : path.join(state, 'stacks');
+  const codexHooks = env.OVERMIND_CODEX_HOOKS_DIR ? path.resolve(env.OVERMIND_CODEX_HOOKS_DIR) : path.join(state, 'codex-hooks');
   return [
     { id: 'sessions', dir: path.join(claude, 'sessions'), kind: 'registry', required: true },
     { id: 'claude', dir: claude, kind: 'file', file: 'overmind-names.json', compare: true },
@@ -50,6 +53,8 @@ export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) 
     { id: 'stacks', dir: stacks, kind: 'dir' },
     { id: 'codex', dir: path.join(codex, 'sessions'), kind: 'transcripts', recursive: true, harness: 'codex' },
     { id: 'codex-index', dir: codex, kind: 'file', file: 'session_index.jsonl', cls: 'slow' },
+    // `<id>.json.tmp` then a rename (`write_sidecar`): `dir` drops the temp, so one write is one signal.
+    { id: 'codex-hooks', dir: codexHooks, kind: 'dir', cls: 'fast' },
     { id: 'pi', dir: path.join(pi, 'sessions'), kind: 'transcripts', recursive: true, harness: 'pi' },
   ];
 }

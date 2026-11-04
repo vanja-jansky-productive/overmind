@@ -82,8 +82,10 @@ test('discoveryRoots follows the CLI: HOME, CODEX_HOME, PI_CODING_AGENT_DIR, XDG
   assert.equal(r.pi, path.join(HOME, '.pi/agent/sessions'));
   assert.equal(r.done, path.join(HOME, '.local/state/overmind'));
   assert.equal(r.stacks, path.join(HOME, '.local/state/overmind/stacks'));
+  assert.equal(r['codex-hooks'], path.join(HOME, '.local/state/overmind/codex-hooks'));
+  assert.equal(discoveryRoots({ env: { XDG_STATE_HOME: '/s' }, home: HOME }).find((x) => x.id === 'codex-hooks').dir, '/s/overmind/codex-hooks');
   const e = Object.fromEntries(
-    discoveryRoots({ env: { CODEX_HOME: '/c', PI_CODING_AGENT_DIR: '~/pi', XDG_STATE_HOME: '/s', OVERMIND_STACKS_DIR: '/st', OVERMIND_DONE_STATE: '/d/marks.json' }, home: HOME }).map((x) => [x.id, x]),
+    discoveryRoots({ env: { CODEX_HOME: '/c', PI_CODING_AGENT_DIR: '~/pi', XDG_STATE_HOME: '/s', OVERMIND_STACKS_DIR: '/st', OVERMIND_DONE_STATE: '/d/marks.json', OVERMIND_CODEX_HOOKS_DIR: '/h' }, home: HOME }).map((x) => [x.id, x]),
   );
   assert.equal(e.codex.dir, '/c/sessions');
   assert.equal(e['codex-index'].dir, '/c');
@@ -91,10 +93,11 @@ test('discoveryRoots follows the CLI: HOME, CODEX_HOME, PI_CODING_AGENT_DIR, XDG
   assert.equal(e.stacks.dir, '/st');
   assert.equal(e.done.dir, '/d');
   assert.equal(e.done.file, 'marks.json');
+  assert.equal(e['codex-hooks'].dir, '/h');
 });
 
 test('arms the roots that exist (recursive only for transcripts), skips missing ones, rearm() picks them up later', () => {
-  const { fs, w } = setup({ missing: ['codex', 'codex-index', 'pi', 'stacks'] });
+  const { fs, w } = setup({ missing: ['codex', 'codex-index', 'pi', 'stacks', 'codex-hooks'] });
   w.start();
   assert.deepEqual(fs.open().map((x) => x.dir).sort(), [dir('sessions'), dir('claude'), dir('projects'), dir('done')].sort());
   assert.equal(fs.open().find((x) => x.dir === dir('projects')).recursive, true);
@@ -175,6 +178,27 @@ test('state dir: done.json only — snapshot.json, its lock and temp files never
   assert.deepEqual(changes, ['fast']);
   fs.fire(dir('stacks'), 's-1.json');
   fs.fire(dir('stacks'), 's-1.json.tmp');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'fast']);
+});
+
+test('codex-hooks sidecars: the hook\'s temp write is dropped, its rename is one fast change; a dir made after start is armed by rearm()', () => {
+  const { fs, clock, changes, w } = setup({ missing: ['codex-hooks'] });
+  w.start();
+  const h = dir('codex-hooks');
+  assert.ok(!fs.open().some((x) => x.dir === h), 'missing before `codex hooks install` makes it');
+  fs.dirs.add(h);
+  w.rearm();
+  const id = '01a1a87a-0000-7000-8000-000000000000';
+  fs.fire(h, `${id}.json.tmp`);
+  fs.fire(h, '.DS_Store');
+  clock.flush();
+  assert.deepEqual(changes, [], 'temp and dot files never signal');
+  fs.fire(h, `${id}.json.tmp`);
+  fs.fire(h, `${id}.json`);
+  clock.flush();
+  assert.deepEqual(changes, ['fast'], 'one write (temp + rename) → one fast list');
+  fs.fire(h, `${id}.json`); // pruned after 1 h, or cleared
   clock.flush();
   assert.deepEqual(changes, ['fast', 'fast']);
 });

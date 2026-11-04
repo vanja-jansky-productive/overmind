@@ -32,10 +32,12 @@ on 127.0.0.1.
 
 Env overrides: `OVERMIND_CONFIG`, `OVERMIND_WEB_PORT` / `PORT`, `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
 `OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` / `OVERMIND_WEB_WATCH` (`0` / `1`), `OVERMIND_BRIEFS_DIR`, `OVERMIND_BIN`, `OVERMIND_TMUX`.
+`OVERMIND_CODEX_HOOKS_DIR` (read by the CLI too): where the Codex approval hook's sidecars live and the
+watcher looks for them (default `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks`).
 
 `web.discovery` (default `{ "watch": true, "safetySeconds": 30, "fastGapMs": 1000, "slowGapMs": 5000 }`)
 decides when the server runs `overmind list` for its own sessions: when a watched file changes
-(the Claude registry, names cache, `done.json`, stacks: at most every `fastGapMs`; transcripts of
+(the Claude registry, names cache, `done.json`, stacks, Codex hook sidecars: at most every `fastGapMs`; transcripts of
 live sessions, Codex/pi rollouts: at most every `slowGapMs`), and at least every `safetySeconds`
 while someone is asking (tmux/iTerm tab names and branches have no file to watch). Kill-switch:
 `OVERMIND_WEB_WATCH=0` (or `"watch": false`) lists on every 3 s refresh with a 2 s cache, as before

@@ -87,7 +87,7 @@ Every machine runs the same `server.mjs`. It:
   (`overmind web build`; until then `/` is a "not built" placeholder);
 - exposes **its own** sessions, discovered with `overmind list --json` — run when a watched file
   says something changed (the Claude registry, transcripts of live sessions, Codex/pi rollouts,
-  the names cache, `done.json`, stacks) and at least every 30 s while someone is asking, else the
+  the names cache, `done.json`, stacks, Codex hook sidecars) and at least every 30 s while someone is asking, else the
   last list is served; with `OVERMIND_WEB_WATCH=0` (or a failed watch) a 2 s TTL cache
   (see `web.discovery` below);
 - drives its own backends directly for peek/send/keys (it needs untruncated, header-free output);
@@ -146,7 +146,7 @@ server. Path: `$OVERMIND_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/overmind/c
 | `web.uploads` | `{ dir, maxMB, retentionDays }` (default `~/.local/share/overmind/uploads`, 100, 14): files dropped / pasted / picked in the web UI are stored there on the session's host as `YYYY-MM-DD/<rand>-<name>`, and their absolute path goes into the prompt; day dirs older than `retentionDays` are removed (`0` keeps them) |
 | `web.briefs` | `{ enabled, model, idleMs, minIntervalMs, maxDeltaChars, maxCallsPerHour, minNewTurns, minNewChars, maxBriefChars }` (default off, `haiku`, 60 s, 15 min, 12000, 12, 2, 2000, 3000): background generation of [session briefs](#session-briefs) on this host; reading and editing briefs (and a manual regenerate) work either way |
 | `web.stacks` | `{ syncMinutes }` (default 2): how often this host's web server runs `overmind stack sync` while any of its sessions is in a [stack](#session-stacks) |
-| `web.discovery` | `{ watch, safetySeconds, fastGapMs, slowGapMs }` (default `true`, 30, 1000, 5000; a wrong type or a value below 1 / 0 / 0 fails at start): `watch` runs `overmind list` for this host's sessions when a watched file changes — at most every `fastGapMs` after the last list for the registry, names cache, `done.json` and stacks, every `slowGapMs` for transcripts — and at least every `safetySeconds` while someone is asking; `false` (or `OVERMIND_WEB_WATCH=0`) is the kill-switch: a list on every 3 s tick behind a 2 s cache |
+| `web.discovery` | `{ watch, safetySeconds, fastGapMs, slowGapMs }` (default `true`, 30, 1000, 5000; a wrong type or a value below 1 / 0 / 0 fails at start): `watch` runs `overmind list` for this host's sessions when a watched file changes — at most every `fastGapMs` after the last list for the registry, names cache, `done.json`, stacks and Codex hook sidecars, every `slowGapMs` for transcripts — and at least every `safetySeconds` while someone is asking; `false` (or `OVERMIND_WEB_WATCH=0`) is the kill-switch: a list on every 3 s tick behind a 2 s cache |
 | `web.memos` | `{ dir, audioDir, model, vocabulary }` (default `~/.local/share/overmind/memos`, `~/.local/share/overmind/memo-audio`, `haiku`, `[]`): voice memos (`#/memos`). Each memo is `dir/<date>-<slug>.md` (frontmatter `title`, `created`, `duration`, `recording`, `status`; the transcript as the body), so `dir` can be a folder in a notes repo; segment audio stays in `audioDir`. `model` titles them via `claude -p`; `vocabulary` (names, projects, tools — up to ~1500 chars) steers the spelling of every segment's transcription. Needs the transcription key |
 | `web.notes` | `{ root, name?, searchCmd?, exclude? }` (default off): the web UI's notes explorer (`#/notes`) over the markdown notes under `root` on this host — browse, full-text search (built in, or an external `searchCmd` such as `rg -n -i -F {query}`), preview with `[[wiki]]` / relative links between notes; hidden entries, `node_modules`, `.gitignore`d paths and age-encrypted blocks are never served (web/ARCHITECTURE.md → notes). Peers browse each other's notes through the usual proxy |
 | `web.operator` | `{ hosts?, model?, voice?, clearIdleMinutes? }` (default `[self]`, Claude's default model, `alloy`, 60): the [voice operator](#voice-operator) — `hosts`: where it runs, the first that answers (set the same list on every machine so all talk to one operator); the model its Claude session runs; the OpenAI voice that reads its replies; `/clear` after that many idle minutes (0 = never) |
@@ -180,7 +180,7 @@ the single host `local`, and remote features say "run `overmind init`"; a presen
 an error.
 
 Env overrides for the web server: `OVERMIND_WEB_PORT` (or `PORT`), `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
-`OVERMIND_WEB_AUTONAME`, `OVERMIND_WEB_GROUPING`, `OVERMIND_WEB_BRIEFS`, `OVERMIND_WEB_WATCH`, `OVERMIND_BRIEFS_DIR`, `OVERMIND_STACKS_DIR`, `OVERMIND_BIN`, `OVERMIND_TMUX` — see [web/README.md](../web/README.md).
+`OVERMIND_WEB_AUTONAME`, `OVERMIND_WEB_GROUPING`, `OVERMIND_WEB_BRIEFS`, `OVERMIND_WEB_WATCH`, `OVERMIND_BRIEFS_DIR`, `OVERMIND_STACKS_DIR`, `OVERMIND_CODEX_HOOKS_DIR`, `OVERMIND_BIN`, `OVERMIND_TMUX` — see [web/README.md](../web/README.md).
 
 ## Session discovery
 
