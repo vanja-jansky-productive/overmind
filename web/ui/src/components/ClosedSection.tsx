@@ -6,8 +6,8 @@ import { ArmButton } from '@/components/DormantSection'
 import { HostBadge } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
 import { useDormant } from '@/hooks/useDormant'
-import { useNow } from '@/hooks/useNow'
-import { byActivity, closedMeta, dormantTitles, searchDormant } from '@/lib/dormant'
+import { useAgoNow } from '@/hooks/useNow'
+import { byActivity, closedMeta, dormantTitles, searchDormant, sinceMs } from '@/lib/dormant'
 import { cn } from '@/lib/utils'
 
 /**
@@ -72,7 +72,7 @@ function ClosedRow({
   onResume: () => void
   onForget: () => void
 }) {
-  const now = useNow(1000)
+  const now = useAgoNow(sinceMs(v.closedAt ?? v.since))
   const titles = dormantTitles(v)
   const how = v.kind === 'tmux' ? 'Recreate the tmux session and resume its Claude sessions' : v.tmuxSession ? `Resume it in a new window of ${v.tmuxSession}` : 'Resume it in a new tmux session'
   return (

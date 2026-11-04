@@ -5,8 +5,8 @@ import type { DormantView } from '@/api/types'
 import { HostBadge } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
 import { useDormant } from '@/hooks/useDormant'
-import { useNow } from '@/hooks/useNow'
-import { byActivity, dormantMeta, dormantTitles, searchDormant } from '@/lib/dormant'
+import { useAgoNow } from '@/hooks/useNow'
+import { byActivity, dormantMeta, dormantTitles, searchDormant, sinceMs } from '@/lib/dormant'
 import { cn } from '@/lib/utils'
 
 /**
@@ -145,7 +145,7 @@ function DormantRow({
   onResume: () => void
   onForget: () => void
 }) {
-  const now = useNow(1000)
+  const now = useAgoNow(sinceMs(v.since))
   const titles = dormantTitles(v)
   return (
     <div className="rounded-lg border border-dashed border-border/70 bg-card/50 px-3 py-2">

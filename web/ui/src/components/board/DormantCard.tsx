@@ -3,7 +3,7 @@ import { Loader2Icon, MoonIcon, PlayIcon } from 'lucide-react'
 import { HostBadge } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
 import { useDormant } from '@/hooks/useDormant'
-import { useNow } from '@/hooks/useNow'
+import { useAgoNow } from '@/hooks/useNow'
 import type { DormantMember } from '@/lib/dormant'
 import { relTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 export function DormantCard({ member: m, desktop = false }: { member: DormantMember; desktop?: boolean }) {
   const { busy, resume } = useDormant()
   const working = busy.has(`${m.host}/${m.id}`) || busy.has(`${m.host}/*`)
-  const now = useNow(1000)
+  const now = useAgoNow(m.since)
   const since = relTime(m.since, now)
   return (
     <div className={cn('flex items-center gap-2 rounded-lg border border-dashed border-border/70 px-3', desktop ? 'py-2' : 'min-h-14 py-2')}>

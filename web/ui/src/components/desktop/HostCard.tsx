@@ -3,7 +3,7 @@ import { CopyIcon, SquareTerminalIcon } from 'lucide-react'
 import type { Host } from '@/api/types'
 import { HostDot } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
-import { useNow } from '@/hooks/useNow'
+import { useAgoNow } from '@/hooks/useNow'
 import { useHostCheckedAt } from '@/hooks/useOvermind'
 import { copyWithToast, hostShellCommand, hostShellLink } from '@/lib/clipboard'
 import { relTime } from '@/lib/format'
@@ -18,7 +18,7 @@ export function HostCard({ host: h, self }: { host: Host; self: boolean }) {
   const down = h.ok === false
   // The host's own clock: its last answer, or last try when unreachable (no `fetchedAt`: the list's).
   const checkedAt = useHostCheckedAt(h.name)
-  const now = useNow(1000)
+  const now = useAgoNow(checkedAt)
   const checked = relTime(checkedAt, now)
   const link = hostShellLink(h.name)
   const cmd = hostShellCommand(h.name)

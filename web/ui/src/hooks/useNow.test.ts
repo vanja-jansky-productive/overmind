@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
-import { tickerNow, tickerSubscribe } from './useNow'
+import { AGO_FAST_MS, AGO_SLOW_MS, agoEvery, tickerNow, tickerSubscribe } from './useNow'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -48,4 +48,22 @@ test('a stopped clock reads fresh for its next first reader', () => {
   off()
   vi.advanceTimersByTime(120_000)
   expect(tickerNow(60_000)).toBe(Date.now())
+})
+
+test('a fast clock reads fresh after its own interval, not after a whole second', () => {
+  const off = tickerSubscribe(250, vi.fn())
+  off()
+  vi.advanceTimersByTime(300)
+  expect(tickerNow(250)).toBe(Date.now())
+})
+
+test('relative-time cadence: 1 s while a label shows seconds, 30 s once it shows minutes', () => {
+  const now = 10_000_000
+  expect(agoEvery(now, now - 59_999)).toBe(AGO_FAST_MS)
+  expect(agoEvery(now, now - 60_000)).toBe(AGO_SLOW_MS)
+  expect(agoEvery(now, now - 3 * 3_600_000)).toBe(AGO_SLOW_MS)
+  expect(agoEvery(now, now + 5_000)).toBe(AGO_FAST_MS) // ahead of the clock: "0s"
+  expect(agoEvery(now, null, undefined, 0)).toBe(AGO_SLOW_MS) // nothing shown
+  expect(agoEvery(now, now - 3_600_000, now - 2_000)).toBe(AGO_FAST_MS) // any young part of a composite
+  expect(agoEvery(now)).toBe(AGO_SLOW_MS)
 })
