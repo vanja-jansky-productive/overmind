@@ -18,6 +18,7 @@ const ROOT = path.resolve(import.meta.dirname, '../..')
 const PORT = 7798
 const BASE = `http://127.0.0.1:${PORT}/`
 
+// Session ids and ready texts are the demo data of scripts/guide/mock.mjs: change them together.
 const SCENARIOS = {
   // DesktopShell, no session open.
   list: { hash: '#/', ready: 'Invoice rounding fix', context: { viewport: { width: 1440, height: 900 } } },

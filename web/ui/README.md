@@ -37,7 +37,6 @@ src/
   lib/sessions.ts     status meta/labels, filters, search, sort, listView(), findSession(), sessionHref(),
                       spawnTargets(), findSpawned(), withoutSession(), clusterByStack() (a stack's rows adjacent),
                       overmindKey() / nextOvermind() (a poll that only moved the clocks keeps the old object)
-  lib/stamp.ts        createStamp() / useStamp(): a timestamp in a tiny store — per-poll clocks live here, not in state
   lib/chat.ts         detail-view constants + pure helpers (sizes, limits, grouping, interim notes)
   lib/markdown.ts     safe markdown → AST, linkify()
   lib/autoname.ts     naming-pass summaries for toasts / the menu
@@ -131,17 +130,21 @@ src/
   hooks/useNotes.ts   useNotesHosts() (hosts whose overmind entry has `notes`), useNotesTree() (cached, 30s poll),
                       useNotesSearch() (debounced, aborts the previous), useNoteFile()
   hooks/useOutbox.ts  the session screen's Outbox: keepalive POSTs, flush on unmount / background, pagehide hand-off
-  hooks/useNow.ts     useNow(ms): one shared clock per interval (one timer, cached tick); <Ago at every> (components/Ago.tsx)
+  hooks/useNow.ts     useNow(ms): one shared clock per interval (one timer, cached tick); useAgoNow(at…) /
+                      agoEvery(): 1 s while a relative time shows seconds, 30 s after
+  hooks/useStamp.ts   createStamp() / useStamp(): a forward-only timestamp in a tiny store — per-poll clocks
+                      live here, not in state
                       is the text leaf over it
   hooks/useSettings.ts, useTheme.ts, usePrefs.ts, usePersistentState.ts
   hooks/useJobs.ts    useJobs() (every reachable host's GET …/jobs, 30s poll, patch() for the enabled switch),
                       useJobShow(host, name, enabled) (one job's runs, 15s poll while expanded)
   hooks/useDormant.ts DormantContext / useDormant(): hosts with dormant / recently closed sessions, index, resume / resumeAll / forget, resumeClosed / forgetClosed
   providers/          DormantProvider (polls every reachable host's /dormant every 30s; restore / forget + toasts),
-                      OvermindProvider (polls /api/overmind every 5s), SettingsProvider (/api/settings once), ThemeProvider,
+                      OvermindProvider (polls /api/overmind every 5s; its state machine is overmindFeed.ts),
+                      SettingsProvider (/api/settings once), ThemeProvider,
                       PrefsProvider (text size → <html> font-size, terminal text, progress notes)
   components/ui/      shadcn components — generated, edit sparingly; add with `npx shadcn@latest add <name>`
-  components/         app components: StatusDot, HostBadge/HostDot, SessionRow, EditableTitle, SessionListSkeleton, ScreenHeader,
+  components/         app components: StatusDot, HostBadge/HostDot, SessionRow, Ago ("5s" since `at`, its own clock), EditableTitle, SessionListSkeleton, ScreenHeader,
                       Markdown/Linkified, NewSessionDrawer, ViewToggle (List | Board), DropOverlay,
                       DormantSection (under the list / sidebar, last board column: Resume, Forget, Resume all; ArmButton),
                       ClosedSection (under DormantSection in the list / sidebar, collapsed: recently closed, Resume / Forget),
@@ -153,7 +156,7 @@ src/
   components/stack/   StackUi (mounted once in App: the sheet + the sibling form), StackSheet, StackChip (list rows),
                       StackColumnMenu (board column / mobile section ⋯), StackBar (under the session header)
   components/session/ detail screen parts: ChatView, TermView, LiveTerm, Composer, OutboxBubbles (pending / sending / sent /
-                      failed user bubbles; the terminal view's strip), FilePreview, DetailsPanel (the desktop
+                      failed user bubbles; the terminal view's strip), FilePreview, UpdatedAgo (header "· 5s ago"), DetailsPanel (the desktop
                       details column) / DetailsDrawer (mobile ⋯), BriefSection (its top), LatestButton
   components/desktop/ Sidebar (+ SidebarRail when collapsed, NotesLink), CommandPalette (⌘K), ShortcutsDialog (⌘?)
   components/review/  FileDiff (one file's card: unified / split hunks, Viewed, line-number selection, threads under
@@ -176,11 +179,16 @@ src/
   `useOvermind()` (`overmind`, `error`, `refreshing` (an explicit `refresh()` only), `refresh()`, `applyOvermind()`).
   A poll that brings nothing new (clocks aside) changes no state; the clocks are stamps (`useOvermindAt()`,
   `useHostCheckedAt()`) read by the leaf that shows them.
-- **Clocks**: a relative time ("5s ago") is a leaf that reads the clock itself — `<Ago at={…} />` or
-  `useNow(ms)` in the smallest component that shows it. Never pass `now` as a prop: a clock above a list
-  re-renders the whole list every tick.
   Per-screen loops (messages, peek) use `usePoller(fn, ms)` — `fn` gets an `AbortSignal`; pass it to
   the `api.*` call. Never `setInterval` + fetch.
+- **Clocks**: a relative time ("5s ago") is a leaf that reads the clock itself — `<Ago at={…} />`, or
+  `useAgoNow(at…)` for a composite line built with `relTime` (both tick every second while the label
+  shows seconds, every 30 s once it shows minutes), or `useNow(ms)` for anything else — in the smallest
+  component that shows it. On the always-mounted surfaces (shell, top bar, session list, board,
+  session screen) no `now` prop crosses a component boundary: a clock above a list re-renders the
+  whole list every tick. Some secondary screens (Inbox, Memos, Usage, Embed, Settings → Repos, the
+  stack sheet) still hand rows a `now` from one slow (30 s+) screen clock; move them to leaves when
+  you next change them, and never add a new one.
 - **Colours**: tokens in `src/index.css` — shadcn's (`background`, `card`, `muted-foreground`, …)
   plus `dimmer`, `status-{waiting,busy,idle,unknown,error}` and `host-{0..3}`. Use them as Tailwind
   classes (`text-status-busy`, `bg-host-2/10`); keep class names literal (maps in `lib/styles.ts`).

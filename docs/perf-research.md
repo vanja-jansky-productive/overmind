@@ -134,8 +134,9 @@ The frameworks figures are js-framework-benchmark results, Chrome 156 run of Oct
 
 ## Render hygiene shipped (#36)
 
-Recommendation 1 without the `memo`: a shared clock per interval (`useNow`, `<Ago>`), clocks that move on
-every poll kept in stamps instead of state, and polls that bail out on unchanged data (overmind,
+Recommendation 1 without the `memo`: a shared clock per interval (`useNow`, `<Ago>`), relative times
+that tick every second only while they show seconds (every 30 s once they show minutes), clocks that
+move on every poll kept in stamps instead of state, and polls that bail out on unchanged data (overmind,
 chat / peek, brief, Slack, focus, dormant). `refreshing` shows only for an explicit refresh.
 
 Measured with `scripts/perf/idle-cpu.mjs`: the demo API with a frozen clock (`GUIDE_FREEZE=1`, every
@@ -144,15 +145,20 @@ the `main` build and `after` is the branch build, both through the same harness 
 
 | Scenario | before (CPU s / 60 s) | after | after / before | idle requests (both) |
 | --- | --- | --- | --- | --- |
-| `list`: 1440×900, no session open | 1.24 | 0.47 | 0.38 | 27 |
-| `session`: 1440×900, a session open | 2.00 | 0.68 | 0.34 | 49 |
-| `mobile`: 390×844, the list | 0.62 | 0.32 | 0.52 | 23 |
+| `list`: 1440×900, no session open | 1.24 | 0.44 | 0.35 | 27 |
+| `session`: 1440×900, a session open | 2.00 | 0.55 | 0.28 | 49 |
+| `mobile`: 390×844, the list | 0.62 | 0.10 | 0.16 | 23 |
+
+Runs spread widely (after: list 0.28–0.54, session 0.51–0.56, mobile 0.08–0.35), so read the medians
+as a rough size. Without the 30 s cadence the branch measured 0.47 / 0.68 / 0.32: the rows' "3m" no
+longer re-render every second. The desktop shell keeps one 1 s leaf while idle, its "updated 4s ago",
+which the 5 s poll keeps under a minute.
 
 Render counts (dev build, the same frozen mock, `console.count` in `DesktopShell`, `ListScreen`,
 `SessionScreen`): `main` renders ~170/min on the desktop list and ~200/min with a session open. The
 branch renders 0 in 60 s on the desktop list, the desktop session, the mobile list and the mobile
 session. What is left is the floor: a fetch, a `JSON.parse` and a key compare every 2–5 s, plus the
-1 s text leaves ("4s ago" on every row, which keep their cadence). Memoizing the rows would not
+text leaves (1 s only while they show seconds). Memoizing the rows would not
 help: they no longer re-render while idle.
 
 Reproduce: `cd scripts/perf && npm install && npx playwright-core install webkit`, then

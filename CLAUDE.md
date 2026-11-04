@@ -18,6 +18,7 @@ web/                   web server (server.mjs, lib/), Node >= 22, no npm deps
   ui/                  React + shadcn/ui PWA (npm, Vite build → ui/dist, gitignored) — see web/ui/README.md
 docs/                  setup, architecture, CLI reference, migration
 scripts/guide/         feature guide: demo API + headless-Chrome screenshots → one HTML page
+scripts/perf/          idle-CPU harness for the web UI (headless WebKit on the frozen demo API) — see its README
 ```
 
 Keep logic in `core`; the CLI, the TUI and any future UI (a second web UI, another TUI) are views

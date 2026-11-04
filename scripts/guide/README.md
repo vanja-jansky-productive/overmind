@@ -16,13 +16,16 @@ Needs macOS, Google Chrome (`CHROME=` to override), Node ≥ 22, ImageMagick, tm
 If Google Chrome crashes headless at start (`Failed to get the path for 1001`), point `CHROME=` at
 Playwright's `chromium_headless_shell` (`~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-mac/headless_shell`).
 `OVERMIND_GUIDE_SETUP_URL` sets where the page's "setup i arhitektura" links point.
+`GUIDE_FREEZE=1` pins the mock's clock, so every poll answers a byte-identical body (all times are
+relative to the moment it started): `scripts/perf/idle-cpu.mjs` measures the "nothing changed" idle
+case with it. `GUIDE_PORT` sets the port (default 7799).
 
 ## Files
 
 | file | what |
 | --- | --- |
 | `build.sh` | builds the UI, starts the mock, captures the TUI, shoots, converts to webp, writes `out/` |
-| `mock.mjs` | the demo API: serves `web/ui/dist`, answers every route of `web/ui/src/api/client.ts` with canned data (writes change nothing); `/demo/fixture.json` is the same overmind as `overmind list --json` rows |
+| `mock.mjs` | the demo API: serves `web/ui/dist` (or `OVERMIND_WEB_UI`), answers every route of `web/ui/src/api/client.ts` with canned data (writes change nothing; `GUIDE_FREEZE=1`: a frozen clock); `/demo/fixture.json` is the same overmind as `overmind list --json` rows |
 | `shoot.mjs` | the shot list: one entry per screenshot (name, device, steps) |
 | `cdp.mjs` | a tiny Chrome DevTools Protocol driver (headless Chrome, no puppeteer): device emulation, localStorage, click by text / aria-label, keys, touch swipes, screenshots |
 | `ansi.mjs` | `tmux capture-pane -e` output → HTML, for the TUI screenshot |
