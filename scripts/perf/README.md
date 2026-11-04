@@ -47,8 +47,13 @@ node scripts/perf/server-cpu.mjs --scenario latency --watch 1 --seconds 120 --js
     `web.discovery`, with uploads and memos in the temp dir: no hosts or peers, no `restore.onBoot`,
     operator, jobs, slack, inbox, grouping or briefs.
   - Autoname, grouping, briefs, inbox, slack and stacks sync are also off by env.
-  - The server's own state goes to a temp `XDG_STATE_HOME`; the CLI gets the real one, so `list`
-    reads and records `snapshot.json` as in production.
+  - **No real state is written.** The server's own state goes to a temp `XDG_STATE_HOME`. `list`
+    is not read-only (it records the snapshot), so the wrapper runs it with the real state dir and
+    the real config (read only: host name, `restore.keepClosedDays`, naming), no `OVERMIND_HOST`,
+    and `OVERMIND_SNAPSHOT` pointing at a temp copy of your `snapshot.json`. It does the same work
+    as production, into a file the harness owns. The result's `snapshot` says whether the temp copy
+    was written (`tempWritten`) and whether the real one changed (`realChanged`: only another
+    writer, such as your running server, can change it).
 - `burst`: a temp `HOME` with 3 fake sessions and a fake `overmind` printing their rows;
   transcripts appended 10 lines/s each, a registry rewrite every 20 s. Compare list runs per mode;
   CPU ≈ runs × the per-list cost on the real fleet. `--list-delay <s>` makes each fake list take

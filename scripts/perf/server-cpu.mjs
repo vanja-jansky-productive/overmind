@@ -17,9 +17,10 @@
 //            - autoname / grouping / briefs / inbox / slack / stacks sync are off by env too;
 //            - the server's own state (queue, operator workspace, restore marker) goes to a temp
 //              XDG_STATE_HOME;
-//            - the OVERMIND_BIN wrapper runs the real CLI for `list` only (with the real state
-//              dir, so `list` reads and records exactly as in production) and refuses every
-//              other subcommand (logged; reported as `refused`).
+//            - the OVERMIND_BIN wrapper runs the real CLI for `list` only and refuses every
+//              other subcommand (logged; reported as `refused`). `list` reads the real state dir
+//              and config, and records into a temp copy of the real snapshot (OVERMIND_SNAPSHOT):
+//              same work as production, but the harness never writes real state.
 //            Bound to 127.0.0.1.
 // - burst    a temp HOME with 3 fake sessions (fake `overmind` printing their rows), transcripts
 //            appended 10 lines/s each and a registry rewrite every 20 s: list runs per mode.
@@ -64,19 +65,36 @@ function realOvermind() {
 
 const refusedLog = path.join(tmp, 'refused.log');
 
+/** A single-quoted sh word, safe for any path (a `'` inside becomes `'\''`). */
+const sq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+
+/** The user's real config file (read by the wrapped `list` only — never written). */
+const realConfigPath = () => process.env.OVERMIND_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'overmind', 'config.json');
+
 /**
  * OVERMIND_BIN: count `list` runs, then run the real CLI (or print `rows`). Anything else is
  * refused and logged: the harness never lets the server act on real sessions (restore, send, kill,
  * name, stack sync, …), whatever the config says.
+ *
+ * The real `list` is not read-only: it records into the snapshot (`snapshot::record_quietly`). It
+ * runs with the real state dir (reads done.json, titles, stacks as in production), the real config
+ * (host name, `restore.keepClosedDays`, naming — read only), no `OVERMIND_HOST`, and
+ * `OVERMIND_SNAPSHOT` pointing at a temp copy of the real snapshot: it records exactly as in
+ * production (same cost), into a file the harness owns.
  */
-function wrapper({ real, rows, stateHome, delayS = 0 }) {
+function wrapper({ real, rows, stateHome, config, snapshot, delayS = 0 }) {
   const file = path.join(tmp, 'overmind');
-  const restoreState = stateHome ? `export XDG_STATE_HOME='${stateHome}'` : 'unset XDG_STATE_HOME';
   const sleep = delayS > 0 ? `sleep ${delayS}; ` : '';
-  const list = rows ? `${sleep}cat '${rows}'; exit 0` : `${restoreState}; exec '${real}' "$@"`;
+  const realEnv = () => [
+    stateHome ? `export XDG_STATE_HOME=${sq(stateHome)}` : 'unset XDG_STATE_HOME',
+    `export OVERMIND_CONFIG=${sq(config)}`,
+    `export OVERMIND_SNAPSHOT=${sq(snapshot)}`,
+    'unset OVERMIND_HOST',
+  ].join('; ');
+  const list = rows ? `${sleep}cat ${sq(rows)}; exit 0` : `${realEnv()}; exec ${sq(real)} "$@"`;
   const body = [
-    `if [ "$1" = list ]; then echo x >> '${listLog}'; ${list}; fi`,
-    `echo "$*" >> '${refusedLog}'`,
+    `if [ "$1" = list ]; then echo x >> ${sq(listLog)}; ${list}; fi`,
+    `echo "$*" >> ${sq(refusedLog)}`,
     `echo "server-cpu harness: only 'overmind list' runs here (refused: $1)" >&2`,
     'exit 1',
   ].join('\n');
@@ -88,7 +106,7 @@ function wrapper({ real, rows, stateHome, delayS = 0 }) {
 function scrubbedConfig() {
   const real = (() => {
     try {
-      return JSON.parse(fs.readFileSync(process.env.OVERMIND_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'overmind', 'config.json'), 'utf8'));
+      return JSON.parse(fs.readFileSync(realConfigPath(), 'utf8'));
     } catch {
       return {};
     }
@@ -139,10 +157,19 @@ async function main() {
     OVERMIND_WEB_STACKS: '0',
   };
   let fixture = null;
+  let snapshots = null; // fleet: { real, temp } paths, to report who wrote what
+  const mtime = (f) => (fs.existsSync(f) ? fs.statSync(f).mtimeMs : null);
   if (opts.scenario === 'fleet') {
     const realState = process.env.XDG_STATE_HOME || '';
     const stateDir = path.join(realState || path.join(os.homedir(), '.local', 'state'), 'overmind');
-    env.OVERMIND_BIN = wrapper({ real: realOvermind(), stateHome: realState });
+    // `list` records into a temp copy of the real snapshot, never the real one (see wrapper()).
+    const realSnapshot = process.env.OVERMIND_SNAPSHOT || path.join(stateDir, 'snapshot.json');
+    const snapshot = path.join(tmp, 'snapshot.json');
+    if (fs.existsSync(realSnapshot)) fs.copyFileSync(realSnapshot, snapshot);
+    snapshots = { real: realSnapshot, temp: snapshot, realAt: mtime(realSnapshot), tempAt: mtime(snapshot) };
+    env.OVERMIND_BIN = wrapper({ real: realOvermind(), stateHome: realState, config: realConfigPath(), snapshot });
+    delete env.OVERMIND_SNAPSHOT;
+    delete env.OVERMIND_HOST;
     env.OVERMIND_CONFIG = scrubbedConfig();
     env.XDG_STATE_HOME = path.join(tmp, 'state');
     // …but watch the CLI's real done.json / stacks, as the server would.
@@ -236,6 +263,8 @@ async function main() {
     corePct: Number(((cpu / elapsed) * 100).toFixed(2)),
     busyStart,
     busyEnd,
+    // The real snapshot can still change: the production server (another writer) records too.
+    ...(snapshots ? { snapshot: { tempWritten: mtime(snapshots.temp) !== snapshots.tempAt, realChanged: mtime(snapshots.real) !== snapshots.realAt } } : {}),
     refused: fs.existsSync(refusedLog) ? fs.readFileSync(refusedLog, 'utf8').split('\n').filter(Boolean) : [],
     ...(latencies.length ? { latencyMs: latencies, latencyMaxMs: Math.max(...latencies.filter((x) => x != null)), latencyMissed: latencies.filter((x) => x == null).length } : {}),
   };
