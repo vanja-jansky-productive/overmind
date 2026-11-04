@@ -1,7 +1,7 @@
 // Web server CPU and `overmind list` runs while a UI watches — the #38 harness.
 //
 //   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency [--watch 0|1] [--seconds 300]
-//                                    [--interval 5] [--port 7897] [--json]
+//                                    [--interval 5] [--port 7897] [--list-delay 0.5] [--json]
 //
 // Starts `web/server.mjs` under `/usr/bin/time -l` (its user+sys include reaped children: every
 // `overmind list` and what that runs), GETs /api/overmind every `--interval` s like the UI, stops it
@@ -10,12 +10,21 @@
 // kill-switch (OVERMIND_WEB_WATCH=0, the 2 s TTL / list every tick of before #38).
 //
 // Scenarios:
-// - fleet    this machine's real sessions and config, read-only: autoname / grouping / briefs /
-//            inbox / slack / stacks sync off; the server's own state (queue, operator workspace,
-//            restore marker) goes to a temp XDG_STATE_HOME, while the wrapper hands the CLI the
-//            real one, so `list` reads and records exactly as in production. Bound to 127.0.0.1.
+// - fleet    this machine's real sessions, read-only for any config:
+//            - the server gets a scrubbed copy of the config (OVERMIND_CONFIG): only
+//              `web.discovery` is kept — no hosts/peers, restore.onBoot, operator, jobs/bots,
+//              slack, inbox, grouping, briefs — and uploads / memos point into the temp dir;
+//            - autoname / grouping / briefs / inbox / slack / stacks sync are off by env too;
+//            - the server's own state (queue, operator workspace, restore marker) goes to a temp
+//              XDG_STATE_HOME;
+//            - the OVERMIND_BIN wrapper runs the real CLI for `list` only (with the real state
+//              dir, so `list` reads and records exactly as in production) and refuses every
+//              other subcommand (logged; reported as `refused`).
+//            Bound to 127.0.0.1.
 // - burst    a temp HOME with 3 fake sessions (fake `overmind` printing their rows), transcripts
 //            appended 10 lines/s each and a registry rewrite every 20 s: list runs per mode.
+//            `--list-delay 0.5` makes each fake list take 0.5 s, so events land mid-list as on a
+//            real fleet (a list that stays dirty must still wait out its gap).
 // - latency  the same temp HOME, quiet: a registry rewrite every 10 s; reports write → list start
 //            (polls /api/health every 100 ms). With --burst-latency the appenders run too.
 //
@@ -35,6 +44,7 @@ const { values: opts } = parseArgs({
     interval: { type: 'string', default: '5' },
     port: { type: 'string', default: '7897' },
     'burst-latency': { type: 'boolean', default: false },
+    'list-delay': { type: 'string', default: '0' },
     json: { type: 'boolean', default: false },
   },
 });
@@ -50,14 +60,44 @@ function realOvermind() {
   return execFileSync('/bin/sh', ['-lc', 'command -v overmind'], { encoding: 'utf8' }).trim();
 }
 
-/** OVERMIND_BIN: count `list` runs, then run the real thing (or print `rows`). */
-function wrapper({ real, rows, stateHome }) {
+const refusedLog = path.join(tmp, 'refused.log');
+
+/**
+ * OVERMIND_BIN: count `list` runs, then run the real CLI (or print `rows`). Anything else is
+ * refused and logged: the harness never lets the server act on real sessions (restore, send, kill,
+ * name, stack sync, …), whatever the config says.
+ */
+function wrapper({ real, rows, stateHome, delayS = 0 }) {
   const file = path.join(tmp, 'overmind');
   const restoreState = stateHome ? `export XDG_STATE_HOME='${stateHome}'` : 'unset XDG_STATE_HOME';
-  const body = rows
-    ? `if [ "$1" = list ]; then echo x >> '${listLog}'; cat '${rows}'; exit 0; fi\necho '[]'`
-    : `${restoreState}\nif [ "$1" = list ]; then echo x >> '${listLog}'; fi\nexec '${real}' "$@"`;
+  const sleep = delayS > 0 ? `sleep ${delayS}; ` : '';
+  const list = rows ? `${sleep}cat '${rows}'; exit 0` : `${restoreState}; exec '${real}' "$@"`;
+  const body = [
+    `if [ "$1" = list ]; then echo x >> '${listLog}'; ${list}; fi`,
+    `echo "$*" >> '${refusedLog}'`,
+    `echo "server-cpu harness: only 'overmind list' runs here (refused: $1)" >&2`,
+    'exit 1',
+  ].join('\n');
   fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return file;
+}
+
+/** The real config minus everything that acts at boot or on a timer: only `web.discovery` stays. */
+function scrubbedConfig() {
+  const real = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(process.env.OVERMIND_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'overmind', 'config.json'), 'utf8'));
+    } catch {
+      return {};
+    }
+  })();
+  const file = path.join(tmp, 'config.json');
+  const web = {
+    uploads: { dir: path.join(tmp, 'uploads') },
+    memos: { dir: path.join(tmp, 'memos'), audioDir: path.join(tmp, 'memo-audio') },
+    ...(real.web?.discovery ? { discovery: real.web.discovery } : {}),
+  };
+  fs.writeFileSync(file, JSON.stringify({ web }, null, 2));
   return file;
 }
 
@@ -101,6 +141,7 @@ async function main() {
     const realState = process.env.XDG_STATE_HOME || '';
     const stateDir = path.join(realState || path.join(os.homedir(), '.local', 'state'), 'overmind');
     env.OVERMIND_BIN = wrapper({ real: realOvermind(), stateHome: realState });
+    env.OVERMIND_CONFIG = scrubbedConfig();
     env.XDG_STATE_HOME = path.join(tmp, 'state');
     // …but watch the CLI's real done.json / stacks, as the server would.
     env.OVERMIND_DONE_STATE ||= path.join(stateDir, 'done.json');
@@ -110,7 +151,7 @@ async function main() {
     env.HOME = fixture.home;
     env.OVERMIND_CONFIG = path.join(tmp, 'no-config.json');
     env.XDG_STATE_HOME = path.join(tmp, 'state');
-    env.OVERMIND_BIN = wrapper({ rows: fixture.rowsFile });
+    env.OVERMIND_BIN = wrapper({ rows: fixture.rowsFile, delayS: Number(opts['list-delay']) });
     delete env.CODEX_HOME;
     delete env.PI_CODING_AGENT_DIR;
   }
@@ -193,6 +234,7 @@ async function main() {
     corePct: Number(((cpu / elapsed) * 100).toFixed(2)),
     busyStart,
     busyEnd,
+    refused: fs.existsSync(refusedLog) ? fs.readFileSync(refusedLog, 'utf8').split('\n').filter(Boolean) : [],
     ...(latencies.length ? { latencyMs: latencies, latencyMaxMs: Math.max(...latencies.filter((x) => x != null)), latencyMissed: latencies.filter((x) => x == null).length } : {}),
   };
   if (!result.lists && !result.listRuns) process.stderr.write(serverLog);
