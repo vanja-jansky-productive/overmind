@@ -50,7 +50,7 @@ export function BranchDialog(p: BranchDialogProps) {
 function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSession }: BranchDialogProps & { from: Message }) {
   const { models: claudeModels } = useSettings()
   const { applyFleet } = useFleet()
-  const targets = branchTargets(offeredHarnesses(useHarnesses(host), claudeModels))
+  const targets = branchTargets(offeredHarnesses(useHarnesses(host).harnesses, claudeModels))
   const isPrompt = branchesFromPrompt(from)
   const [harness, setHarness] = useState(source)
   const [model, setModel] = useState('')
