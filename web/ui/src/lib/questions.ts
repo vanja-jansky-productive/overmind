@@ -45,3 +45,11 @@ export function splitRecommended(label: string): { label: string; recommended: b
   const m = label.match(/^(.*?)\s*\(recommended\)\s*$/i)
   return m ? { label: m[1], recommended: true } : { label, recommended: false }
 }
+
+/** The options as shown: primary picks first, `secondary` ones (lasting side effects) apart — each with its menu index. */
+export function splitOptions(q: Question): { primary: number[]; secondary: number[] } {
+  const primary: number[] = []
+  const secondary: number[] = []
+  q.options.forEach((o, i) => (o.secondary ? secondary : primary).push(i))
+  return { primary, secondary }
+}

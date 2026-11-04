@@ -1,7 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { answerSteps, normalizeQuestions, parseScreenPrompt, questionOutcome, screenShowsPrompt, validateAnswer } from '../lib/questions.mjs';
+import fs from 'node:fs';
+
+import {
+  answerSteps,
+  normalizeQuestions,
+  parseCodexScreenPrompt,
+  parseScreenPrompt,
+  questionOutcome,
+  screenPromptParser,
+  screenShowsPrompt,
+  validateAnswer,
+} from '../lib/questions.mjs';
 
 const qs = normalizeQuestions({
   questions: [
@@ -182,4 +193,53 @@ test('parseScreenPrompt: no prompt on screen → null', () => {
   assert.equal(parseScreenPrompt(''), null);
   assert.equal(parseScreenPrompt('⏺ Done.\n❯ 1. not a prompt\n'), null);
   assert.equal(parseScreenPrompt(singleScreen.replace(/\nEnter to select.*$/, '')), null, 'no footer');
+});
+
+// ------------------------------------------------------------------ Codex's approval menu
+// Captured from Codex 0.166 (paths replaced): a plain menu, and a sub-agent's request shown in
+// the parent with a wrapped reason, a two-line `$ cmd` and a wrapped option 2.
+const codexScreen = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
+const codexChild = fs.readFileSync(new URL('./fixtures/codex-approval-child.txt', import.meta.url), 'utf8');
+
+test('the Codex approval menu parses: command, reason, options without hotkeys, option 2 secondary', () => {
+  const p = parseCodexScreenPrompt(codexScreen);
+  assert.match(p.id, /^screen:[0-9a-f]{12}$/);
+  assert.equal(p.untouched, true);
+  const [q] = p.questions;
+  assert.equal(q.header, 'Approval');
+  assert.equal(q.noOther, true);
+  assert.equal(q.multiSelect, false);
+  assert.equal(q.question, 'Would you like to run the following command?\n$ printf hi > hello.txt\nReason: Allow creating hello.txt containing hi in this directory?');
+  assert.deepEqual(
+    q.options.map((o) => o.label),
+    ['Yes, proceed', "Yes, and don't ask again for commands that start with `printf hi > hello.txt`", 'No, and tell Codex what to do differently'],
+  );
+  assert.equal(q.options[1].secondary, true);
+  assert.match(q.options[1].description, /permanent allow rule for commands starting with `printf hi > hello.txt`/);
+  assert.equal(q.options[0].secondary, undefined);
+  // Down × index + Enter, like any single pick.
+  assert.deepEqual(answerSteps(p.questions, [{ options: [2], text: null }]).map((s) => s.key), ['Down', 'Down', 'Enter']);
+  assert.equal(screenPromptParser('codex'), parseCodexScreenPrompt);
+  assert.equal(screenPromptParser('claude'), parseScreenPrompt);
+  assert.equal(screenPromptParser('pi'), null);
+});
+
+test("a sub-agent's request: wrapped reason, two-line command, wrapped option 2", () => {
+  const [q] = parseCodexScreenPrompt(codexChild).questions;
+  assert.equal(
+    q.question,
+    'Would you like to run the following command?\nThread: Agent (01a1a7b1)\n$ git worktree add ~/Code/project/worktrees/project-perf-38\n-b perf-38 main\nReason: May I create the isolated worktree and branch for the approved issue #38 implementation?',
+  );
+  assert.equal(q.options[1].label, "Yes, and don't ask again for commands that start with `git worktree add`");
+  assert.equal(q.options.length, 3);
+});
+
+test('the cursor off option 1 is touched; the composer › is not the cursor; no menu → null', () => {
+  const moved = codexScreen.replace('› 1. Yes', '  1. Yes').replace('  2. Yes, and', '› 2. Yes, and');
+  assert.equal(parseCodexScreenPrompt(moved).untouched, false);
+  assert.equal(parseCodexScreenPrompt(moved).id, parseCodexScreenPrompt(codexScreen).id, 'same menu, same id');
+  assert.match(codexScreen, /› create a file/, 'the composer line above uses › too');
+  assert.equal(parseCodexScreenPrompt('✔ You approved codex to run printf hi > hello.txt this time\n• Working (2s • esc to interrupt)\n› Ask Codex to do anything'), null);
+  assert.equal(parseCodexScreenPrompt(codexScreen.replace('Press enter to confirm or esc to cancel', '')), null, 'no footer');
+  assert.equal(parseCodexScreenPrompt(''), null);
 });

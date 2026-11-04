@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { HttpError, readJsonBody } from './http.mjs';
 import { clampLines, findSession, resolveHost, sleep as defaultSleep, validateInputData, validateKey, validateSendText, validateTitle } from './util.mjs';
-import { answerSteps, parseScreenPrompt, questionsText, screenShowsPrompt, validateAnswer } from './questions.mjs';
+import { answerSteps, questionsText, screenPromptParser, screenShowsPrompt, validateAnswer } from './questions.mjs';
 import { resolveAllowedDir, validateSpawnRequest } from './spawn.mjs';
 import {
   fetchPeerHost as defaultFetchPeerHost,
@@ -500,11 +500,13 @@ export function createApi({
   }
 
   /**
-   * The AskUserQuestion prompt the terminal shows, as a question message, when the transcript
-   * has none open: Claude Code writes the call there only once it is answered. Null otherwise.
+   * The prompt the terminal shows, as a question message, when the transcript has none open:
+   * Claude Code writes an AskUserQuestion call there only once it is answered, and Codex never
+   * writes its approval menu at all. Null otherwise.
    */
   async function screenQuestion(session, messages) {
-    if (session.status !== 'waiting' || (session.harness && session.harness !== 'claude')) return null;
+    const parse = screenPromptParser(session.harness);
+    if (session.status !== 'waiting' || !parse) return null;
     const last = messages.findLast((m) => m.kind === 'question');
     if (last && !last.answers && !last.declined) return null;
     let screen;
@@ -513,7 +515,7 @@ export function createApi({
     } catch {
       return null;
     }
-    const prompt = parseScreenPrompt(screen);
+    const prompt = parse(screen);
     if (!prompt) return null;
     const { id, questions } = prompt;
     return { role: 'assistant', kind: 'question', id, questions, text: questionsText(questions), ts: Date.now(), final: true };
@@ -552,7 +554,8 @@ export function createApi({
   /** The same for a prompt read off the screen: one tab at a time, each its own `screen:` id. */
   async function answerScreenQuestion(session, toolUseId, body) {
     if (session.status !== 'waiting') throw new HttpError('the session is not waiting on a question', 409);
-    const prompt = parseScreenPrompt(await backend.peek(session, 80));
+    const parse = screenPromptParser(session.harness);
+    const prompt = parse ? parse(await backend.peek(session, 80)) : null;
     if (prompt?.id !== toolUseId) throw new HttpError('the terminal is no longer showing this question', 409);
     const check = validateAnswer(body, prompt.questions);
     if (!check.ok) throw new HttpError(check.error, 400);

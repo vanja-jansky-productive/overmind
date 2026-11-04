@@ -1,0 +1,22 @@
+  >_ OpenAI Codex (v0.166.0)
+     ~/Code/project
+
+› create a file hello.txt containing the word hi
+
+• I’ll create hello.txt containing hi.
+
+• Running printf hi > hello.txt
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Allow creating hello.txt containing hi in this directory?
+
+  $ printf hi > hello.txt
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `printf hi > hello.txt` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

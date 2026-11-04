@@ -215,3 +215,99 @@ export function parseScreenPrompt(screen) {
   const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
   return { id, questions: [q], untouched: cursorAt === 0 && !checked };
 }
+
+// ------------------------------------------------------------------ Codex's approval menu
+//
+// Codex 0.166 asks before an escalated command, in the terminal only (nothing is persisted):
+//     Would you like to run the following command?
+//     Thread: Agent (01a1a7b1)                     (a sub-agent's request, shown in the parent)
+//     Environment: local
+//     Reason: Allow creating hello.txt …           (may wrap)
+//     $ printf hi > hello.txt                      (may span lines)
+//   › 1. Yes, proceed (y)
+//     2. Yes, and don't ask again for commands that start with `printf hi` (p)   (may wrap)
+//     3. No, and tell Codex what to do differently (esc)
+//     Press enter to confirm or esc to cancel
+// `›` is the cursor. ↓ moves it, Enter picks. Option 2 writes a permanent `prefix_rule(…
+// decision="allow")` to ~/.codex/rules/default.rules — for every session on the host — so it
+// is a secondary choice (`secondary: true`). Option 3 ends the turn like Esc.
+
+const CODEX_HEAD = 'Would you like to run the following command?';
+const CODEX_FOOT = /Press enter to confirm/;
+const CODEX_OPTION = /^\s*(›\s*)?(\d+)\.\s+(.*)$/;
+const CODEX_HOTKEY = /\s*\((?:y|p|esc|a|n)\)\s*$/;
+
+/** The approval menu Codex shows, as `{ id, questions: [q], untouched }`; null when none. */
+export function parseCodexScreenPrompt(screen) {
+  const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
+  let head = -1;
+  for (let i = lines.length - 1; i >= 0 && head < 0; i -= 1) if (lines[i].includes(CODEX_HEAD)) head = i;
+  if (head < 0) return null;
+  const foot = lines.findIndex((l, i) => i > head && CODEX_FOOT.test(l));
+  if (foot < 0) return null;
+  const block = lines.slice(head + 1, foot);
+  const firstOption = block.findIndex((l) => CODEX_OPTION.test(l));
+  if (firstOption < 0) return null;
+
+  const meta = { thread: '', reason: '' };
+  const cmd = [];
+  let field = null;
+  for (const raw of block.slice(0, firstOption)) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (l.startsWith('$ ') && !cmd.length) {
+      cmd.push(l.slice(2));
+      field = 'cmd';
+    } else if (field === 'cmd') {
+      cmd.push(l);
+    } else if (/^Thread:\s/.test(l)) {
+      meta.thread = l.replace(/^Thread:\s*/, '');
+      field = null;
+    } else if (/^Environment:\s/.test(l)) {
+      field = null;
+    } else if (/^Reason:\s/.test(l)) {
+      meta.reason = l.replace(/^Reason:\s*/, '');
+      field = 'reason';
+    } else if (field === 'reason') {
+      meta.reason = `${meta.reason} ${l}`;
+    }
+  }
+  if (!cmd.length) return null;
+
+  const options = [];
+  let cursorAt = -1;
+  for (const raw of block.slice(firstOption)) {
+    const m = raw.match(CODEX_OPTION);
+    if (m) {
+      if (m[1]) cursorAt = options.length;
+      options.push({ label: m[3].trim(), description: '' });
+    } else if (raw.trim() && options.length) {
+      const o = options[options.length - 1];
+      o.label = `${o.label} ${raw.trim()}`; // a wrapped option: its (p) lands on the next line
+    }
+  }
+  if (options.length < 2) return null;
+  for (const o of options) o.label = o.label.replace(CODEX_HOTKEY, '');
+  const always = options.findIndex((o) => /^Yes, and don't ask again/i.test(o.label));
+  if (always >= 0) {
+    const prefix = options[always].label.match(/`([^`]+)`/)?.[1];
+    options[always].secondary = true;
+    options[always].description = prefix
+      ? `Adds a permanent allow rule for commands starting with \`${prefix}\` — for every Codex session on this host`
+      : 'Adds a permanent allow rule — for every Codex session on this host';
+  }
+
+  const command = cmd.join('\n');
+  const question = [CODEX_HEAD, ...(meta.thread ? [`Thread: ${meta.thread}`] : []), `$ ${command}`, ...(meta.reason ? [`Reason: ${meta.reason}`] : [])].join('\n');
+  const q = { header: 'Approval', question, multiSelect: false, noOther: true, options };
+  const sig = squash([question, ...options.map((o) => o.label)].join('\n'));
+  const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
+  return { id, questions: [q], untouched: cursorAt === 0 };
+}
+
+/** The screen-prompt parser for a session's harness; null when it has none. */
+export function screenPromptParser(harness) {
+  if (!harness || harness === 'claude') return parseScreenPrompt;
+  if (harness === 'codex') return parseCodexScreenPrompt;
+  return null;
+}

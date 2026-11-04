@@ -82,6 +82,15 @@ test('sessionItems: waiting sessions on every reachable host, never the operator
   assert.equal(items[0].section, 'quick');
 });
 
+test('sessionItems: a Codex row waiting on an approval asks with its command', () => {
+  const [item] = sessionItems({
+    hosts: [{ name: 'laptop', ok: true, sessions: [{ session_id: 'cx', harness: 'codex', status: 'waiting', waiting_for: 'exec approval: `printf hi > hello.txt`', name: 'Create hello.txt' }] }],
+  });
+  assert.equal(item.ask, 'Waiting: exec approval: `printf hi > hello.txt`');
+  assert.equal(item.title, 'Create hello.txt');
+  assert.equal(item.href, '#/s/laptop/cx');
+});
+
 test('sessionItems: a shared host is left out', () => {
   const items = sessionItems({
     hosts: [

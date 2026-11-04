@@ -856,6 +856,39 @@ test('a question only on screen (not yet in the transcript) shows in messages an
   assert.equal((await pending()).kind, 'assistant', 'no prompt on screen, no card');
 });
 
+test('a waiting Codex row: its approval menu is a card, answered by its menu index, 409 once the screen moved on', async (t) => {
+  const id = '01a1a876-0000-7000-8000-000000000001';
+  const host = fakeHost('solo', [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', waiting_for: 'exec approval: `printf hi > hello.txt`', backend: 'tmux', handle: '%9', updated_at: 9 }]);
+  host.transcripts = { messages: async () => ({ messages: [{ role: 'user', kind: 'user', text: 'create hello.txt' }], total: 1, truncated: false }) };
+  let screen = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
+  host.backend.peek = async () => screen;
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, warmOvermind: false, sleep: async () => {} });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  const card = async () => (await (await fetch(`${base}/api/hosts/solo/sessions/${id}/messages`)).json()).messages.at(-1);
+  const call = async (body) => (await post(`${base}/api/hosts/solo/sessions/${id}/answer`, body)).status;
+  const typed = () => host.calls.filter((c) => c[0] === 'keys' || c[0] === 'type').map((c) => c[2]);
+
+  const m = await card();
+  assert.equal(m.kind, 'question');
+  assert.match(m.id, /^screen:/);
+  assert.equal(m.questions[0].header, 'Approval');
+  assert.match(m.questions[0].question, /\$ printf hi > hello\.txt/);
+  assert.deepEqual(m.questions[0].options.map((o) => !!o.secondary), [false, true, false]);
+  assert.equal(await call({ toolUseId: m.id, answers: [{ text: 'do it differently' }] }), 400, 'no free text');
+
+  // Answered in the terminal meanwhile: 409, nothing typed.
+  const before = screen;
+  screen = '✔ You approved codex to run printf hi > hello.txt this time\n• Working (1s • esc to interrupt)';
+  assert.equal(await call({ toolUseId: m.id, answers: [{ options: [0] }] }), 409);
+  assert.deepEqual(typed(), []);
+  screen = before;
+  assert.equal(await call({ toolUseId: m.id, answers: [{ options: [2] }] }), 200);
+  assert.deepEqual(typed(), ['Down', 'Down', 'Enter']);
+});
+
 test('answer types the keys for the pending question, only when it is safe to', async (t) => {
   const id = 'cccccccc-0000-0000-0000-000000000003';
   const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%3', updated_at: 3 }]);

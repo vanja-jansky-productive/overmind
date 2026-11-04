@@ -3,7 +3,7 @@ import { CheckIcon, CircleHelpIcon, Loader2Icon, SendHorizontalIcon, XIcon } fro
 
 import type { Message, Question, QuestionAnswer } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { emptyDrafts, isAnswered, splitRecommended, toAnswers, toggleOption, typeOther, type QuestionDraft } from '@/lib/questions'
+import { emptyDrafts, isAnswered, splitOptions, splitRecommended, toAnswers, toggleOption, typeOther, type QuestionDraft } from '@/lib/questions'
 import { cn } from '@/lib/utils'
 
 export interface QuestionActions {
@@ -105,41 +105,12 @@ function AnswerForm({ id, questions, actions }: { id: string; questions: Questio
           <Heading q={q} />
           {q.multiSelect ? <div className="-mt-1 text-[0.75em] text-dimmer">Pick any</div> : null}
           <div className="flex flex-col gap-1.5">
-            {q.options.map((o, j) => {
-              const on = drafts[i].options.includes(j)
-              const { label, recommended } = splitRecommended(o.label)
-              return (
-                <button
-                  key={j}
-                  type="button"
-                  role={q.multiSelect ? 'checkbox' : 'radio'}
-                  aria-checked={on}
-                  onClick={() => set(i, toggleOption(q, drafts[i], j))}
-                  className={cn(
-                    'flex min-h-11 w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors',
-                    on ? 'border-primary bg-accent text-accent-foreground' : 'border-border bg-background/40 hover:bg-muted',
-                  )}
-                >
-                  <span
-                    aria-hidden
-                    className={cn(
-                      'mt-[0.2em] flex size-4 shrink-0 items-center justify-center border',
-                      q.multiSelect ? 'rounded-[4px]' : 'rounded-full',
-                      on ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/50',
-                    )}
-                  >
-                    {on ? <CheckIcon className="size-3" strokeWidth={3} /> : null}
-                  </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="font-medium [overflow-wrap:anywhere]">
-                      {label}
-                      {recommended ? <span className="ml-1.5 text-[0.75em] font-normal text-status-waiting">Recommended</span> : null}
-                    </span>
-                    {o.description ? <span className="text-[0.85em] text-muted-foreground [overflow-wrap:anywhere]">{o.description}</span> : null}
-                  </span>
-                </button>
-              )
-            })}
+            {splitOptions(q).primary.map((j) => (
+              <OptionButton key={j} q={q} j={j} on={drafts[i].options.includes(j)} onPick={() => set(i, toggleOption(q, drafts[i], j))} />
+            ))}
+            {splitOptions(q).secondary.map((j) => (
+              <OptionButton key={j} q={q} j={j} secondary on={drafts[i].options.includes(j)} onPick={() => set(i, toggleOption(q, drafts[i], j))} />
+            ))}
             {q.noOther ? null : (
               <input
                 value={drafts[i].text}
@@ -172,5 +143,45 @@ function AnswerForm({ id, questions, actions }: { id: string; questions: Questio
         </Button>
       </div>
     </>
+  )
+}
+
+/** One pickable option; `secondary` (a lasting side effect, e.g. a permanent allow rule) is set apart and quieter. */
+function OptionButton({ q, j, on, onPick, secondary = false }: { q: Question; j: number; on: boolean; onPick: () => void; secondary?: boolean }) {
+  const o = q.options[j]
+  const { label, recommended } = splitRecommended(o.label)
+  return (
+    <button
+      type="button"
+      role={q.multiSelect ? 'checkbox' : 'radio'}
+      aria-checked={on}
+      data-secondary={secondary || undefined}
+      onClick={onPick}
+      className={cn(
+        'flex w-full items-start gap-2.5 rounded-xl border px-3 text-left transition-colors',
+        secondary ? 'mt-1 min-h-9 border-dashed py-1.5 text-[0.9em]' : 'min-h-11 py-2',
+        on ? 'border-primary bg-accent text-accent-foreground' : secondary ? 'border-border/80 bg-transparent text-muted-foreground hover:bg-muted' : 'border-border bg-background/40 hover:bg-muted',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'mt-[0.2em] flex size-4 shrink-0 items-center justify-center border',
+          q.multiSelect ? 'rounded-[4px]' : 'rounded-full',
+          on ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/50',
+        )}
+      >
+        {on ? <CheckIcon className="size-3" strokeWidth={3} /> : null}
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className={cn('[overflow-wrap:anywhere]', secondary ? 'font-normal' : 'font-medium')}>
+          {label}
+          {recommended ? <span className="ml-1.5 text-[0.75em] font-normal text-status-waiting">Recommended</span> : null}
+        </span>
+        {o.description ? (
+          <span className={cn('text-[0.85em] [overflow-wrap:anywhere]', secondary ? 'text-status-waiting' : 'text-muted-foreground')}>{o.description}</span>
+        ) : null}
+      </span>
+    </button>
   )
 }

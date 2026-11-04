@@ -540,12 +540,13 @@ export interface ScreenResponse extends ScreenFrame {
 export type MessageRole = 'user' | 'assistant' | 'system'
 export type MessageKind = 'user' | 'assistant' | 'command' | 'system' | 'question'
 
-/** One question of Claude's AskUserQuestion prompt. */
+/** One question of Claude's AskUserQuestion prompt (or Codex's approval menu, read off the screen). */
 export interface Question {
   question: string
   header: string
   multiSelect: boolean
-  options: { label: string; description: string }[]
+  /** `secondary`: a pick with a lasting side effect (Codex's "don't ask again" rule), shown apart. */
+  options: { label: string; description: string; secondary?: boolean }[]
   /** No "Type something" row (the terminal's "Review your answers" screen). */
   noOther?: boolean
 }
