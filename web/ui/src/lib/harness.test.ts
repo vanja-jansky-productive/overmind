@@ -10,7 +10,7 @@ const claudeModels = [
 ]
 
 describe('offeredHarnesses', () => {
-  it('keeps installed harnesses, Claude first with the configured models', () => {
+  it("keeps installed harnesses, Claude first with the host's own model list", () => {
     const rows: HarnessInfo[] = [
       { id: 'pi', label: 'pi', command: 'pi', installed: true, models: [{ id: '', label: 'Default' }, { id: 'openai/gpt-5.5', label: 'gpt-5.5 (openai)' }] },
       { id: 'codex', label: 'Codex', command: 'codex', installed: false, models: [] },
@@ -18,8 +18,12 @@ describe('offeredHarnesses', () => {
     ]
     const got = offeredHarnesses(rows, claudeModels)
     expect(got.map((h) => h.id)).toEqual(['claude', 'pi'])
-    expect(got[0].models).toBe(claudeModels)
+    expect(got[0].models).toEqual([{ id: 'x', label: 'X' }])
     expect(got[1].models.map((m) => m.id)).toEqual(['', 'openai/gpt-5.5'])
+  })
+  it('gives Claude the settings models when the host lists none (an older server)', () => {
+    const rows: HarnessInfo[] = [{ id: 'claude', label: 'Claude Code', command: 'claude', installed: true, models: [] }]
+    expect(offeredHarnesses(rows, claudeModels)[0].models).toEqual(claudeModels)
   })
   it('falls back to Claude alone when the host says nothing', () => {
     expect(offeredHarnesses(null, claudeModels).map((h) => h.id)).toEqual(['claude'])

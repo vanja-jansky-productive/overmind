@@ -101,10 +101,15 @@ export function fmtTokens(n: number): string {
 }
 
 /** "124k / 200k · 62%" — '' for a missing or malformed context. */
-/** Short human model name: `claude-opus-5-5` → `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`, `…[1m]` → `… 1M`. */
+/** Claude Code's aliases (the newest model of each family), as the New session picker offers them. */
+const CLAUDE_ALIASES = new Set(['fable', 'opus', 'sonnet', 'haiku'])
+
+/** Short human model name: `claude-opus-5-5` → `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`, `sonnet` → `Sonnet`, `…[1m]` → `… 1M`. */
 export function modelLabel(id: string | null | undefined): string {
   if (!id) return ''
   const oneM = /\[1m\]$/i.test(id)
+  const base = id.replace(/\[1m\]$/i, '')
+  if (CLAUDE_ALIASES.has(base.toLowerCase())) return `${base.charAt(0).toUpperCase()}${base.slice(1).toLowerCase()}${oneM ? ' 1M' : ''}`
   const m = id.replace(/\[1m\]$/i, '').match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i)
   if (!m) return id
   const family = m[1].charAt(0).toUpperCase() + m[1].slice(1)

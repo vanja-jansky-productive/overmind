@@ -87,7 +87,9 @@ Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are c
    "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultModel": null, "defaultEffort": "high" }]
 ```
 
-Models: Claude's built-in list; Codex's from its `models_cache.json` (listed ones, its order);
+Models: Claude's are its aliases (`fable`, `opus`, `sonnet`, `haiku` — `claude --model sonnet` always
+starts the newest Sonnet), labelled with the newest version of each that Claude Code has recorded
+in `~/.claude.json` (`projects.*.lastModelUsage`), else the version overmind knows of; Codex's from its `models_cache.json` (listed ones, its order);
 pi's from `pi --list-models` (ids `provider/model`), narrowed to the `enabledModels` patterns of
 pi's `settings.json` when set. `id: ""` is the harness's own default.
 Efforts: Claude `low…max`; Codex the levels its model cache lists; pi `off…max`.

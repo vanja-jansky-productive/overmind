@@ -110,12 +110,18 @@ function harnessCommand(raw, id, home) {
 
 export const MODEL_ID_RE = /^[A-Za-z0-9._[\]\/:-]{1,100}$/;
 
-/** The New session form's model picker when `web.models` is unset ('' = no flag, Claude's default). */
+/**
+ * Claude's model picker when `web.models` is unset and the host's CLI can't say ('' = no flag,
+ * Claude's default). Aliases, so `claude --model sonnet` always starts the newest Sonnet; the
+ * CLI labels them with the newest version Claude Code has used (`core::harness::claude_models`).
+ * Mirrors `CLAUDE_FAMILIES` there and `web/ui/src/lib/models.ts` (tests/models-parity.test.mjs).
+ */
 export const DEFAULT_MODELS = [
   { id: '', label: 'Default' },
-  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-  { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { id: 'fable', label: 'Fable 5.1' },
+  { id: 'opus', label: 'Opus 5.5' },
+  { id: 'sonnet', label: 'Sonnet 5.5' },
+  { id: 'haiku', label: 'Haiku 5.5' },
 ];
 
 const BIN_FALLBACK_DIRS = ['/opt/homebrew/bin', '/usr/local/bin'];
@@ -726,6 +732,7 @@ export function normalizeConfig(
     uiDir,
     quickReplies,
     models,
+    modelsSet: web.models != null,
     autoName,
     grouping,
     inbox,

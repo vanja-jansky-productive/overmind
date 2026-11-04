@@ -139,7 +139,7 @@ test('normalizeConfig web.autoName: defaults off (opt-in) / 5 min, validated, OV
 
 test('normalizeConfig web.models: default list, { id, label } / bare ids, strict ids', () => {
   const def = normalizeConfig({}, { env: {}, home: '/h', found: false }).models;
-  assert.deepEqual(def.map((m) => m.id), ['', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5']);
+  assert.deepEqual(def.map((m) => m.id), ['', 'fable', 'opus', 'sonnet', 'haiku']);
   const custom = normalizeConfig({ web: { models: [{ id: '', label: 'Auto' }, 'claude-opus-5-5[1m]'] } }, { env: {}, home: '/h' }).models;
   assert.deepEqual(custom, [{ id: '', label: 'Auto' }, { id: 'claude-opus-5-5[1m]', label: 'claude-opus-5-5[1m]' }]);
   assert.throws(() => normalizeConfig({ web: { models: 'opus' } }, { env: {}, home: '/h' }), /web.models must be an array/);

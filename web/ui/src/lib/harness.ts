@@ -26,7 +26,8 @@ export function claudeOnly(models: ModelOption[]): HarnessInfo[] {
 export function offeredHarnesses(rows: HarnessInfo[] | null | undefined, claudeModels: ModelOption[]): HarnessInfo[] {
   const list = (rows ?? []).filter((h) => h && typeof h.id === 'string' && h.installed)
   const out = list.map((h) => {
-    const models = h.id === 'claude' ? claudeModels : h.models?.length ? normalizeModels(h.models) : [{ id: '', label: 'Default' }]
+    // Claude: the host's own list (web.models, else its CLI's), else the settings' one.
+    const models = h.models?.length ? normalizeModels(h.models) : h.id === 'claude' ? claudeModels : [{ id: '', label: 'Default' }]
     return { ...h, models: withOvermindDefault(models, h) }
   })
   if (!out.some((h) => h.id === 'claude')) out.unshift(...claudeOnly(claudeModels))

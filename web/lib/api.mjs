@@ -1751,8 +1751,12 @@ export function createApi({
     } catch {
       rows = [{ id: 'claude', label: 'Claude Code', command: config.claude ?? 'claude', installed: true, models: [] }];
     }
-    // Claude's picker is the configured one (`web.models`), like before harnesses.
-    rows = rows.map((r) => (r.id === 'claude' ? { ...r, models: config.models ?? DEFAULT_MODELS } : r));
+    // Claude's picker: `web.models` when set, else the CLI's (aliases labelled with the newest
+    // version Claude Code has used on this host), else the built-in list.
+    const configured = config.modelsSet ? config.models : null;
+    rows = rows.map((r) =>
+      r.id === 'claude' ? { ...r, models: configured ?? (r.models?.length ? r.models : (config.models ?? DEFAULT_MODELS)) } : r,
+    );
     harnessCache = { at: Date.now(), rows };
     return { status: 200, body: { host: config.self, harnesses: withDefaults(rows), ghIdentities: config.ghIdentities ?? [] } };
   }

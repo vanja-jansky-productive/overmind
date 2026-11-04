@@ -19,7 +19,7 @@ describe('normalizeModels', () => {
 
 describe('pickModel', () => {
   it('uses the remembered id only while it is offered', () => {
-    expect(pickModel(DEFAULT_MODELS, 'claude-sonnet-5')).toBe('claude-sonnet-5')
+    expect(pickModel(DEFAULT_MODELS, 'sonnet')).toBe('sonnet')
     expect(pickModel(DEFAULT_MODELS, '')).toBe('')
     expect(pickModel(DEFAULT_MODELS, 'gone')).toBe('')
     expect(pickModel(DEFAULT_MODELS, null)).toBe('')

@@ -111,6 +111,13 @@ type CacheKey = (PathBuf, u64, Option<SystemTime>);
 type Raw = Option<(u64, Option<String>)>;
 static CACHE: LazyLock<Mutex<HashMap<PathBuf, (CacheKey, Raw)>>> = LazyLock::new(Default::default);
 
+/// Claude Code's own state file: `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`.
+pub fn claude_state_path() -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(|d| PathBuf::from(d).join(".claude.json"))
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude.json"))
+}
+
 /// What says a model runs with a 1M window, besides its own id.
 #[derive(Debug, Default, Clone)]
 pub struct Hints {
@@ -129,10 +136,7 @@ impl Hints {
             settings_1m: settings_1m_model(home),
             ..Default::default()
         };
-        let state = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(|d| PathBuf::from(d).join(".claude.json"))
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude.json"));
-        if let Ok(text) = std::fs::read_to_string(state) {
+        if let Ok(text) = std::fs::read_to_string(claude_state_path()) {
             h.add_state(&text);
         }
         h

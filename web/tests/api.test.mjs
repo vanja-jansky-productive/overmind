@@ -163,7 +163,7 @@ test('health and settings', async (t) => {
   assert.deepEqual(s.body.hosts, ['laptop', 'workstation']);
   assert.ok(s.body.quickReplies.length > 0);
   assert.deepEqual(s.body.models[0], { id: '', label: 'Default' });
-  assert.ok(s.body.models.some((m) => m.id === 'claude-sonnet-5'));
+  assert.ok(s.body.models.some((m) => m.id === 'sonnet'));
 });
 
 test('settings exposes web.models when configured', async () => {
@@ -769,17 +769,29 @@ test('overmind CLI tasks / task show / task status run the CLI and flag a missin
   await assert.rejects(cli.taskShow('1'), (e) => e.missing === true);
 });
 
-test('harnesses: per host, cached, Claude models from the config, proxied to peers', async (t) => {
+test('harnesses: per host, cached, Claude models from the CLI, proxied to peers', async (t) => {
   const { urls, lap, remote } = await startPair(t);
   const here = await get(`${urls.laptop}/api/hosts/laptop/harnesses`);
   assert.equal(here.status, 200);
   assert.deepEqual(here.body.harnesses.map((h) => [h.id, h.installed]), [['claude', true], ['codex', false]]);
-  assert.ok(here.body.harnesses[0].models.some((m) => m.id === '')); // DEFAULT_MODELS, not the CLI's
+  assert.deepEqual(here.body.harnesses[0].models, [{ id: 'x', label: 'X' }]); // the host's CLI list (no web.models)
   await get(`${urls.laptop}/api/hosts/laptop/harnesses`);
   assert.equal(lap.calls.filter((c) => c[0] === 'harnesses').length, 1);
   const there = await get(`${urls.laptop}/api/hosts/workstation/harnesses`);
   assert.deepEqual([there.body.host, there.body.harnesses[1].installed], ['workstation', true]);
   assert.equal(remote.calls.filter((c) => c[0] === 'harnesses').length, 1);
+});
+
+test("harnesses: web.models wins over the CLI's Claude list; an empty CLI list falls back to the built-in one", async () => {
+  const host = fakeHost('solo', []);
+  host.cli.harnesses = async () => [{ id: 'claude', label: 'Claude Code', command: 'claude', installed: true, models: [] }];
+  const call = async (config) => {
+    const api = createApi({ config, ...host, warmOvermind: false });
+    return (await api({ method: 'GET', headers: {} }, new URL('http://x/api/hosts/solo/harnesses'))).body.harnesses[0].models;
+  };
+  const opts = { env: {}, home: '/home/tester' };
+  assert.deepEqual(await call(normalizeConfig({ self: 'solo', web: { models: ['opus'] } }, opts)), [{ id: 'opus', label: 'opus' }]);
+  assert.deepEqual((await call(normalizeConfig({ self: 'solo' }, opts))).map((m) => m.id), ['', 'fable', 'opus', 'sonnet', 'haiku']);
 });
 
 test('usage: a CLI failure is a 502 with its reason', async () => {

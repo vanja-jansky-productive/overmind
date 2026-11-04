@@ -1,11 +1,15 @@
 import type { ModelOption } from '@/api/types'
 
-/** What the New session form offers before /api/settings answers (or from an older server). Mirrors lib/config.mjs. */
+/**
+ * What the New session form offers before /api/settings answers (or from an older server). Claude
+ * Code's aliases (always the newest model of each family). Mirrors lib/config.mjs.
+ */
 export const DEFAULT_MODELS: ModelOption[] = [
   { id: '', label: 'Default' },
-  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-  { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { id: 'fable', label: 'Fable 5.1' },
+  { id: 'opus', label: 'Opus 5.5' },
+  { id: 'sonnet', label: 'Sonnet 5.5' },
+  { id: 'haiku', label: 'Haiku 5.5' },
 ]
 
 /** `/api/settings` → `models`: keep well-formed entries; absent / empty / broken → the defaults. */

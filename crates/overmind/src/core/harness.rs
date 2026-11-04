@@ -223,15 +223,88 @@ fn opt(id: &str, label: &str) -> ModelOption {
     }
 }
 
-/// Claude's picker (the web's `web.models` overrides it there).
+/// A Claude model version: `(major, minor)` (`claude-opus-6` has no minor).
+pub type Version = (u32, Option<u32>);
+
+/// Claude Code's model families, as `(alias, label, newest version overmind knows of)`. The
+/// picker offers the alias, so `claude --model sonnet` always starts the newest Sonnet; the
+/// version is only the label's fallback. Mirrored by `web/lib/config.mjs` `DEFAULT_MODELS` and
+/// `web/ui/src/lib/models.ts` (a web test keeps the three in step).
+pub const CLAUDE_FAMILIES: [(&str, &str, Version); 4] = [
+    ("fable", "Fable", (5, Some(1))),
+    ("opus", "Opus", (5, Some(5))),
+    ("sonnet", "Sonnet", (5, Some(5))),
+    ("haiku", "Haiku", (5, Some(5))),
+];
+
+/// Claude's picker (the web's `web.models` overrides it there): Default, then one entry per
+/// family, labelled with the newest version Claude Code has recorded on this machine.
 pub fn claude_models() -> Vec<ModelOption> {
-    vec![
-        opt("", "Default"),
-        opt("claude-fable-5-1", "Fable 5.1"),
-        opt("claude-opus-5-5", "Opus 5.5"),
-        opt("claude-sonnet-5-5", "Sonnet 5.5"),
-        opt("claude-haiku-5-5", "Haiku 5.5"),
-    ]
+    let seen = std::fs::read_to_string(crate::core::context::claude_state_path())
+        .map(|t| claude_used_models(&t))
+        .unwrap_or_default();
+    claude_models_from(&seen)
+}
+
+/// The picker from the model ids Claude Code has used (`claude-opus-5-5`, `claude-haiku-4-5-20251001`).
+pub fn claude_models_from(seen: &[String]) -> Vec<ModelOption> {
+    let mut out = vec![opt("", "Default")];
+    for (alias, label, known) in CLAUDE_FAMILIES {
+        let newest = seen
+            .iter()
+            .filter_map(|id| claude_model_version(id))
+            .filter(|(fam, _)| fam == alias)
+            .map(|(_, v)| v)
+            .fold(known, |a, b| {
+                if version_key(b) > version_key(a) {
+                    b
+                } else {
+                    a
+                }
+            });
+        let version = match newest {
+            (major, Some(minor)) => format!("{major}.{minor}"),
+            (major, None) => major.to_string(),
+        };
+        out.push(opt(alias, &format!("{label} {version}")));
+    }
+    out
+}
+
+fn version_key((major, minor): Version) -> (u32, u32) {
+    (major, minor.unwrap_or(0))
+}
+
+/// `claude-<family>-<major>[-<minor>][-<yyyymmdd>][[1m]]` -> (family, (major, minor)).
+fn claude_model_version(id: &str) -> Option<(String, Version)> {
+    let id = id.to_lowercase();
+    let id = id.strip_suffix("[1m]").unwrap_or(&id);
+    let mut parts = id.strip_prefix("claude-")?.split('-');
+    let family = parts.next()?.to_string();
+    let major = parts.next()?.parse().ok()?;
+    // A minor is short; a dated snapshot suffix (20251001) is not a version.
+    let minor = parts
+        .next()
+        .filter(|p| p.len() <= 2)
+        .and_then(|p| p.parse().ok());
+    Some((family, (major, minor)))
+}
+
+/// Every model id in `~/.claude.json`'s `projects.*.lastModelUsage`.
+fn claude_used_models(state: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<Value>(state) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = v["projects"]
+        .as_object()
+        .into_iter()
+        .flat_map(|p| p.values())
+        .filter_map(|p| p["lastModelUsage"].as_object())
+        .flat_map(|u| u.keys().cloned())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 pub fn codex_home() -> PathBuf {
@@ -1206,6 +1279,55 @@ pub fn content_text(c: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
+    // The picker offers aliases (always the newest model); labels follow what Claude Code used.
+    #[test]
+    fn claude_models_are_aliases_labelled_with_the_newest_version_seen() {
+        let labels = |seen: &[&str]| {
+            let seen: Vec<String> = seen.iter().map(|s| s.to_string()).collect();
+            super::claude_models_from(&seen)
+                .into_iter()
+                .map(|m| format!("{}={}", m.id, m.label))
+                .collect::<Vec<_>>()
+        };
+        // Nothing used yet: the built-in versions.
+        assert_eq!(
+            labels(&[]),
+            [
+                "=Default",
+                "fable=Fable 5.1",
+                "opus=Opus 5.5",
+                "sonnet=Sonnet 5.5",
+                "haiku=Haiku 5.5"
+            ]
+        );
+        // A newer one Claude Code has run wins; older ones, snapshots and [1m] never lower it.
+        assert_eq!(
+            labels(&[
+                "claude-sonnet-5-7",
+                "claude-opus-6[1m]",
+                "claude-haiku-4-5-20251001",
+                "claude-fable-5-1",
+                "not-a-model",
+            ])[1..],
+            [
+                "fable=Fable 5.1",
+                "opus=Opus 6",
+                "sonnet=Sonnet 5.7",
+                "haiku=Haiku 5.5"
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_used_models_reads_every_projects_last_model_usage() {
+        let state = r#"{"projects":{"/a":{"lastModelUsage":{"claude-opus-5-5":{},"claude-sonnet-5-5":{}}},"/b":{"lastModelUsage":{"claude-opus-5-5":{}}},"/c":{}}}"#;
+        assert_eq!(
+            super::claude_used_models(state),
+            ["claude-opus-5-5", "claude-sonnet-5-5"]
+        );
+        assert!(super::claude_used_models("not json").is_empty());
+    }
+
     #[test]
     fn with_adds_the_picked_or_default_model_and_the_default_effort() {
         use super::Harness::*;

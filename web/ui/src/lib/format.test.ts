@@ -98,6 +98,8 @@ describe('modelLabel', () => {
     expect(modelLabel('claude-opus-5-5')).toBe('Opus 5.5')
     expect(modelLabel('claude-sonnet-5')).toBe('Sonnet 5')
     expect(modelLabel('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+    expect(modelLabel('sonnet')).toBe('Sonnet')
+    expect(modelLabel('opus[1m]')).toBe('Opus 1M')
     expect(modelLabel('claude-opus-5-5[1m]')).toBe('Opus 5.5 1M')
     expect(modelLabel('some-other-model')).toBe('some-other-model')
     expect(modelLabel(null)).toBe('')
