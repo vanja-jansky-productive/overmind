@@ -301,6 +301,65 @@ test('a list longer than the gap: a validated caller once the change is due chai
   assert.equal((await poked).sessions[0].session_id, 's3', 'the poked build sees a list that started after the change');
 });
 
+test('a signal during a run that covers a mutation: callers join that run, never the older list (review r2 SHOULD-1)', async () => {
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: fakeWatcher(), ...clock });
+  let p = om.localHost();
+  cli.release();
+  await p; // run 1: s1, the list before the mutation
+  clock.advance(10_000);
+  om.invalidate(); // a kill / spawn
+  const forced = om.localHost({ force: true }); // the snapshot rebuild starts run 2
+  await tick();
+  clock.advance(100);
+  const before = om.localHost(); // a peer's ?local=1 before any signal
+  clock.advance(100);
+  om.signal('slow'); // a transcript append mid-run 2: dueAt moves to run 2's start + 5 s
+  clock.advance(100);
+  const after = om.localHost(); // must not get s1 while run 2 (which has the mutation) lists
+  const raced = await Promise.race([after, tick().then(() => 'pending')]);
+  assert.equal(raced, 'pending', 'joined run 2 instead of serving the pre-mutation list');
+  assert.equal(cli.runs, 2);
+  cli.release();
+  for (const x of [forced, before, after]) assert.equal((await x).sessions[0].session_id, 's2');
+  assert.equal(cli.runs, 2, 'joined, no extra run');
+});
+
+test('a signal during a run started by an earlier change: callers join it; a same-gen run does not hide the cache', async () => {
+  const clock = fakeClock();
+  const cli = gatedCli();
+  const om = createOvermind({ cli, watcher: fakeWatcher(), ...clock });
+  let p = om.localHost();
+  cli.release();
+  await p;
+  clock.advance(2000);
+  om.signal('fast'); // due now (the gap since run 1 has passed)
+  const run2 = om.localHost(); // starts run 2 at the new gen
+  await tick();
+  assert.equal(cli.runs, 2);
+  clock.advance(100);
+  om.signal('slow'); // not due until run 2's start + 5 s
+  const peer = om.localHost();
+  assert.equal(await Promise.race([peer, tick().then(() => 'pending')]), 'pending', 'joins run 2, which has the fast change');
+  cli.release();
+  assert.equal((await peer).sessions[0].session_id, 's2');
+  await run2;
+  // Clean and quiet: a run at the same gen (a force with no change since) does not hide the cache.
+  clock.advance(5000); // the slow change is due: run 3 lists it
+  p = om.localHost();
+  await tick();
+  cli.release();
+  await p;
+  clock.advance(1000);
+  const forced = om.localHost({ force: true });
+  await tick();
+  assert.equal(cli.runs, 4);
+  assert.equal((await om.localHost()).sessions[0].session_id, 's3', 'served at once: run 4 has no change the cache lacks');
+  cli.release();
+  await forced;
+});
+
 test('ttl mode: non-force callers still join an in-flight list after invalidate (kill-switch = before)', async () => {
   const clock = fakeClock();
   const cli = gatedCli();

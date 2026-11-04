@@ -48,7 +48,7 @@ export function createOvermind({
 } = {}) {
   if (!cli || typeof cli.list !== 'function') throw new TypeError('cli.list must be a function');
 
-  let cached = null; // { at (finished), startedAt, value }
+  let cached = null; // { at (finished), startedAt, gen (it started at), value }
   let inFlight = null; // { promise, gen }
   let gen = 0; // bumped by every change signal: a run started before it cannot clear `dirty`
   let dirty = true; // a watcher signal (or a mutation) since the last complete run
@@ -122,7 +122,7 @@ export function createOvermind({
     listRuns += 1;
     const promise = discover()
       .then((value) => {
-        cached = { at: now(), startedAt, value };
+        cached = { at: now(), startedAt, gen: g, value };
         lastListAt = startedAt;
         if (g === gen) dirty = false;
         if (g >= staleGen) stale = false;
@@ -141,8 +141,11 @@ export function createOvermind({
       const t = now();
       // A failed list is never trusted past the TTL: the watcher says nothing about why it failed.
       if (validated() && cached.value.ok) {
+        // Never while a mutation is pending, nor while a run that started after a change since the
+        // cached one is in flight: that run has the change (a later signal only moves `dueAt`).
+        const covered = stale || (inFlight && inFlight.gen > cached.gen);
         // Restamped only when known clean: a list known stale (not yet due) keeps its own time.
-        if (!(dirty && t >= dueAt) && t - cached.startedAt < safetyMs) return dirty ? cached.value : { ...cached.value, fetchedAt: t };
+        if (!covered && !(dirty && t >= dueAt) && t - cached.startedAt < safetyMs) return dirty ? cached.value : { ...cached.value, fetchedAt: t };
       } else if (!stale && t - cached.at < ttlMs) {
         return cached.value;
       }
