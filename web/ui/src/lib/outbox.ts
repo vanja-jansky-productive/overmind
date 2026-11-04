@@ -202,6 +202,11 @@ export class Outbox {
   private items: OutboxItem[] = []
   private seq = 0
   private timer: ReturnType<typeof setTimeout> | null = null
+  /** When the oldest unmatched `sent` bubble expires (SENT_TTL_MS): no transcript poll has to come by for it to go. */
+  private expiry: ReturnType<typeof setTimeout> | null = null
+  /** The transcript the last reconcile saw (the expiry re-runs it). */
+  private lastMessages: Message[] | null | undefined = null
+  private disposed = false
   private inflight = false
   private listeners = new Set<() => void>()
   private deps: OutboxDeps
@@ -231,19 +236,37 @@ export class Outbox {
     this.pump()
   }
 
-  /** One timer, for the pending message's countdown. */
+  /** Two timers: the pending message's countdown, and the oldest sent bubble's expiry. */
   private arm() {
+    this.armExpiry()
     const p = pendingItem(this.items)
     if (this.timer && (!p || p.dueAt == null)) {
       clearTimeout(this.timer)
       this.timer = null
     }
-    if (!p || p.dueAt == null || this.timer) return
+    if (!p || p.dueAt == null || this.timer || this.disposed) return
     this.timer = setTimeout(() => {
       this.timer = null
       this.set(releaseDue(this.items, this.now()))
       this.arm() // a clock that fired early re-arms for the rest
     }, Math.max(0, p.dueAt - this.now()))
+  }
+
+  private armExpiry() {
+    if (this.expiry) clearTimeout(this.expiry)
+    this.expiry = null
+    if (this.disposed) return
+    let oldest = Infinity
+    for (const it of this.items) if (it.state === 'sent' && it.sentAt != null) oldest = Math.min(oldest, it.sentAt)
+    if (oldest === Infinity) return
+    this.expiry = setTimeout(
+      () => {
+        this.expiry = null
+        this.set(reconcile(this.items, this.lastMessages, this.now()))
+        if (!this.expiry) this.armExpiry() // nothing dropped (a clock that fired early): try again
+      },
+      Math.max(0, oldest + SENT_TTL_MS + 1 - this.now()),
+    )
   }
 
   private pump() {
@@ -312,7 +335,23 @@ export class Outbox {
   }
 
   reconcile(messages: Message[] | null | undefined) {
+    this.lastMessages = messages
     this.set(reconcile(this.items, messages, this.now()))
+  }
+
+  /** Unmounted: stop the timers (a send still in flight finishes; nothing arms again until resume()). */
+  dispose() {
+    this.disposed = true
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    if (this.expiry) clearTimeout(this.expiry)
+    this.expiry = null
+  }
+
+  /** Mounted again (StrictMode re-runs effects on the same box): timers back on. */
+  resume() {
+    this.disposed = false
+    this.arm()
   }
 
   /** Page unload: hand over everything not yet sent (the caller beacons it) and forget it. */

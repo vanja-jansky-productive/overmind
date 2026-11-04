@@ -13,6 +13,7 @@ import {
   schedule,
   secondsLeft,
   tailAnchor,
+  SENT_TTL_MS,
   type OutboxItem,
 } from './outbox'
 
@@ -274,6 +275,49 @@ describe('Outbox (timers + one-at-a-time sender)', () => {
     calls[0].resolve()
     await vi.advanceTimersByTimeAsync(5000)
     expect(calls.map((c) => c.text)).toEqual(['a'])
+  })
+
+  test('an unmatched sent bubble expires on its own timer, no transcript poll needed', async () => {
+    const { send, calls } = fakeSend()
+    const box = new Outbox({ send })
+    box.reconcile([user('earlier', 1)])
+    box.add('one', 0, '')
+    calls[0].resolve()
+    await flushMicrotasks()
+    await vi.advanceTimersByTimeAsync(60_000)
+    box.add('two', 0, '')
+    calls[1].resolve()
+    await flushMicrotasks()
+    expect(box.getItems().map((i) => i.text)).toEqual(['one', 'two'])
+    await vi.advanceTimersByTimeAsync(SENT_TTL_MS - 60_000)
+    expect(box.getItems().map((i) => i.text)).toEqual(['one', 'two'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(box.getItems().map((i) => i.text)).toEqual(['two'])
+    // The second one gets its own slot.
+    await vi.advanceTimersByTimeAsync(60_000 - 1)
+    expect(box.getItems().map((i) => i.text)).toEqual(['two'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(box.getItems()).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  test('dispose leaves no timers; resume arms them again', async () => {
+    const { send, calls } = fakeSend()
+    const box = new Outbox({ send })
+    box.add('sent', 0, '')
+    calls[0].resolve()
+    await flushMicrotasks()
+    box.add('later', 3000, '')
+    expect(vi.getTimerCount()).toBe(2)
+    box.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+    box.resume()
+    expect(vi.getTimerCount()).toBe(2)
+    box.flush()
+    box.dispose()
+    calls[1].resolve()
+    await flushMicrotasks()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   test('reconcile drops the delivered bubble; subscribers hear every change', async () => {

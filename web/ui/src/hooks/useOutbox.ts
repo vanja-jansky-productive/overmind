@@ -35,6 +35,7 @@ export function useOutbox({ host, id, onSent, onError }: UseOutboxOptions) {
 
   useEffect(() => {
     mounted.current = true
+    box.resume()
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') box.flush()
     }
@@ -49,6 +50,7 @@ export function useOutbox({ host, id, onSent, onError }: UseOutboxOptions) {
       window.removeEventListener('pagehide', onPageHide)
       // Leaving: never drop a message silently — send it now (the POSTs outlive the screen).
       box.flush()
+      box.dispose()
     }
   }, [box, host, id])
 

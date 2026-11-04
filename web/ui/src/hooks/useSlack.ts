@@ -9,6 +9,8 @@ import type { SlackLink, SlackMinutes, SlackStatus } from '@/api/types'
  */
 const POLL_MS = 20 * 1000
 let state: SlackStatus | null = null
+/** JSON of `state`: an unchanged poll notifies nobody. */
+let stateKey = ''
 const listeners = new Set<() => void>()
 let timer: ReturnType<typeof setTimeout> | undefined
 let inflight: Promise<void> | null = null
@@ -22,6 +24,9 @@ export function refreshSlack(): Promise<void> {
   inflight = api
     .slack()
     .then((s) => {
+      const k = JSON.stringify(s)
+      if (k === stateKey) return
+      stateKey = k
       state = s
       emit()
     })

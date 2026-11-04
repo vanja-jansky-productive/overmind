@@ -40,7 +40,8 @@ export function useBrief(host: string, id: string, open: boolean) {
 
   const apply = useCallback(
     (b: Brief) => {
-      setState({ key, brief: b })
+      // An unchanged poll keeps the same object: nothing re-renders.
+      setState((prev) => (prev?.key === key && JSON.stringify(prev.brief) === JSON.stringify(b) ? prev : { key, brief: b }))
       setErrorOf(null)
       const a = awaiting.current
       if (a && a.key === key && !b.generating) {

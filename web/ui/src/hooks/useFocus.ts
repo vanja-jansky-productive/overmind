@@ -26,7 +26,8 @@ export function useFocus(): FocusState {
     async (signal) => {
       if (!focusHost) return
       try {
-        setStatus(await api.focus(focusHost, { signal }))
+        const next = await api.focus(focusHost, { signal })
+        setStatus((prev) => (sameFocus(prev, next) ? prev : next))
       } catch (err) {
         if (isAbortError(err)) return
         if (err instanceof ApiError && err.status === 501) setUnavailable(true)
@@ -50,6 +51,14 @@ export function useFocus(): FocusState {
   )
 
   return { host: focusHost && !unavailable ? focusHost : null, status, busy, toggle }
+}
+
+/** Same focus state, the countdown (`remainingMs`, moving every poll) aside: a poll that brings nothing new keeps the old object. */
+export function sameFocus(a: FocusStatus | null, b: FocusStatus | null): boolean {
+  if (!a || !b) return a === b
+  const { remainingMs: _a, ...x } = a
+  const { remainingMs: _b, ...y } = b
+  return JSON.stringify(x) === JSON.stringify(y)
 }
 
 /** Minutes left, rounded up ("42m"); null when off. */

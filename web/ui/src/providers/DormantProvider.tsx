@@ -32,11 +32,11 @@ export function DormantProvider({ children }: { children: ReactNode }) {
           }
         }),
       )
-      setHosts((prev) =>
-        names
-          .map((host, i) => next[i] ?? prev.find((h) => h.host === host) ?? null)
-          .filter((h): h is HostDormant => !!h && hasEntries(h)),
-      )
+      setHosts((prev) => {
+        const hosts = names.map((host, i) => next[i] ?? prev.find((h) => h.host === host) ?? null).filter((h): h is HostDormant => !!h && hasEntries(h))
+        // An unchanged poll keeps the old array: nothing re-renders.
+        return JSON.stringify(hosts) === JSON.stringify(prev) ? prev : hosts
+      })
     },
     [hostsKey],
   )

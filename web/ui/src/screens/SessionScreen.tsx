@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 import { ApiError, api, isAbortError, isSessionGone, sendErrorMessage, sessionErrorMessage } from '@/api/client'
 import type { FileStat, Message, PromptQueue, SessionKey } from '@/api/types'
 import { ContextMeter } from '@/components/ContextMeter'
+import { Ago } from '@/components/Ago'
 import { DropOverlay } from '@/components/DropOverlay'
 import { EditableTitle } from '@/components/EditableTitle'
 import { HostBadge } from '@/components/HostBadge'
@@ -41,7 +42,6 @@ import { useFileDrop } from '@/hooks/useAttach'
 import { useBrief } from '@/hooks/useBrief'
 import { useFileStats } from '@/hooks/useFileLinks'
 import { useOvermind } from '@/hooks/useOvermind'
-import { useNow } from '@/hooks/useNow'
 import { useOutbox } from '@/hooks/useOutbox'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { usePoller } from '@/hooks/usePoller'
@@ -53,7 +53,7 @@ import { useSessionTitle } from '@/hooks/useTitles'
 import { CHAT_LIMITS, CHAT_POLL_MS, PEEK_POLL_MS, TERM_LINES, nextChatLimit, parseMode, parseSize, type DetailMode } from '@/lib/chat'
 import { continueDraft } from '@/lib/brief'
 import { canBranchSession } from '@/lib/branch'
-import { modelLabel, relTime, shortCwd } from '@/lib/format'
+import { modelLabel, shortCwd } from '@/lib/format'
 import { harnessLabel } from '@/lib/harness'
 import { tailAnchor } from '@/lib/outbox'
 import { findSession, sessionDone, statusMeta } from '@/lib/sessions'
@@ -62,6 +62,7 @@ import { stacksKnown } from '@/lib/stacks'
 import { isUndoBackspace, withHint } from '@/lib/shortcuts'
 import { STATUS_TEXT } from '@/lib/styles'
 import { clampDetailsWidth, DETAILS_DEFAULT_W, DETAILS_MAX_W, DETAILS_MIN_W, detailsWidth } from '@/lib/layout'
+import { createStamp, useStamp, type Stamp } from '@/lib/stamp'
 import { cn } from '@/lib/utils'
 
 interface ChatState {
@@ -69,13 +70,11 @@ interface ChatState {
   truncated: boolean
   status: string
   name: string | null
-  at: number
   /** JSON of the payload, to skip re-renders when a poll brings nothing new. */
   key: string
 }
 interface PeekState {
   text: string
-  at: number
 }
 
 /** What the desktop shell's shortcuts can ask of the open pane. */
@@ -125,7 +124,6 @@ export function SessionScreen({
   const { overmind, refresh: refreshOvermind, dropSession } = useOvermind()
   const settings = useSettings()
   const [, navigate] = useLocation()
-  const now = useNow(1000)
   const session = findSession(overmind, host, id)
   const hostEntry = overmind?.hosts.find((h) => h.name === host) ?? null
 
@@ -214,6 +212,10 @@ export function SessionScreen({
   const [peek, setPeek] = useState<PeekState | null>(null)
   const [peekErr, setPeekErr] = useState<ApiError | Error | null>(null)
   const [peekBackend, setPeekBackend] = useState<string | null>(null)
+  // When the last good chat / peek capture was taken: moves on every poll, so it lives in a stamp
+  // read only by the header's "· 5s ago" (UpdatedAgo) — an unchanged poll re-renders nothing here.
+  const [chatStamp] = useState(createStamp)
+  const [peekStamp] = useState(createStamp)
 
   const [gone, setGone] = useState(false)
   // The server's prompt queue for this session (lib/queue.mjs): carried by every chat poll.
@@ -228,8 +230,8 @@ export function SessionScreen({
         const status = String(data.status || 'unknown')
         const name = typeof data.name === 'string' && data.name ? data.name : null
         const key = JSON.stringify([messages, truncated, status, name])
-        const at = data.capturedAt || Date.now()
-        setChat((prev) => (prev?.key === key ? { ...prev, at } : { messages, truncated, status, name, at, key }))
+        chatStamp.set(data.capturedAt || Date.now())
+        setChat((prev) => (prev?.key === key ? prev : { messages, truncated, status, name, key }))
         if (data.backend) setMsgBackend(String(data.backend))
         const q = data.queue ?? null
         setQueue((prev) => (JSON.stringify(prev) === JSON.stringify(q) ? prev : q))
@@ -244,7 +246,7 @@ export function SessionScreen({
         if (!signal.aborted) setLoadingOlder(false)
       }
     },
-    [host, id, chatLimit],
+    [host, id, chatLimit, chatStamp],
   )
 
   const pollPeek = useCallback(
@@ -252,8 +254,8 @@ export function SessionScreen({
       try {
         const data = await api.peek(host, id, termLines, { signal })
         const text = typeof data.text === 'string' ? data.text : ''
-        const at = data.capturedAt || Date.now()
-        setPeek((prev) => (prev && prev.text === text ? { ...prev, at } : { text, at }))
+        peekStamp.set(data.capturedAt || Date.now())
+        setPeek((prev) => (prev?.text === text ? prev : { text }))
         setPeekBackend(String(data.backend || 'unknown'))
         setPeekErr(null)
         setGone(false)
@@ -264,7 +266,7 @@ export function SessionScreen({
         if (err instanceof ApiError && err.status === 409) setPeekBackend('unknown')
       }
     },
-    [host, id, termLines],
+    [host, id, termLines, peekStamp],
   )
 
   const refreshChat = usePoller(pollChat, CHAT_POLL_MS, { enabled: mode === 'chat' })
@@ -322,7 +324,7 @@ export function SessionScreen({
   })()
   const status = gone ? 'unknown' : mode === 'chat' && chat ? chat.status : String(session?.status || 'unknown')
   const meta = statusMeta(status)
-  const updatedAt = mode === 'chat' ? chat?.at : peek?.at
+  const connected = mode === 'chat' ? !!chat : !!peek
   const lockedReason = gone
     ? 'Session is gone — nothing to steer.'
     : backend === 'unknown'
@@ -623,7 +625,7 @@ export function SessionScreen({
                 </span>
               ) : null}
               <span className="truncate text-dimmer tabular-nums">
-                {updatedAt ? `· ${relTime(updatedAt, now)} ago` : '· connecting…'}
+                <UpdatedAgo stamp={mode === 'chat' ? chatStamp : peekStamp} connected={connected} />
               </span>
             </div>
           </div>
@@ -849,3 +851,9 @@ export function SessionScreen({
 
 const modeItem =
   'size-10 rounded-[10px] text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm dark:data-[state=on]:bg-accent [&_svg:not([class*=size-])]:size-[18px]'
+
+/** The header's "· 5s ago" (the last good capture of the current mode), or "· connecting…" before one. */
+function UpdatedAgo({ stamp, connected }: { stamp: Stamp; connected: boolean }) {
+  const at = useStamp(stamp)
+  return connected && at ? <>· <Ago at={at} /> ago</> : '· connecting…'
+}
