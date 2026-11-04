@@ -322,7 +322,8 @@ Editing the list is as powerful as spawning (it widens the allow-list) and has n
 
 **kill** closes a session for good. A Codex row that is `busy` or `waiting` is interrupted first:
 `Escape` through the backend (the approval menu's "No", else the turn's interrupt), then a fresh
-`overmind list` every 250 ms until the row reads idle or is gone, at most 5 s — so the rollout ends
+`overmind list` every 250 ms until the row reads idle or is gone, at most 5 s of wall clock (lists
+included) — so the rollout ends
 with `turn_aborted` (SIGTERM alone leaves an embedded-mode turn open forever, and a daemon-mode turn
 keeps running in the Codex daemon). The kill goes ahead either way. Then SIGTERM to the agent's `pid` (SIGKILL after 4s), then the
 terminal that hosted it. tmux: the whole tmux session when Claude's window was its only window
@@ -436,7 +437,8 @@ during every list still means at most one list per gap (not back to back).
 `overmind.localHost()` — the tick, a peer's `?local=1`, briefs, peek/send — runs the CLI only when
 dirty and due, or when the last list is `safetySeconds` (30) old: what has no file signal (tmux/iTerm
 tab names, branches, a SIGKILLed process, a Codex session before its first prompt) shows within
-30 s. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
+30 s. A list with a `waiting` Codex row is reused for the TTL (`ttlMs`, 2 s) only: that state is
+read off the screen, and answering the menu in the TUI writes nothing until the command ends. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
 started before a change cannot clear `dirty` (a generation counter). `force` (mutations,
 spawnNamer, stacks, queue, slack) chains a new run behind such a one, and so does any validated
 caller once that change is due (a poked rebuild, a peer's `?local=1`): a list slower than the gap

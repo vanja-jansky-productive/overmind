@@ -237,7 +237,7 @@ installed; for iTerm rows and sub-agent approvals, add Overmind's approval hook:
 ```sh
 overmind codex hooks install          # appends one hook to PermissionRequest/Stop/UserPromptSubmit in ~/.codex/hooks.json
 codex                                 # next start: "Hooks need review" → Trust all and continue (once per host and binary path)
-overmind codex hooks status           # trusted, enabled per event
+overmind codex hooks status           # per event: trusted / stale (accept the review again) / untrusted, enabled
 ```
 
 Install it from the binary's stable path (`~/.local/bin/overmind`, as `scripts/deploy.sh` puts it):

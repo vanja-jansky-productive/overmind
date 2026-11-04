@@ -16,7 +16,8 @@ crates/overmind/          the `overmind` binary + library
 crates/overmind-desktop/  Overmind.app: Tauri 2 shell around the web UI (not a default member — use -p overmind-desktop)
 web/                   web server (server.mjs, lib/), Node >= 22, no npm deps
   ui/                  React + shadcn/ui PWA (npm, Vite build → ui/dist, gitignored) — see web/ui/README.md
-docs/                  setup, architecture, CLI reference, migration
+docs/                  setup, architecture, CLI reference, migration, desktop, operator; research
+                       and live findings (perf-research.md, codex-findings.md)
 scripts/guide/         feature guide: demo API + headless-Chrome screenshots → one HTML page
 scripts/perf/          idle-CPU harness for the web UI (headless WebKit on the frozen demo API) and the
                        web server's CPU / `overmind list` runs (server-cpu.mjs) — see its README

@@ -247,14 +247,14 @@ that stopped for a tool call. `context` comes from Codex's last `token_count`
 (`last_token_usage.input_tokens` of `model_context_window`); pi records no window, so it is `null`.
 
 **Codex approvals** (`core::codex_hooks`; Codex 0.166 findings in
-[notes/codex-0166-findings.md](notes/codex-0166-findings.md)). Codex writes nothing for a pending
+[codex-findings.md](codex-findings.md)). Codex writes nothing for a pending
 approval, so a busy Codex row is `waiting` while, and only while, its terminal shows the approval
 menu. Two things only *trigger* a look at the screen:
 
 - a **sidecar** from the opt-in hook (`overmind codex hooks install`, see [cli.md](cli.md#harnesses)):
   `PermissionRequest` runs `overmind _codex-hook` (async: it never blocks or decides), which writes
   `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks/<session_id>.json` (`$OVERMIND_CODEX_HOOKS_DIR`
-  overrides; tmp file + rename) — `{ v: 1, thread_id, turn_id, transcript_path, state:
+  overrides; 0600, a per-process tmp file + rename) — `{ v: 1, thread_id, turn_id, transcript_path, state:
   "waiting"|"clear", event, tool, command, reason, cwd, at }`; `Stop` and `UserPromptSubmit` write
   `clear`. A `waiting` sidecar counts when `at` is no older than the process (2 s slack) and no
   `task_started` / `task_complete` / `turn_aborted` follows it. A sub-agent's approval carries the
@@ -265,17 +265,23 @@ menu. Two things only *trigger* a look at the screen:
   CommandExecution` of the same command and no turn end after it. The command is the first `cmd`
   string literal of the escalated `exec_command(…)` (" (+N)" when several ask).
 
-Truth: on tmux any trigger costs one `capture-pane`; the row is `waiting` iff both `Would you like
-to run` and `Press enter to confirm` are in the last 40 lines (`✔ You approved …` has neither), else
-`busy`, also on a peek error. iTerm rows peek (one osascript, 0.1–0.3 s) only for a sidecar trigger —
-without the hook an iTerm row stays `busy`. A row with no backend has nothing to peek: a sidecar's
+Truth: on tmux any trigger costs one `capture-pane`; the row is `waiting` iff `Would you like to
+run`, an option `1.` line and `Press enter to confirm` are in that order in the last 40 lines
+(trailing blank padding dropped; `✔ You approved …` has none, and output that merely quotes the two
+strings has no option line between them), else `busy`, also on a peek error. iTerm rows peek (one
+osascript, 0.1–0.3 s) only while a sidecar's command has not run (no `item_completed` of it, no
+output of its call) — once answered the menu is gone for the rest of the turn, and nothing fires
+to say so. Without the hook an iTerm row stays `busy`. A row with no backend has nothing to peek: a sidecar's
 `waiting` stands until its command completes in the rollout or the turn ends (an approved long
 command reads `waiting` until it finishes); the rollout alone never makes it wait. The look runs
 every poll for as long as a trigger holds — the whole menu time, and the run of an approved
-escalated command until its `item_completed`. `waiting_for` is `<label>: \`<command, first line,
+escalated command until its `item_completed`. Leaving the menu in the TUI writes no file, so the
+web server reuses a list holding a waiting Codex row for its TTL (2 s), not the watcher's 30 s
+safety interval. `waiting_for` is `<label>: \`<command, first line,
 ≤ 80 chars>\`` (`Bash` → `exec approval`, else `<tool> approval`); the menu text is the web card's.
 Only exec approvals are read (an `apply_patch` screen is not the exec menu: `busy`). Sidecars of
-threads no live row has are deleted after an hour.
+threads no live row has (and temp files a killed hook left) are deleted after an hour, by any
+`list` on a host with a Codex home, Codex running or not.
 
 Targets (`peek <target>`, `send <target>` …) resolve against title, name, session-id prefix or pid,
 walking exact → prefix → substring → characters-in-order; two matches on the same rung is an error
