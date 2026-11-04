@@ -174,6 +174,49 @@ Reproduce: `cd scripts/perf && npm install && npx playwright-core install webkit
 `node scripts/perf/idle-cpu.mjs [--dist <web/ui/dist>] [--runs 3] [--idle 60] [--only list|session|mobile]`.
 Run nothing else on Playwright's WebKit meanwhile: the harness sums the CPU of every WebKit process.
 
+## Server: discovery on change (#38)
+
+The web server used to run `overmind list --json` on every 3 s snapshot tick while anyone watched
+(0.15–0.2 s of CPU per list on a 14-session host, children included). It now runs it when a watched
+file says something changed (registry / names / done / stacks: ≤ 1 per s; transcripts of live
+sessions, Codex/pi: ≤ 1 per 5 s) and at least every 30 s; `OVERMIND_WEB_WATCH=0` restores the old
+loop and is the "before" below. Measured with `scripts/perf/server-cpu.mjs`: `web/server.mjs` under
+`/usr/bin/time -l` (node + every reaped child), a GET `/api/overmind` every 5 s, 300 s per run,
+modes interleaved (0, 1, 0, 1) on the real fleet (16 rows, 1–3 busy throughout), one host. The
+fleet runs are read-only: the CLI wrapper runs only `list` (nothing was refused) and the server
+reads a scrubbed config.
+
+| Scenario | mode | list runs / 5 min | CPU s / 5 min | CPU s / min | % core |
+| --- | --- | --- | --- | --- | --- |
+| real fleet, run 1 | before | 95 | 18.97 | 3.79 | 6.3 |
+| real fleet, run 2 | after | 23 | 4.85 | 0.97 | 1.6 |
+| real fleet, run 3 | before | 94 | 19.74 | 3.95 | 6.6 |
+| real fleet, run 4 | after | 16 | 3.45 | 0.69 | 1.15 |
+| burst, fake CLI, 0.5 s per list | before | 87 | (≈ 17 at 0.2 s/list) | | |
+| burst, fake CLI, 0.5 s per list | after | 65 | (≈ 13 at 0.2 s/list) | | |
+| idle, temp HOME, nothing writes | before | 95 | (≈ 19 at 0.2 s/list) | | |
+| idle, temp HOME, nothing writes | after | 11 | (≈ 2.4 at 0.2 s/list) | (≈ 0.48) | (≈ 0.8) |
+
+- Busy fleet (runs 2 and 4): 0.17–0.24× the lists and CPU of before. A list costs ≈ 0.2 s of CPU
+  here (children included), in both modes.
+- Burst: 3 transcripts appended 10×/s and a registry rewrite every 20 s, with a fake CLI that takes
+  0.5 s per list, so events land during lists as they do on a real fleet. 65 runs is under the
+  ceiling of ≈ 75 (60 from the 5 s gap + 15 rewrites). A list that stays dirty after an event
+  mid-run still waits out its gap; the first version of #38 listed back to back in that state.
+- Idle: no session could be guaranteed idle on the real fleet (the session running the harness is
+  busy itself), so this uses a temp HOME with 3 registry files and nothing writing. The server
+  listed once at start and then on the 30 s bound only (11 lists). Node's own CPU was 0.19 s;
+  the CPU column scales the lists by the fleet's 0.2 s per list, so ≈ 0.8 % of a core is an
+  estimate from a measured list count, just over the 0.7 % target. A longer `safetySeconds`
+  lowers it (60 s → ≈ 0.4 %).
+- Latency, registry rewrite → list started (temp HOME, /api/health polled every 100 ms,
+  11 rewrites): after, under the burst with 0.5 s lists, 257–287 ms (250 ms coalesce + FSEvents);
+  round 1 measured 259–267 ms quiet and before 69–2238 ms (the 3 s tick). The UI shows it on
+  its next poll (≤ 5 s) either way.
+
+Reproduce: `node scripts/perf/server-cpu.mjs --scenario fleet|burst|idle|latency --watch 0|1 [--seconds 300] [--list-delay 0.5]`
+(scripts/perf/README.md).
+
 ## Caveats
 
 - WebKit numbers come from headless Playwright WebKit 26, not Overmind.app itself. A's idle cost matched the real app (1.97 vs 2.26 s/min), but the shell's own 0.87 s/min was not re-measured after the fixes. It is likely compositor work driven by the same re-renders.

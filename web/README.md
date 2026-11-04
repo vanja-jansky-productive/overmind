@@ -26,12 +26,20 @@ Open `http://<host>:<port>/` on your phone and "Add to Home Screen". Health: `/a
 
 Reads the shared overmind config (`$OVERMIND_CONFIG` or `~/.config/overmind/config.json`, written by
 `overmind init`). Relevant keys: `self`, `hosts.<name>.web` (peers), `web.port`, `web.bind`,
-`web.ui` (a path), `web.editor`, `web.quickReplies`, `web.models`, `web.autoName`, `web.grouping`, `web.briefs`, `web.stacks`, `restore.onBoot`, `grouping.host`, `stacks.model` (reported only), `tmux`, `overmindBin`, `claude` / `harnesses.<codex|pi>.command` (how each agent launches in a spawn), `harnesses.<claude|codex|pi>.model` / `.effort` (the default a spawn starts with; Settings → Models), `spawnDirs` (spawn only accepts dirs inside these; editable in Settings → Start directories, which writes it through `overmind config set`), `repos` (Settings → Git repos: `overmind repos` roots, intervals and the sync timer, per host). Example:
+`web.ui` (a path), `web.editor`, `web.quickReplies`, `web.models`, `web.autoName`, `web.grouping`, `web.briefs`, `web.stacks`, `web.discovery`, `restore.onBoot`, `grouping.host`, `stacks.model` (reported only), `tmux`, `overmindBin`, `claude` / `harnesses.<codex|pi>.command` (how each agent launches in a spawn), `harnesses.<claude|codex|pi>.model` / `.effort` (the default a spawn starts with; Settings → Models), `spawnDirs` (spawn only accepts dirs inside these; editable in Settings → Start directories, which writes it through `overmind config set`), `repos` (Settings → Git repos: `overmind repos` roots, intervals and the sync timer, per host). Example:
 [`config.example.json`](./config.example.json). Without a config it runs as a single local host
 on 127.0.0.1.
 
 Env overrides: `OVERMIND_CONFIG`, `OVERMIND_WEB_PORT` / `PORT`, `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
-`OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` (`0` / `1`), `OVERMIND_BRIEFS_DIR`, `OVERMIND_BIN`, `OVERMIND_TMUX`.
+`OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` / `OVERMIND_WEB_WATCH` (`0` / `1`), `OVERMIND_BRIEFS_DIR`, `OVERMIND_BIN`, `OVERMIND_TMUX`.
+
+`web.discovery` (default `{ "watch": true, "safetySeconds": 30, "fastGapMs": 1000, "slowGapMs": 5000 }`)
+decides when the server runs `overmind list` for its own sessions: when a watched file changes
+(the Claude registry, names cache, `done.json`, stacks: at most every `fastGapMs`; transcripts of
+live sessions, Codex/pi rollouts: at most every `slowGapMs`), and at least every `safetySeconds`
+while someone is asking (tmux/iTerm tab names and branches have no file to watch). Kill-switch:
+`OVERMIND_WEB_WATCH=0` (or `"watch": false`) lists on every 3 s refresh with a 2 s cache, as before.
+`/api/health` → `discovery` shows the mode and how many lists ran.
 
 `web.autoName` (default off; opt in with `{ "enabled": true, "intervalMinutes": 5 }`) makes each server run
 `overmind name --all --apply` on its own host every few minutes, so sessions started without a

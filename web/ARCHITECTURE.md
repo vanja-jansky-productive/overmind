@@ -27,7 +27,8 @@ phone ──http──▶ workstation:7878 (self=workstation) ──http──�
 server.mjs            wiring: config → deps → API → HTTP server → listen
 lib/config.mjs        shared overmind config loader + binary resolution
 lib/overmind-cli.mjs     the ONLY place that invokes the `overmind` CLI (`list --json`, `name --all --apply`, `usage --json`, `config set`, `--local stack … --json`, `--local restore … --json`, …)
-lib/overmind.mjs         local discovery: cache (2s TTL), in-flight de-dup, never throws
+lib/overmind.mjs         local discovery: run `overmind list` on a watched change (else ≤ 30 s old) or a 2s TTL without a watcher; in-flight de-dup, never throws
+lib/watch.mjs         fs.watch on what `overmind list` reads (registry, transcripts of live sessions, Codex/pi, names, done, stacks) → fast/slow change signals
 lib/backends.mjs      peek/send/keys/screen/input straight to tmux / iTerm2 (osascript)
 lib/transcript.mjs    transcript JSONL → chat messages (Claude Code; Codex rollouts and pi sessions via the row's `transcript` path)
 lib/spawn-dirs.mjs    Settings → Start directories: validate a `spawnDirs` list, write it via `overmind config set`, hot-reload
@@ -170,7 +171,7 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 
 | method | path | request | response |
 | --- | --- | --- | --- |
-| GET | `/api/health` | | `{ name, version, apiVersion, self, uptime, now, autoName: { enabled, intervalMinutes, lastRun }, grouping, briefs: { enabled, model, callsLastHour, maxCallsPerHour, generating, lastRun }, stacks: { sync, syncMinutes, lastSync: { at, ms, reason, ok, changed: [ids], error? } \| null } }` |
+| GET | `/api/health` | | `{ name, version, apiVersion, self, uptime, now, autoName: { enabled, intervalMinutes, lastRun }, grouping, briefs: { enabled, model, callsLastHour, maxCallsPerHour, generating, lastRun }, stacks: { sync, syncMinutes, lastSync: { at, ms, reason, ok, changed: [ids], error? } \| null }, discovery: { mode: 'watch' \| 'degraded' \| 'idle' \| 'ttl', lastListAt, listRuns, ttlMs, safetyMs, gaps: { fast, slow }, events?, roots?: [{ id, armed, error? }] } }` |
 | GET | `/api/settings` | | `{ apiVersion, self, hosts: [names], quickReplies: [{ label, text }], uploads: { maxMB }, models: [{ id, label }], notes: { enabled, name? }, stacks: { enabled, model, generate }, focus: { host } }` — `stacks.model` / `generate` = the config's `stacks.model` (default `"sonnet"`) / `stacks.enabled` |
 | GET | `/api/overmind` | `?local=1` = this host only | `{ self, hosts: [Host], snapshotAt }` — self first, then peers (`snapshotAt` only on the merged view) |
 | GET | `/api/hosts/:host/sessions/:id/peek` | `?lines=200` (10..2000) | `{ host, id, backend, lines, text, capturedAt }` |
@@ -390,7 +391,7 @@ received the request, like brief links. Proxied to a peer like the other host ro
 non-self host), 405 wrong method, 409 existing tmux session or uncontrollable backend,
 413 body over 64 KB (an upload: over `web.uploads.maxMB`), 502 peer unreachable / non-JSON, 503 local discovery failed, 504 peer timeout.
 
-**Timeouts / caching**: local list cached 2s; peer `/api/overmind` fetch 6s; proxied uploads
+**Timeouts / caching**: local list reused until a watched change is due or it is 30s old (2s TTL without a watcher — see Discovery on change); peer `/api/overmind` fetch 6s; proxied uploads
 15 min (also the server's whole-request budget); proxied session and spawn calls 20s (a proxied `autoname` can outlast that and then answers 504, while the pass still
 finishes on the peer).
 
@@ -409,8 +410,29 @@ through) and the peer's answer — a 413 included — comes back as is.
 background and serves the last result immediately (stale-while-revalidate; `snapshotAt` says
 when it was built). Only the first request ever waits for a build; after idling, the next one gets
 the old snapshot at once and wakes the refresher. Spawn, kill and autoname rebuild it right away.
-`?local=1` (what peers poll) bypasses it and uses the 2s local cache. Without this a page load
+`?local=1` (what peers poll) bypasses it and asks local discovery directly. Without this a page load
 waited ~1–2s on `overmind list` (one `ps` per session plus an osascript for iTerm tab titles).
+
+**Discovery on change** (#38): a background tick no longer means an `overmind list` (0.15 s of CPU
+on a 14-session host; every 3 s that was ~5 % of a core). lib/watch.mjs watches what the list reads
+and classifies each event: **fast** — `~/.claude/sessions/<pid>.json` (a row appears or goes,
+busy/idle/waiting; headless `claude -p` registrations and `.key` files ignored),
+`~/.claude/overmind-names.json` (only when its content changed: `list` rewrites it), `done.json`,
+the stacks dir; **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
+and `<sid>/…`), Codex rollouts and `session_index.jsonl`, pi sessions (any new one while a session of
+that harness has no transcript yet). `snapshot.json*` and its lock (written by `list`) never signal.
+Each class is coalesced 250 ms, then marks the list dirty with `dueAt` = last run start +
+`web.discovery.fastGapMs` (1 s) / `slowGapMs` (5 s) and pokes the snapshot to rebuild then.
+`overmind.localHost()` — the tick, a peer's `?local=1`, briefs, peek/send — runs the CLI only when
+dirty and due, or when the last list is `safetySeconds` (30) old: what has no file signal (tmux/iTerm
+tab names, branches, a SIGKILLed process, a Codex session before its first prompt) shows within
+30 s. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
+started before a change cannot clear `dirty` (a generation counter), and `force` (mutations,
+spawnNamer, stacks, queue, slack) chains a new run behind such a one. The watcher starts with the
+first caller and stops after 90 s without one. No watcher (`web.discovery.watch: false`,
+`OVERMIND_WEB_WATCH=0`), a watch error or no `~/.claude/sessions` → `degraded`/`ttl`: every tick
+lists and the 2 s TTL applies, exactly as before. `/api/health.discovery` reports the mode,
+`listRuns` and `lastListAt`.
 
 **Static**: every non-`/api/` GET/HEAD is served from the UI dir with a weak ETag
 (`W/"<size>-<mtime>"`, hex) and `cache-control: no-cache`, so a reload revalidates and gets `304`
@@ -462,7 +484,7 @@ Other servers answer `/api/groups` (and `/api/groups/edit`) by proxying to `grou
 
 Format, merge rules, generation and budget: docs/architecture.md → Session briefs. In the server:
 `createBriefs` (lib/briefs.mjs) is always created; with `web.briefs.enabled` it also runs a
-background pass every 30s over this host's live sessions (`overmind.localHost()`, so it rides the 2s
+background pass every 30s over this host's live sessions (`overmind.localHost()`, so it rides the
 discovery cache). Per idle session whose transcript grew: model-free extraction
 (lib/brief-extract.mjs, incremental, first read ≤ the last 16 MB) merged into the file, then — only
 past every gate (idle ≥ `idleMs`, ≥ `minNewTurns` / `minNewChars` new, ≥ `minIntervalMs` since that

@@ -85,7 +85,10 @@ Every machine runs the same `server.mjs`. It:
 
 - serves the static UI, installable as a PWA: the React app built to `web/ui/dist/`
   (`overmind web build`; until then `/` is a "not built" placeholder);
-- exposes **its own** sessions, discovered with `overmind list --json` (cached ~2 s);
+- exposes **its own** sessions, discovered with `overmind list --json` — run when a watched file
+  says something changed (the Claude registry, transcripts of live sessions, Codex/pi rollouts,
+  the names cache, `done.json`, stacks) and at least every 30 s while someone is asking, else the
+  last list is served; with `OVERMIND_WEB_WATCH=0` (or a failed watch) a 2 s TTL cache;
 - drives its own backends directly for peek/send/keys (it needs untruncated, header-free output);
 - reads chat transcripts from `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`;
 - for the whole-overmind view, fetches each peer's local list over HTTP and merges.
@@ -433,7 +436,7 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 
 | method | path | purpose |
 | --- | --- | --- |
-| GET | `/api/health` | name, version, apiVersion, self, uptime, autoName (`lastRun`) |
+| GET | `/api/health` | name, version, apiVersion, self, uptime, autoName (`lastRun`), discovery (`mode`, `listRuns`, `lastListAt`) |
 | GET | `/api/settings` | apiVersion, self, host names, quick replies, `transcribe: { enabled }` (this server has a transcription key), `speak: { enabled, voice }` (it can read replies aloud), `operator: { enabled, hosts }` (the [voice operator](#voice-operator) and where it runs), `focus: { host }` (`web.focus.host`, null when unset) |
 | GET | `/api/overmind[?local=1]` | `{ self, hosts: [{ name, ok, error?, sessions, spawnDirs, hiddenSpawnDirs?, home?, notes?, stacks? }], snapshotAt }` — `spawnDirs` (`[{ label, path }]`): what that host offers in New session, without its hidden entries (Home when it offers none); `hiddenSpawnDirs` (same shape, present only when it has any; older servers omit it): its `hidden: true` entries, allowed for spawns (the embed view checks `dir` against both) but not offered — `home`: that host's home directory (for `~/…` paths, e.g. the [embed view](#embed-view)'s `dir`); older servers omit it — `stacks`: that host's [session stacks](#session-stacks), compact (`{ id, label, host, members: [{ session, host, live }] }`), from which the merged view stamps `stack: { id, label, host }` on the rows of members running on *other* hosts; sessions are `list --json` objects + `host` (a Codex session with no transcript yet gets `session_id: "pid-<pid>"` until it has one) (`title` capped at 300 chars) + `editorUrl` (the "Open in editor" link for its cwd, built by the server that answered — see [Session briefs](#session-briefs)); the merged view is a warm background-refreshed snapshot |
 | GET | `/api/hosts/:host/sessions/:id/peek?lines=N` | plain-text screen |
@@ -933,7 +936,7 @@ the text below the separator as the user's own prompt and the part above it as t
 - no other brief call is running on this host (one at a time), and fewer than
   `maxCallsPerHour` calls in the last hour.
 
-The background pass checks this host's live sessions every 30 s (the 2 s discovery cache — no
+The background pass checks this host's live sessions every 30 s (the discovery cache — no
 extra `overmind list` while a UI is polling) and forgets sessions that are gone. Resource and todo
 extraction (no model) runs whenever the transcript grew — in the background pass and on GET. A
 manual regenerate skips the idle, interval and new-content gates (with nothing new it re-reads the
