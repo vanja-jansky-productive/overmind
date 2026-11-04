@@ -1,3 +1,4 @@
+// Integration test (the unit tests are watch.test.mjs and overmind.test.mjs).
 // Discovery on change with REAL fs.watch (FSEvents on macOS, inotify on Linux) in a temp home:
 // the watcher, lib/overmind.mjs and lib/snapshot.mjs wired as server.mjs / lib/api.mjs do, with a
 // fake CLI that counts runs and writes what `overmind list` writes (snapshot.json, its lock, the

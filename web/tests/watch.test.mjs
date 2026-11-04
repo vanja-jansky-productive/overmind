@@ -146,6 +146,23 @@ test('registry: <pid>.json changes are fast, coalesced per window; keys, tmp fil
   assert.deepEqual(changes, ['fast', 'fast']);
 });
 
+test('registry: a pid recorded as headless that reads interactive later signals its exit (missed delete, reused pid)', () => {
+  const { fs, clock, changes, w } = setup();
+  w.start();
+  const s = dir('sessions');
+  const f = path.join(s, '33.json');
+  fs.files.set(f, JSON.stringify({ pid: 33, kind: 'interactive', entrypoint: 'sdk-cli' }));
+  fs.fire(s, '33.json'); // headless; its delete is then missed
+  fs.files.set(f, JSON.stringify({ pid: 33, kind: 'interactive', entrypoint: 'cli' }));
+  fs.fire(s, '33.json'); // the pid is reused by a real session
+  clock.flush();
+  assert.deepEqual(changes, ['fast']);
+  fs.files.delete(f);
+  fs.fire(s, '33.json');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'fast'], 'its clean exit is news');
+});
+
 test('state dir: done.json only — snapshot.json, its lock and temp files never signal', () => {
   const { fs, clock, changes, w } = setup();
   w.start();

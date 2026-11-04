@@ -20,10 +20,10 @@ import path from 'node:path';
 
 import { overmindStateDir, expandHome } from './config.mjs';
 
-// Mirrors `is_headless` (crates/overmind/src/core/discovery.rs): `claude -p` children register
-// too (autoname, briefs, grouping, inbox) and are never rows.
-const HEADLESS_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts', 'sdk-py', 'local-agent', 'github-action']);
-const isHeadless = (reg) =>
+// Mirrors `is_headless` (crates/overmind/src/core/discovery.rs; tests/watch-headless-parity.test.mjs
+// pins the two): `claude -p` children register too (autoname, briefs, grouping, inbox) and are never rows.
+export const HEADLESS_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts', 'sdk-py', 'local-agent', 'github-action']);
+export const isHeadless = (reg) =>
   (typeof reg?.kind === 'string' && reg.kind !== 'interactive') ||
   (typeof reg?.entrypoint === 'string' && (HEADLESS_ENTRYPOINTS.has(reg.entrypoint) || reg.entrypoint.startsWith('sdk-')));
 
@@ -141,6 +141,7 @@ export function createDiscoveryWatcher({
           headless.add(base);
           return null;
         }
+        headless.delete(base); // a reused pid (a missed headless delete) must not hide this row's exit
         return 'fast';
       }
       case 'file': {
@@ -211,6 +212,7 @@ export function createDiscoveryWatcher({
     }
     armed.clear();
     failed.clear();
+    headless.clear(); // deletes missed while stopped would otherwise hide a reused pid's exit
     for (const cls of Object.keys(pending)) {
       clearTimer(pending[cls]);
       pending[cls] = null;

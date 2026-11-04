@@ -202,6 +202,9 @@ impl Session {
 /// the registry as an `sdk-cli` session in `$TMPDIR` called `t-d1`. Left in, the
 /// dashboard's titling pass discovers its own children and titles them, and each
 /// title it pays for spawns the next one.
+///
+/// Mirrored in `web/lib/watch.mjs` (the server's file-watch filter); a parity test
+/// (`web/tests/watch-headless-parity.test.mjs`) reads this list and `is_headless`.
 const HEADLESS_ENTRYPOINTS: [&str; 5] = [
     "sdk-cli",
     "sdk-ts",
