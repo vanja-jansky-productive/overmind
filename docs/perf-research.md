@@ -151,8 +151,13 @@ the `main` build and `after` is the branch build, both through the same harness 
 
 Runs spread widely (after: list 0.28–0.54, session 0.51–0.56, mobile 0.08–0.35), so read the medians
 as a rough size. Without the 30 s cadence the branch measured 0.47 / 0.68 / 0.32: the rows' "3m" no
-longer re-render every second. The desktop shell keeps one 1 s leaf while idle, its "updated 4s ago",
-which the 5 s poll keeps under a minute.
+longer re-render every second. That gain is an upper bound: the frozen mock never moves a clock (rows
+at a fixed `updated_at`, a fixed `snapshotAt` and capture time), so every label ages past a minute in
+the window and drops to the 30 s clock. In real use a busy session's row and an open session's header
+("· 5s ago", fed by each new capture) stay young and keep ticking every second. Still on a fixed
+clock while idle, whatever they show: the leaves that read `useNow(ms)` directly at 15–60 s
+(BriefSection, BackgroundWork, FocusToggle, SlackLink, ChatView's date captions) and the screens
+that hand rows a `now` (web/ui/README.md, Clocks).
 
 Render counts (dev build, the same frozen mock, `console.count` in `DesktopShell`, `ListScreen`,
 `SessionScreen`): `main` renders ~170/min on the desktop list and ~200/min with a session open. The
@@ -160,6 +165,10 @@ branch renders 0 in 60 s on the desktop list, the desktop session, the mobile li
 session. What is left is the floor: a fetch, a `JSON.parse` and a key compare every 2–5 s, plus the
 text leaves (1 s only while they show seconds). Memoizing the rows would not
 help: they no longer re-render while idle.
+
+For #39 (React Compiler): check that it does not memoize `tickerNow(AGO_FAST_MS)` in `useAgoNow`
+(a non-hook call with constant inputs); frozen at the first render, it would keep labels that were
+young at mount on the 1 s clock for good (more renders, the text stays right).
 
 Reproduce: `cd scripts/perf && npm install && npx playwright-core install webkit`, then
 `node scripts/perf/idle-cpu.mjs [--dist <web/ui/dist>] [--runs 3] [--idle 60] [--only list|session|mobile]`.

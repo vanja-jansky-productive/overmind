@@ -132,9 +132,8 @@ src/
   hooks/useOutbox.ts  the session screen's Outbox: keepalive POSTs, flush on unmount / background, pagehide hand-off
   hooks/useNow.ts     useNow(ms): one shared clock per interval (one timer, cached tick); useAgoNow(at…) /
                       agoEvery(): 1 s while a relative time shows seconds, 30 s after
-  hooks/useStamp.ts   createStamp() / useStamp(): a forward-only timestamp in a tiny store — per-poll clocks
-                      live here, not in state
-                      is the text leaf over it
+  hooks/useStamp.ts   createStamp() / useStamp(): a timestamp in a tiny store — per-poll clocks
+                      live here, not in state (`set` only moves it forward, `force` sets it outright)
   hooks/useSettings.ts, useTheme.ts, usePrefs.ts, usePersistentState.ts
   hooks/useJobs.ts    useJobs() (every reachable host's GET …/jobs, 30s poll, patch() for the enabled switch),
                       useJobShow(host, name, enabled) (one job's runs, 15s poll while expanded)
@@ -184,11 +183,12 @@ src/
 - **Clocks**: a relative time ("5s ago") is a leaf that reads the clock itself — `<Ago at={…} />`, or
   `useAgoNow(at…)` for a composite line built with `relTime` (both tick every second while the label
   shows seconds, every 30 s once it shows minutes), or `useNow(ms)` for anything else — in the smallest
-  component that shows it. On the always-mounted surfaces (shell, top bar, session list, board,
-  session screen) no `now` prop crosses a component boundary: a clock above a list re-renders the
-  whole list every tick. Some secondary screens (Inbox, Memos, Usage, Embed, Settings → Repos, the
-  stack sheet) still hand rows a `now` from one slow (30 s+) screen clock; move them to leaves when
-  you next change them, and never add a new one.
+  component that shows it. A clock above a list re-renders the whole list every tick, so on the
+  always-mounted surfaces (shell, top bar, session list, board) no `now` prop crosses a component
+  boundary. These still hand a `now` down from one screen clock: the session screen's ChatView to
+  DoneCard (60 s), Embed (5 s), the stack sheet (15 s), Inbox, Usage, Prs, Tasks, Jobs and
+  Settings → Repos (30 s), Memos and TaskDialog (60 s). Move them to leaves when you next change
+  them, and never add a new one.
 - **Colours**: tokens in `src/index.css` — shadcn's (`background`, `card`, `muted-foreground`, …)
   plus `dimmer`, `status-{waiting,busy,idle,unknown,error}` and `host-{0..3}`. Use them as Tailwind
   classes (`text-status-busy`, `bg-host-2/10`); keep class names literal (maps in `lib/styles.ts`).
