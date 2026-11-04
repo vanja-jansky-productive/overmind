@@ -100,6 +100,16 @@ pub fn expand_tilde(p: &str) -> String {
     p.to_string()
 }
 
+/// Overmind's state dir: `${XDG_STATE_HOME:-~/.local/state}/overmind` (`~` expanded, like
+/// the web server's `overmindStateDir`). Each kind of state lives in its own file or dir here.
+pub fn state_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .filter(|p| !p.is_empty())
+        .map(|p| PathBuf::from(expand_tilde(&p.to_string_lossy())))
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/state"))
+        .join("overmind")
+}
+
 /// Rewrite an absolute path under this machine's `$HOME` to `~/…`, so it means
 /// "the same place under *your* home" on a remote host.
 pub fn tildify(p: &str) -> String {

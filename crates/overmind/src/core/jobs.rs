@@ -804,11 +804,7 @@ pub fn state_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("OVERMIND_JOBS_DIR").filter(|p| !p.is_empty()) {
         return PathBuf::from(tools::expand_tilde(&p.to_string_lossy()));
     }
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .filter(|p| !p.is_empty())
-        .map(|p| PathBuf::from(tools::expand_tilde(&p.to_string_lossy())))
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/state"));
-    base.join("overmind").join("jobs")
+    tools::state_dir().join("jobs")
 }
 
 pub fn state_path(job: &str) -> PathBuf {
