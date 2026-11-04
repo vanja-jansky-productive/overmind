@@ -75,6 +75,30 @@ test('armed and quiet: the last list is served (fetchedAt restamped) until the 3
   assert.equal(om.status().mode, 'watch');
 });
 
+test('a waiting Codex row has no file signal for its end: the list is reused for the TTL only', async () => {
+  const { clock, cli, om } = setup();
+  let rows = [{ session_id: 'c1', harness: 'codex', status: 'waiting' }];
+  cli.list = async () => ((cli.runs += 1), rows);
+  await om.localHost();
+  clock.advance(1_999);
+  await om.localHost();
+  assert.equal(cli.runs, 1, 'under the TTL: reused');
+  clock.advance(1);
+  rows = [{ session_id: 'c1', harness: 'codex', status: 'busy' }]; // approved in the TUI
+  assert.equal((await om.localHost()).sessions[0].status, 'busy');
+  assert.equal(cli.runs, 2);
+  clock.advance(29_000);
+  await om.localHost();
+  assert.equal(cli.runs, 2, 'no waiting Codex row: back to the safety bound');
+  // A waiting Claude row has its own file signal (sessions/<pid>.json): the safety bound.
+  rows = [{ session_id: 'k1', harness: 'claude', status: 'waiting' }];
+  clock.advance(1_000);
+  await om.localHost();
+  clock.advance(5_000);
+  await om.localHost();
+  assert.equal(cli.runs, 3);
+});
+
 test('a signal right after a run is served until its gap, then lists once', async () => {
   const { clock, cli, om } = setup();
   await om.localHost();

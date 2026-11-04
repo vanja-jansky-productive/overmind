@@ -23,7 +23,9 @@ export function placeholderId(s) {
  * Two ways to decide when the last list is still good:
  * - **TTL** (no watcher, or it is idle / degraded; `OVERMIND_WEB_WATCH=0`): reused for `ttlMs`.
  * - **Validated** (an armed, healthy `watcher` — lib/watch.mjs): reused while nothing changed
- *   and it is < `safetyMs` old. A file signal (`signal('fast'|'slow')`) marks it dirty: the next
+ *   and it is < `safetyMs` old — < `ttlMs` while it holds a `waiting` Codex row: that state is
+ *   read off the screen, and answering the menu in the TUI writes no file until the approved
+ *   command ends (docs/codex-findings.md §1), so no signal would end it. A file signal (`signal('fast'|'slow')`) marks it dirty: the next
  *   caller at or after `dueAt` (the last run's start + that class's gap) runs the CLI. The value
  *   comes back with `fetchedAt` = now (validated now), so a quiet host reads "checked just now".
  *
@@ -122,7 +124,8 @@ export function createOvermind({
     listRuns += 1;
     const promise = discover()
       .then((value) => {
-        cached = { at: now(), startedAt, gen: g, value };
+        const screenOnly = value.sessions.some((s) => s.harness === 'codex' && s.status === 'waiting');
+        cached = { at: now(), startedAt, gen: g, value, screenOnly };
         lastListAt = startedAt;
         if (g === gen) dirty = false;
         if (g >= staleGen) stale = false;
@@ -144,8 +147,9 @@ export function createOvermind({
         // Never while a mutation is pending, nor while a run that started after a change since the
         // cached one is in flight: that run has the change (a later signal only moves `dueAt`).
         const covered = stale || (inFlight && inFlight.gen > cached.gen);
+        const maxAge = cached.screenOnly ? Math.min(ttlMs, safetyMs) : safetyMs;
         // Restamped only when known clean: a list known stale (not yet due) keeps its own time.
-        if (!covered && !(dirty && t >= dueAt) && t - cached.startedAt < safetyMs) return dirty ? cached.value : { ...cached.value, fetchedAt: t };
+        if (!covered && !(dirty && t >= dueAt) && t - cached.startedAt < maxAge) return dirty ? cached.value : { ...cached.value, fetchedAt: t };
       } else if (!stale && t - cached.at < ttlMs) {
         return cached.value;
       }
