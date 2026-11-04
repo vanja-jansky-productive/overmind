@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { FileLinksContext, HighlightContext, type FileLinkApi } from '@/hooks/useFileLinks'
 import { useNoteFile } from '@/hooks/useNotes'
 import { copyWithToast } from '@/lib/clipboard'
-import { relTime } from '@/lib/format'
+import { Ago } from '@/components/Ago'
 import { isLocalHref } from '@/lib/markdown'
 import { metaText, notesHref, resolveNoteLink, type NoteIndex } from '@/lib/notes'
 import { cn } from '@/lib/utils'
@@ -119,7 +119,7 @@ export function NoteView({ host, path, entry, index, highlight, scrollToHit, des
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <HostBadge host={host} />
             <span className="min-w-0 font-mono break-all text-dimmer">{path}</span>
-            {entry?.mtime ? <span className="text-dimmer tabular-nums">· modified {relTime(entry.mtime)} ago</span> : null}
+            {entry?.mtime ? <span className="text-dimmer tabular-nums">· modified <Ago at={entry.mtime} /> ago</span> : null}
           </div>
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             {file?.kind === 'markdown' ? (

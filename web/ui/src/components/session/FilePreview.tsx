@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { FileLinksContext, type FileLinkApi } from '@/hooks/useFileLinks'
 import { formatBytes } from '@/lib/attach'
 import { copyWithToast } from '@/lib/clipboard'
-import { relTime } from '@/lib/format'
+import { Ago } from '@/components/Ago'
 import { isLocalHref } from '@/lib/markdown'
 import { basename, resolveFrom } from '@/lib/paths'
 import { isPlainPath, undiffed } from '@/lib/plain'
@@ -179,7 +179,8 @@ export function FilePreview({ host, id, file, onClose, desktop = false }: FilePr
     }
   }
 
-  const meta = cur ? [cur.size != null ? formatBytes(cur.size) : '', cur.mtime ? `modified ${relTime(cur.mtime)} ago` : ''].filter(Boolean).join(' · ') : ''
+  const size = cur?.size != null ? formatBytes(cur.size) : ''
+  const mtime = cur?.mtime
 
   return (
     <Dialog open={!!file} onOpenChange={(o) => (o ? null : onClose())}>
@@ -217,7 +218,13 @@ export function FilePreview({ host, id, file, onClose, desktop = false }: FilePr
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-1">
               <HostBadge host={host} />
-              {meta ? <span className="text-xs text-dimmer tabular-nums">{meta}</span> : null}
+              {size || mtime ? (
+                <span className="text-xs text-dimmer tabular-nums">
+                  {size}
+                  {size && mtime ? ' · ' : null}
+                  {mtime ? <>modified <Ago at={mtime} /> ago</> : null}
+                </span>
+              ) : null}
               <span className="flex-1" />
               {renders && !tooBig ? (
                 <Button variant="outline" size="sm" onClick={toggleSource} aria-pressed={source}>

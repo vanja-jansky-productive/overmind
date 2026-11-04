@@ -2,7 +2,7 @@ import { Fragment } from 'react'
 import { CircleAlertIcon, FileTextIcon, Loader2Icon } from 'lucide-react'
 
 import type { NoteEntry, NoteHit, NotesSearch } from '@/api/types'
-import { relTime } from '@/lib/format'
+import { Ago } from '@/components/Ago'
 import { notesHref, splitRanges } from '@/lib/notes'
 import { dirname } from '@/lib/paths'
 import { cn } from '@/lib/utils'
@@ -72,7 +72,7 @@ export function NoteResults({ host, data, loading, error, selected, onPick, comp
               >
                 <span className="flex min-w-0 items-baseline gap-2">
                   <span className={cn('min-w-0 flex-1 truncate font-medium', compact ? 'text-[0.8125rem]' : 'text-[0.9375rem]')}>{r.title}</span>
-                  <span className="shrink-0 text-[0.6875rem] text-dimmer tabular-nums">{relTime(r.mtime)}</span>
+                  <span className="shrink-0 text-[0.6875rem] text-dimmer tabular-nums"><Ago at={r.mtime} /></span>
                 </span>
                 {folder(r.path) ? <span className="block truncate font-mono text-[0.6875rem] text-dimmer">{folder(r.path)}/</span> : null}
                 {r.matches.map((m, i) => (
@@ -115,7 +115,7 @@ export function RecentNotes({ host, notes, selected, compact = false }: { host: 
                 <span className="block truncate">{n.title ?? n.path}</span>
                 {folder(n.path) ? <span className="block truncate font-mono text-[0.6875rem] text-dimmer">{folder(n.path)}/</span> : null}
               </span>
-              <span className="shrink-0 text-[0.6875rem] text-dimmer tabular-nums">{relTime(n.mtime)}</span>
+              <span className="shrink-0 text-[0.6875rem] text-dimmer tabular-nums"><Ago at={n.mtime} /></span>
             </a>
           </li>
         ))}
