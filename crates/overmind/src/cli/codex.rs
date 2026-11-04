@@ -83,8 +83,6 @@ fn install(home: &std::path::Path) -> Result<()> {
     println!("Hook binary: {}", exe.display());
     if what != Installed::AlreadyInstalled {
         println!("Codex reviews new hooks at its next start — accept the review.");
-    }
-    if what != Installed::AlreadyInstalled {
         println!("{RUNNING_NOTE}");
     }
     Ok(())

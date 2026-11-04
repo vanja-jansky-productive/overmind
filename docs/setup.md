@@ -230,6 +230,22 @@ Bot sessions run unattended, so a bot usually sets `command` to a launcher that 
 permission prompts, and its working directory must already be trusted by Claude Code (a first-run
 "trust this folder" prompt would stall the session).
 
+**Codex** (optional, on each machine that runs Codex sessions): Codex records nothing while it
+waits on an approval, so Overmind reads its approval menu off the terminal. tmux rows need nothing
+installed; for iTerm rows and sub-agent approvals, add Overmind's approval hook:
+
+```sh
+overmind codex hooks install          # appends one hook to PermissionRequest/Stop/UserPromptSubmit in ~/.codex/hooks.json
+codex                                 # next start: "Hooks need review" → Trust all and continue (once per host and binary path)
+overmind codex hooks status           # trusted, enabled per event
+```
+
+Install it from the binary's stable path (`~/.local/bin/overmind`, as `scripts/deploy.sh` puts it):
+the hook runs that exact path, and a different one is a new hook Codex asks you to trust again.
+Running Codex sessions keep the hooks they started with; new ones get it, through the Codex daemon
+too (no daemon restart). The hook only records that an approval is pending — it prints nothing, so it
+never approves or denies anything. `overmind codex hooks uninstall` takes it out again.
+
 **Updating** a machine that runs from a repo checkout: `scripts/deploy.sh` there (over ssh:
 `ssh workstation '~/Code/project/scripts/deploy.sh'`) — pulls `main` (refuses uncommitted
 changes), builds the CLI into `~/.local/bin/overmind`, runs `overmind web build`, restarts the

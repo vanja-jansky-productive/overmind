@@ -35,7 +35,8 @@ lib/spawn-dirs.mjs    Settings → Start directories: validate a `spawnDirs` lis
 lib/repos.mjs         Settings → Git repos: `overmind repos` list/sync/timer, validate + write the `repos` config key
 lib/jobs.mjs          Bots screen: `overmind jobs` (alias of `overmind bots`) list / show / run now / enable|disable, job-name validation
 lib/spawn.mjs         new tmux session + `claude [--model <id>] [-n <name>] '<prompt>'`, auto-accept folder trust
-lib/kill.mjs          close a session: SIGTERM/SIGKILL Claude, then its tmux session/window or iTerm tab
+lib/kill.mjs          close a session: Esc first for a busy/waiting Codex turn, SIGTERM/SIGKILL the agent, then its tmux session/window or iTerm tab
+lib/questions.mjs     pending prompts as question cards: Claude's AskUserQuestion (transcript or screen), Codex's approval menu (screen only, `screen:<hash>` ids), answers → keys
 lib/autoname.mjs      periodic `overmind name --all --apply` + generic-tmux-name sync
 lib/grouping.mjs      periodic `overmind group` over the merged overmind (the grouping host only)
 lib/snapshot.mjs      warm stale-while-revalidate snapshot of the merged /api/overmind
@@ -184,7 +185,7 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 | POST | `/api/hosts/:host/sessions/:id/rename` | `{ title }` (trimmed, 1..64 chars, one line) | `{ ok: true, host, id, result, title, from, tmux, message, … }` — the `overmind rename --json` report. **409** `{ error, result: "held", held: "waiting", … }` when the session is waiting on a prompt (nothing typed); 400 bad title; 404 unknown session; 502/504 CLI failure / timeout. Proxied once to a peer like the other session actions |
 | POST | `/api/hosts/:host/spawn` | `{ name?, dir?, prompt?, model?, harness?, ghIdentity?, embed? }` | `{ ok, host, name, dir, tmuxSession, command, trusted, model, harness }` — `harness`: `claude` (default) \| `codex` \| `pi` |
 | GET | `/api/hosts/:host/harnesses` | `?refresh=1` skips the 10 min cache | `{ host, harnesses: [{ id, label, command, installed, models: [{ id, label }] }] }` — `overmind --local harness list --json`; Claude's models are `web.models`; a CLI without `harness` → Claude alone. Proxied once to a peer |
-| POST | `/api/hosts/:host/sessions/:id/kill` | `{}` | `{ ok: true, host, id, name, process, terminal }` |
+| POST | `/api/hosts/:host/sessions/:id/kill` | `{}` | `{ ok: true, host, id, name, process, terminal, interrupt? }` — `interrupt` (Codex rows that were busy or waiting): `interrupted` \| `timeout` \| `failed` |
 | POST | `/api/hosts/:host/sessions/:id/sleep` | `{}` | `{ ok: true, host, id, name, sessionId, title, process, terminal, dormant: DormantView }` (`overmind sleep`) |
 | GET | `/api/hosts/:host/usage` | `?refresh=1` skips the CLI's 60s cache | `{ host, account, limits: [{ kind, group, label, model, percent, severity, resets_at, active }], extra_usage, fetched_at, stale, error }` — `overmind usage --json` (docs/architecture.md → Subscription usage); 502 with the CLI's reason, 504 on timeout. Proxied once to a peer |
 | POST | `/api/hosts/:host/prs/checkout` | `{ pr: "owner/repo#123" }` | `{ host, worktree: { owner, repo, number, branch, path, repoPath, created, contextLine, editorUrl, … } }` — `overmind --local pr checkout --json` + the worktree's editor link; 400 on a bad ref, 502 with the CLI's reason (no clone, fetch failed). Proxied once to a peer (5 min) |
@@ -318,7 +319,11 @@ server's too). `dryRun: true` validates and answers without writing. The UI writ
 list to every host: a dry run on all reachable hosts first, the writes only when all pass.
 Editing the list is as powerful as spawning (it widens the allow-list) and has no auth either.
 
-**kill** closes a session for good: SIGTERM to Claude's `pid` (SIGKILL after 4s), then the
+**kill** closes a session for good. A Codex row that is `busy` or `waiting` is interrupted first:
+`Escape` through the backend (the approval menu's "No", else the turn's interrupt), then a fresh
+`overmind list` every 250 ms until the row reads idle or is gone, at most 5 s — so the rollout ends
+with `turn_aborted` (SIGTERM alone leaves an embedded-mode turn open forever, and a daemon-mode turn
+keeps running in the Codex daemon). The kill goes ahead either way. Then SIGTERM to the agent's `pid` (SIGKILL after 4s), then the
 terminal that hosted it. tmux: the whole tmux session when Claude's window was its only window
 (`terminal: "tmux-session-killed"`), else just that window (`"tmux-window-killed"`). The pane's
 session/window ids (`$3`, `@7`, never names) are resolved *before* the signal, because when Claude
