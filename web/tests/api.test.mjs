@@ -886,3 +886,60 @@ test('answer types the keys for the pending question, only when it is safe to', 
   answered = { answers: ['later'] };
   assert.equal(await call({ toolUseId: 'tq1', answers: [{ options: [0] }] }), 409, 'already answered');
 });
+
+// --- discovery on change (lib/watch.mjs → lib/overmind.mjs) ---------------------------------
+
+function armedOvermind(rows = [{ session_id: 'aaaaaaaa-0000-0000-0000-000000000001', status: 'idle', updated_at: 1 }]) {
+  let t = 5_000_000;
+  const clock = { now: () => t, advance: (ms) => (t += ms) };
+  let running = false;
+  const watcher = { start: () => (running = true), stop: () => (running = false), rearm() {}, status: () => ({ mode: running ? 'watch' : 'idle', events: 0, roots: [] }) };
+  const runs = [];
+  const cli = { list: async () => (runs.push(clock.now()), rows) };
+  const overmind = createOvermind({ cli, self: 'solo', watcher, now: clock.now, setTimer: () => null, clearTimer() {} });
+  return { clock, runs, overmind };
+}
+
+test('?local=1 with an armed watcher: a quiet host lists once; a registry signal makes the next poll list', async () => {
+  const { clock, runs, overmind } = armedOvermind();
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, warmOvermind: false });
+  const poll = () => api({ method: 'GET', headers: {} }, new URL('http://x/api/overmind?local=1'));
+  for (let i = 0; i < 3; i++) {
+    const r = await poll();
+    assert.equal(r.body.hosts[0].fetchedAt, clock.now(), 'checked now');
+    clock.advance(3_000);
+  }
+  assert.equal(runs.length, 1, 'three polls in ~10 s, one CLI run');
+  clock.advance(2_000);
+  api.discoveryChanged('fast');
+  await poll();
+  assert.equal(runs.length, 2, 'the change is listed on the next poll');
+
+  const h = await api({ method: 'GET', headers: {} }, new URL('http://x/api/health'));
+  assert.equal(h.body.discovery.mode, 'watch');
+  assert.equal(h.body.discovery.listRuns, 2);
+  assert.equal(h.body.discovery.lastListAt, runs[1]);
+  assert.equal(h.body.discovery.safetyMs, 30_000);
+  assert.deepEqual(h.body.discovery.gaps, { fast: 1000, slow: 5000 });
+});
+
+test('/api/health.discovery without a watcher says ttl', async () => {
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const cli = createOvermindCli({ run: async () => ({ stdout: '[]', stderr: '' }) });
+  const api = createApi({ config, overmind: createOvermind({ cli, self: 'solo' }), backend: {}, transcripts: {}, spawner: {}, warmOvermind: false });
+  const h = await api({ method: 'GET', headers: {} }, new URL('http://x/api/health'));
+  assert.equal(h.body.discovery.mode, 'ttl');
+  assert.equal(h.body.discovery.listRuns, 0);
+});
+
+test('refreshOvermind({ wait: true }) with an armed watcher resolves after a list that started after the call', async (t) => {
+  const { runs, overmind } = armedOvermind();
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, overmindRefreshMs: 60_000 });
+  t.after(() => api.stop());
+  await api({ method: 'GET', headers: {} }, new URL('http://x/api/overmind'));
+  assert.equal(runs.length, 1);
+  await api.refreshOvermind({ wait: true });
+  assert.equal(runs.length, 2, 'forced past the validated cache');
+});

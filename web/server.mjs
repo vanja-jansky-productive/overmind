@@ -12,6 +12,7 @@ import { run } from './lib/run.mjs';
 import { createOvermindCli } from './lib/overmind-cli.mjs';
 import { createFocus } from './lib/focus.mjs';
 import { createOvermind } from './lib/overmind.mjs';
+import { createDiscoveryWatcher, discoveryRoots } from './lib/watch.mjs';
 import { createBackend } from './lib/backends.mjs';
 import { createTranscriptReader, locateTranscript } from './lib/transcript.mjs';
 import { createSpawner } from './lib/spawn.mjs';
@@ -68,7 +69,26 @@ setPeerProxies(config.peerProxies);
 setPeerConnects(config.peerConnects);
 
 const cli = createOvermindCli({ run, bin: config.overmindBin });
-const overmind = createOvermind({ cli, self: config.self, ttlMs: 2000 });
+// Local discovery runs `overmind list` when a watched file says something changed (and at least
+// every web.discovery.safetySeconds while someone asks); OVERMIND_WEB_WATCH=0 → the 2 s TTL.
+// Signals before the API exists only mark the list dirty; after, they also schedule a rebuild.
+let overmindAccess = null;
+const discoveryWatcher = config.discovery.watch
+  ? createDiscoveryWatcher({
+      roots: discoveryRoots({ env: process.env }),
+      live: () => overmind.peek()?.sessions ?? null,
+      onChange: (cls) => (overmindAccess ? overmindAccess.discoveryChanged(cls) : overmind.signal(cls)),
+      log,
+    })
+  : null;
+const overmind = createOvermind({
+  cli,
+  self: config.self,
+  ttlMs: 2000,
+  watcher: discoveryWatcher,
+  safetyMs: config.discovery.safetyMs,
+  gaps: { fast: config.discovery.fastGapMs, slow: config.discovery.slowGapMs },
+});
 const backend = createBackend({ run, tmux: config.tmux });
 const autoNamer = createAutoNamer({
   cli,
@@ -93,7 +113,6 @@ const uploader = createUploader({
   log,
 });
 // Only the grouping host runs the pass; the overmind accessors are bound once the API exists.
-let overmindAccess = null;
 const grouper = config.grouping.enabled
   ? createGrouper({
       cli,
@@ -312,6 +331,10 @@ server.listen(config.port, config.bind, () => {
   log(`[overmind-web] self=${config.self} listening on http://${config.bind}:${config.port}`);
   log(`[overmind-web] config=${config.configFile ?? '(none, defaults)'} peers=${Object.keys(config.peers).join(',') || '(none)'}`);
   log(`[overmind-web] overmind=${config.overmindBin} tmux=${config.tmux} ui=${config.uiDir ?? '(none)'}`);
+  const d = config.discovery;
+  log(d.watch
+    ? `[overmind-web] discovery: watch (safety ${d.safetyMs / 1000}s, gaps ${d.fastGapMs / 1000}s/${d.slowGapMs / 1000}s)`
+    : '[overmind-web] discovery: ttl 2s (OVERMIND_WEB_WATCH=0)');
   if (config.autoName.enabled) {
     autoNamer.start();
     log(`[overmind-web] autoname every ${config.autoName.intervalMinutes}m (overmind name --all --apply)`);
@@ -398,6 +421,7 @@ function shutdown(signal) {
   operator.stop();
   uploader.stop();
   handleApi.stop();
+  overmind.stop();
   const timer = setTimeout(() => process.exit(0), 3000);
   timer.unref?.();
   server.close(() => {

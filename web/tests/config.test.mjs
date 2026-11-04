@@ -258,3 +258,16 @@ test('slack.owners: a list, merged with slack.owner (first); bad ids refused', (
   assert.throws(() => n({ owners: 'UAAAAA' }), /owners must be a list/);
   assert.throws(() => n({ owners: ['nope'] }), /owners must be a list/);
 });
+
+test('config: web.discovery defaults, overrides, validation and OVERMIND_WEB_WATCH', () => {
+  const d = (web, env = {}) => normalizeConfig({ web }, { env, home: HOME }).discovery;
+  assert.deepEqual(d(undefined), { watch: true, safetyMs: 30_000, fastGapMs: 1000, slowGapMs: 5000 });
+  assert.deepEqual(d({ discovery: { safetySeconds: 15, slowGapMs: 3000 } }), { watch: true, safetyMs: 15_000, fastGapMs: 1000, slowGapMs: 3000 });
+  assert.equal(d({ discovery: { watch: false } }).watch, false);
+  assert.equal(d(undefined, { OVERMIND_WEB_WATCH: '0' }).watch, false);
+  assert.equal(d({ discovery: { watch: false } }, { OVERMIND_WEB_WATCH: '1' }).watch, true);
+  assert.throws(() => d({ discovery: 'yes' }), /web\.discovery must be an object/);
+  assert.throws(() => d({ discovery: { watch: 'no' } }), /watch must be true or false/);
+  assert.throws(() => d({ discovery: { safetySeconds: 0 } }), /safetySeconds must be a number >= 1/);
+  assert.throws(() => d({ discovery: { fastGapMs: -1 } }), /fastGapMs must be a number >= 0/);
+});

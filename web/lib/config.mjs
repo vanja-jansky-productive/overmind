@@ -8,7 +8,8 @@
 //            grouping: { enabled, intervalMinutes }, uploads: { dir, maxMB, retentionDays },
 //            memos: { dir, audioDir, model, vocabulary },
 //            briefs: { enabled, model, idleMs, minIntervalMs, maxDeltaChars, maxCallsPerHour, … },
-//            stacks: { syncMinutes } },
+//            stacks: { syncMinutes },
+//            discovery: { watch, safetySeconds, fastGapMs, slowGapMs } },
 //     stacks: { enabled, model },         (read by the CLI; the server only reports them)
 //     grouping: { enabled, model, host },   (enabled/model are read by the CLI)
 //     inbox: { host, scanMinutes, workHours, workDays, model, briefModel, briefMinutes, language, comms },
@@ -36,6 +37,8 @@ export const DEFAULT_MEMO_AUDIO_DIR = '~/.local/share/overmind/memo-audio';
 export const DEFAULT_VOICE_FAILED_DIR = '~/.local/share/overmind/voice-failed';
 export const DEFAULT_UPLOAD_RETENTION_DAYS = 14;
 export const DEFAULT_STACKS_SYNC_MINUTES = 2;
+/** web.discovery: list on a watched file change (lib/watch.mjs), else at most this old. */
+export const DEFAULT_DISCOVERY = Object.freeze({ watch: true, safetySeconds: 30, fastGapMs: 1000, slowGapMs: 5000 });
 export const DEFAULT_STACKS_MODEL = 'sonnet';
 
 /** web.briefs defaults (lib/briefs.mjs). Off by default: it spends model calls. */
@@ -279,6 +282,7 @@ export function resolveUiDir(uiRaw, { webRoot = null, home = os.homedir() } = {}
  *     grouping: { enabled, intervalMinutes, host }, uploads: { dir, maxMB, retentionDays },
  *     briefs: { enabled, model, idleMs, minIntervalMs, maxDeltaChars, maxCallsPerHour, minNewTurns,
  *               minNewChars, maxBriefChars, dir }, stacks: { sync, syncMinutes, generate, model },
+ *     discovery: { watch, safetyMs, fastGapMs, slowGapMs },
  *     restore: { onBoot, markerFile }, configFile, configFound }
  */
 const SLACK_USER_RE = /^[UW][A-Z0-9]+$/;
@@ -666,6 +670,23 @@ export function normalizeConfig(
   const stacksModel = typeof st.model === 'string' && MODEL_ID_RE.test(st.model) ? st.model : DEFAULT_STACKS_MODEL;
   const stacks = { sync: stacksSync, syncMinutes, generate: st.enabled !== false, model: stacksModel };
 
+  // web.discovery: when local discovery (`overmind list`) runs — on a watched file change, at most
+  // fastGapMs (registry, names, done, stacks) / slowGapMs (transcripts) after the last run, and at
+  // least every safetySeconds while someone is asking. OVERMIND_WEB_WATCH=0: no watcher, the 2 s TTL.
+  const wd = web.discovery == null ? {} : web.discovery;
+  if (!isObject(wd)) throw new Error('config.web.discovery must be an object { watch, safetySeconds, fastGapMs, slowGapMs }');
+  if (wd.watch != null && typeof wd.watch !== 'boolean') throw new Error('config.web.discovery.watch must be true or false');
+  const discovery = { ...DEFAULT_DISCOVERY, watch: wd.watch !== false };
+  for (const [key, min] of [['safetySeconds', 1], ['fastGapMs', 0], ['slowGapMs', 0]]) {
+    if (wd[key] == null) continue;
+    const n = Number(wd[key]);
+    if (!Number.isFinite(n) || n < min) throw new Error(`config.web.discovery.${key} must be a number >= ${min}: ${wd[key]}`);
+    discovery[key] = n;
+  }
+  if (env.OVERMIND_WEB_WATCH != null && env.OVERMIND_WEB_WATCH !== '') discovery.watch = !/^(0|false|off|no)$/i.test(env.OVERMIND_WEB_WATCH);
+  discovery.safetyMs = discovery.safetySeconds * 1000;
+  delete discovery.safetySeconds;
+
   // web.operator: the voice operator — a Claude session that watches the overmind (lib/operator.mjs).
   const wo = web.operator == null ? {} : web.operator;
   if (!isObject(wo)) throw new Error('config.web.operator must be an object { hosts, model, voice, clearIdleMinutes }');
@@ -743,6 +764,7 @@ export function normalizeConfig(
     memos,
     briefs,
     stacks,
+    discovery,
     restore,
     operator,
     focus,

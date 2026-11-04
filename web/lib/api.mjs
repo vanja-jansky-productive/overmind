@@ -288,9 +288,17 @@ export function createApi({
   }
 
   // The merged overmind, served stale-while-revalidate so a page load never waits on
-  // discovery or the slowest peer (see lib/snapshot.mjs).
+  // discovery or the slowest peer (see lib/snapshot.mjs). A background tick lists this host
+  // only when lib/overmind.mjs says so (a watched change, its age bound); without a healthy
+  // watcher (OVERMIND_WEB_WATCH=0, degraded) every tick lists, as it always did.
+  const watched = () => overmind.status?.().mode === 'watch';
   const snapshot = warmOvermind
-    ? createSnapshot({ build: () => buildOvermind({ force: true }), refreshMs: overmindRefreshMs, idleAfterMs: overmindIdleAfterMs, logError })
+    ? createSnapshot({
+        build: ({ force = false } = {}) => buildOvermind({ force: force || !watched() }),
+        refreshMs: overmindRefreshMs,
+        idleAfterMs: overmindIdleAfterMs,
+        logError,
+      })
     : null;
 
   /**
@@ -300,7 +308,7 @@ export function createApi({
    */
   function refreshOvermind({ wait = false, waitMs = 3000 } = {}) {
     overmind.invalidate?.();
-    const p = snapshot?.refresh({ fresh: wait }).catch(() => {});
+    const p = snapshot?.refresh({ fresh: wait, force: true }).catch(() => {});
     if (!wait || !p) return Promise.resolve();
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, waitMs);
@@ -315,7 +323,8 @@ export function createApi({
     const ec = editorViewer(config, req);
     const withEditors = (body) => ({ ...body, hosts: body.hosts.map((h) => withSessionEditors(h, ec)) });
     if (url.searchParams.get('local') === '1') {
-      // Peers poll this: the local host (2s TTL cache), never the merged snapshot.
+      // Peers poll this: the local host (lib/overmind.mjs: the last list while the watcher saw
+      // no change, else a fresh one; 2s TTL without a watcher), never the merged snapshot.
       const selfHost = stampOperator({ ...(await overmind.localHost()), ...spawnDirsInfo(), home: os.homedir(), ...notesInfo(), ...stacksInfo() });
       return { status: 200, body: withEditors({ self: config.self, hosts: [selfHost] }) };
     }
@@ -1058,6 +1067,7 @@ export function createApi({
           briefs: briefs?.status() ?? { enabled: false },
           inbox: inbox?.status() ?? { enabled: false, host: config.inbox?.host ?? null },
           stacks: stacks?.status() ?? { sync: false, lastSync: null },
+          discovery: overmind.status?.() ?? { mode: 'ttl' },
         },
       };
     }
@@ -2386,6 +2396,11 @@ export function createApi({
   }
 
   handleApi.refreshOvermind = refreshOvermind;
+  /** A discovery watcher signal (lib/watch.mjs): mark the local list dirty, rebuild when it is due. */
+  handleApi.discoveryChanged = (cls) => {
+    const at = overmind.signal?.(cls);
+    if (at != null) snapshot?.poke(at);
+  };
   /** A fresh merged overmind, built once — what the grouper feeds `overmind group`. Doesn't warm the snapshot. */
   handleApi.buildOvermind = () => buildOvermind({ force: true });
   /** The warm snapshot if someone is watching, else null — for cheap change checks. */
