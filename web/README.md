@@ -38,7 +38,8 @@ decides when the server runs `overmind list` for its own sessions: when a watche
 (the Claude registry, names cache, `done.json`, stacks: at most every `fastGapMs`; transcripts of
 live sessions, Codex/pi rollouts: at most every `slowGapMs`), and at least every `safetySeconds`
 while someone is asking (tmux/iTerm tab names and branches have no file to watch). Kill-switch:
-`OVERMIND_WEB_WATCH=0` (or `"watch": false`) lists on every 3 s refresh with a 2 s cache, as before.
+`OVERMIND_WEB_WATCH=0` (or `"watch": false`) lists on every 3 s refresh with a 2 s cache, as before
+(except that a mutation asked during an older in-flight list now gets a newer one, not that list).
 `/api/health` → `discovery` shows the mode and how many lists ran.
 
 `web.autoName` (default off; opt in with `{ "enabled": true, "intervalMinutes": 5 }`) makes each server run

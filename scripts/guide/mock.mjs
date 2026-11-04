@@ -657,7 +657,7 @@ const focusStatus = (host) => ({ host, active: false, remainingMs: 0, endsAt: nu
 async function body(req) { const b = []; for await (const c of req) b.push(c); try { return JSON.parse(Buffer.concat(b).toString() || '{}') } catch { return {} } }
 function route(method, p, q, b) {
   let m
-  if (p === '/api/health') return { name: 'overmind-web', version: '0.9.0', apiVersion: 1, self: 'laptop', uptime: 86_000, now: now(), autoName: { enabled: true, intervalMinutes: 5, lastRun: { ok: true, at: now() - 2 * M, ms: 4100, renamed: [{ from: 'om-101522', to: 'invoice-rounding-fix' }] } } }
+  if (p === '/api/health') return { name: 'overmind-web', version: '0.9.0', apiVersion: 1, self: 'laptop', uptime: 86_000, now: now(), autoName: { enabled: true, intervalMinutes: 5, lastRun: { ok: true, at: now() - 2 * M, ms: 4100, renamed: [{ from: 'om-101522', to: 'invoice-rounding-fix' }] } }, discovery: { mode: 'watch', lastListAt: now() - 4_000, listRuns: 212, ttlMs: 2000, safetyMs: 30_000, gaps: { fast: 1000, slow: 5000 }, events: 3810, roots: [{ id: 'sessions', armed: true }, { id: 'projects', armed: true }] } }
   if (p === '/api/settings') return SETTINGS
   if (p === '/api/overmind') return overmind()
   if (p === '/api/groups' || p === '/api/groups/run' || p === '/api/groups/edit') return groups()

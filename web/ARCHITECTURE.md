@@ -86,6 +86,7 @@ The server reads the **shared overmind config** written by `overmind init`:
 | `web.uploads` | `{ dir, maxMB, retentionDays }`, default `{ "~/.local/share/overmind/uploads", 100, 14 }`: where files attached in the UI are stored on this host, the per-file limit, and how many days a day dir is kept (`0` = forever; cleanup runs at start and daily) |
 | `web.briefs` | `{ enabled, model, idleMs, minIntervalMs, maxDeltaChars, maxCallsPerHour, minNewTurns, minNewChars, maxBriefChars }`, default `{ false, "haiku", 60000, 900000, 12000, 12, 2, 2000, 3000 }` (opt-in): background brief generation on this host (see Session briefs); GET/PUT and a manual regenerate work when off |
 | `web.stacks` | `{ syncMinutes }`, default `{ 2 }` (> 0): how often the background `overmind stack sync` runs — only while the last `overmind list` shows a session in a stack; first run 30 s after start (see Session stacks) |
+| `web.discovery` | `{ watch, safetySeconds, fastGapMs, slowGapMs }`, default `{ true, 30, 1000, 5000 }` (safetySeconds ≥ 1, gaps ≥ 0; a wrong type throws at start): run `overmind list` on a watched change, at most every fast/slow gap after the last list's start, and at least every `safetySeconds` while someone asks; `watch: false` / `OVERMIND_WEB_WATCH=0` is the 2 s TTL kill-switch (see Discovery on change) |
 | `stacks` | the CLI's (`{ enabled, model }`, default `{ true, "sonnet" }`: whether/which model writes a new StackBrief). The server only reports them in `/api/settings`; a bad value falls back to the default, never a startup error |
 | `web.notes` | `{ root, name?, searchCmd?, exclude? }`, default none (off): the notes explorer over the markdown notes under `root` (`~` expanded, absolute). `name` defaults to the root's basename; `searchCmd` is an argv array (or a space-separated string) run with cwd = root — `{query}` is the query as one argument, `{args}` one argument per word, neither → the query is appended; `exclude` = extra names / root-relative paths to hide (see Notes) |
 | `web.files.roots` | array of dirs (`~` expanded, default `[]`): extra places a relative path in chat may live, tried after the session's touched files (see files). They add candidates only; the sandbox stays `$HOME` + cwd |
@@ -97,7 +98,7 @@ The server reads the **shared overmind config** written by `overmind init`:
 | `spawnDirs[]` | `{ label, paths: { <host>: dir }, hidden? }` → this host offers `{ label, path: paths[self] }`; `{ label, path }` means the same dir on every host; `~` expanded; none offered → `[{ label: "Home", path: $HOME }]`. `hidden: true` → not offered but allowed (`config.hiddenSpawnDirs`; the allow-list is `spawnRoots(config)` = offered + hidden) |
 
 Env overrides: `OVERMIND_CONFIG`, `OVERMIND_WEB_PORT` (or `PORT`), `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI`,
-`OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` (`0`/`false`/`off` disables, anything else enables;
+`OVERMIND_WEB_AUTONAME` / `OVERMIND_WEB_GROUPING` / `OVERMIND_WEB_BRIEFS` / `OVERMIND_WEB_STACKS` / `OVERMIND_WEB_WATCH` (`0`/`false`/`off`/`no` disables, anything else enables;
 `OVERMIND_WEB_STACKS` only turns the background stack sync off — the routes keep working),
 `OVERMIND_BRIEFS_DIR` (where brief files live), `OVERMIND_BIN`, `OVERMIND_TMUX`. The CLI reads `OVERMIND_STACKS_DIR` (where StackBriefs live).
 
@@ -171,7 +172,7 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 
 | method | path | request | response |
 | --- | --- | --- | --- |
-| GET | `/api/health` | | `{ name, version, apiVersion, self, uptime, now, autoName: { enabled, intervalMinutes, lastRun }, grouping, briefs: { enabled, model, callsLastHour, maxCallsPerHour, generating, lastRun }, stacks: { sync, syncMinutes, lastSync: { at, ms, reason, ok, changed: [ids], error? } \| null }, discovery: { mode: 'watch' \| 'degraded' \| 'idle' \| 'ttl', lastListAt, listRuns, ttlMs, safetyMs, gaps: { fast, slow }, events?, roots?: [{ id, armed, error? }] } }` |
+| GET | `/api/health` | | `{ name, version, apiVersion, self, uptime, now, autoName: { enabled, intervalMinutes, lastRun }, grouping, briefs: { enabled, model, callsLastHour, maxCallsPerHour, generating, lastRun }, stacks: { sync, syncMinutes, lastSync: { at, ms, reason, ok, changed: [ids], error? } \| null }, discovery: { mode: 'watch' \| 'degraded' \| 'idle' \| 'ttl', lastListAt, listRuns, ttlMs, safetyMs?, gaps?: { fast, slow }, events?, roots?: [{ id, armed, error? }] } }` (the `?` fields only with a watcher, i.e. not in `ttl`) |
 | GET | `/api/settings` | | `{ apiVersion, self, hosts: [names], quickReplies: [{ label, text }], uploads: { maxMB }, models: [{ id, label }], notes: { enabled, name? }, stacks: { enabled, model, generate }, focus: { host } }` — `stacks.model` / `generate` = the config's `stacks.model` (default `"sonnet"`) / `stacks.enabled` |
 | GET | `/api/overmind` | `?local=1` = this host only | `{ self, hosts: [Host], snapshotAt }` — self first, then peers (`snapshotAt` only on the merged view) |
 | GET | `/api/hosts/:host/sessions/:id/peek` | `?lines=200` (10..2000) | `{ host, id, backend, lines, text, capturedAt }` |
@@ -422,17 +423,22 @@ the stacks dir; **slow** — transcripts of sessions in the last list (`~/.claud
 and `<sid>/…`), Codex rollouts and `session_index.jsonl`, pi sessions (any new one while a session of
 that harness has no transcript yet). `snapshot.json*` and its lock (written by `list`) never signal.
 Each class is coalesced 250 ms, then marks the list dirty with `dueAt` = last run start +
-`web.discovery.fastGapMs` (1 s) / `slowGapMs` (5 s) and pokes the snapshot to rebuild then.
+`web.discovery.fastGapMs` (1 s) / `slowGapMs` (5 s) and pokes the snapshot to rebuild then. The gap
+always counts from the latest run's start: a `dueAt` set before that run is spent, so a change
+during every list still means at most one list per gap (not back to back).
 `overmind.localHost()` — the tick, a peer's `?local=1`, briefs, peek/send — runs the CLI only when
 dirty and due, or when the last list is `safetySeconds` (30) old: what has no file signal (tmux/iTerm
 tab names, branches, a SIGKILLed process, a Codex session before its first prompt) shows within
 30 s. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
-started before a change cannot clear `dirty` (a generation counter), and `force` (mutations,
-spawnNamer, stacks, queue, slack) chains a new run behind such a one. The watcher starts with the
+started before a change cannot clear `dirty` (a generation counter). `force` (mutations,
+spawnNamer, stacks, queue, slack) chains a new run behind such a one, and so does any validated
+caller once that change is due (a poked rebuild, a peer's `?local=1`): a list slower than the gap
+cannot serve the change it was asked for. A list known dirty but not yet due keeps its own
+`fetchedAt`. The watcher starts with the
 first caller and stops after 90 s without one. No watcher (`web.discovery.watch: false`,
 `OVERMIND_WEB_WATCH=0`), a watch error or no `~/.claude/sessions` → `degraded`/`ttl`: every tick
-lists and the 2 s TTL applies, exactly as before. `/api/health.discovery` reports the mode,
-`listRuns` and `lastListAt`.
+lists and the 2 s TTL applies, as before. The kill-switch keeps the old cadence and cache; one difference is intended: a forced list (a mutation) asked while a list that started before the mutation is still running now chains a new one instead of returning the older list. `/api/health.discovery` reports the
+mode, `listRuns` and `lastListAt` (and, with a watcher, its age bound, gaps, events and roots).
 
 **Static**: every non-`/api/` GET/HEAD is served from the UI dir with a weak ETag
 (`W/"<size>-<mtime>"`, hex) and `cache-control: no-cache`, so a reload revalidates and gets `304`

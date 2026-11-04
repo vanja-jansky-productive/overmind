@@ -37,9 +37,9 @@ export const DEFAULT_MEMO_AUDIO_DIR = '~/.local/share/overmind/memo-audio';
 export const DEFAULT_VOICE_FAILED_DIR = '~/.local/share/overmind/voice-failed';
 export const DEFAULT_UPLOAD_RETENTION_DAYS = 14;
 export const DEFAULT_STACKS_SYNC_MINUTES = 2;
+export const DEFAULT_STACKS_MODEL = 'sonnet';
 /** web.discovery: list on a watched file change (lib/watch.mjs), else at most this old. */
 export const DEFAULT_DISCOVERY = Object.freeze({ watch: true, safetySeconds: 30, fastGapMs: 1000, slowGapMs: 5000 });
-export const DEFAULT_STACKS_MODEL = 'sonnet';
 
 /** web.briefs defaults (lib/briefs.mjs). Off by default: it spends model calls. */
 export const DEFAULT_BRIEFS = Object.freeze({
