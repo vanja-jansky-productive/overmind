@@ -24,7 +24,6 @@ import { ViewToggle } from '@/components/ViewToggle'
 import { useFlip } from '@/hooks/useFlip'
 import { useBoardColumns, useGroups, useViewMode } from '@/hooks/useGroups'
 import { useSettings } from '@/hooks/useSettings'
-import { useNow } from '@/hooks/useNow'
 import { useSessionList } from '@/hooks/useSessionList'
 import { DEFAULT_SELECTION, selectionLabel } from '@/lib/hosts'
 import { pullIntent } from '@/lib/gestures'
@@ -32,8 +31,7 @@ import { allSessions, stackRuns, findStatusFilter } from '@/lib/sessions'
 import { cn } from '@/lib/utils'
 
 export function ListScreen() {
-  const now = useNow(1000)
-  const list = useSessionList(now)
+  const list = useSessionList()
   const { overmind, error, query, setQuery, status, setStatus, selection, setSelection, hosts, hostSet, view, summary, unreachable, note } = list
   const [newOpen, setNewOpen] = useState(false)
   const [, navigate] = useLocation()
@@ -167,7 +165,7 @@ export function ListScreen() {
           <SessionFilters list={list} spread touch />
         </div>
 
-        {board ? <GroupsStatus state={groups} now={now} size="lg" className="mt-1 -mb-1 justify-between" /> : null}
+        {board ? <GroupsStatus state={groups} size="lg" className="mt-1 -mb-1 justify-between" /> : null}
         </div>
         </div>
 
@@ -231,7 +229,7 @@ export function ListScreen() {
           {!overmind ? (
             <SessionListSkeleton />
           ) : board && columns.length > 0 ? (
-            <GroupedList columns={columns} now={now} />
+            <GroupedList columns={columns} />
           ) : view.sessions.length > 0 ? (
             <div ref={rowsRef} className="flex flex-col gap-2">
               {stackRuns(view.sessions).map((e) =>
@@ -240,10 +238,10 @@ export function ListScreen() {
                     key={e.key}
                     stackKey={e.key}
                     sessions={e.sessions}
-                    renderRow={(s) => <SessionRow key={`${s.host}/${s.session_id}`} session={s} now={now} inStack />}
+                    renderRow={(s) => <SessionRow key={`${s.host}/${s.session_id}`} session={s} inStack />}
                   />
                 ) : (
-                  <SessionRow key={`${e.session.host}/${e.session.session_id}`} session={e.session} now={now} />
+                  <SessionRow key={`${e.session.host}/${e.session.session_id}`} session={e.session} />
                 ),
               )}
             </div>
@@ -251,8 +249,8 @@ export function ListScreen() {
             <EmptyState anySessions={allSessions(overmind).length > 0} />
           ) : null}
 
-          {overmind ? <DormantSection now={now} hosts={hostSet} query={query} className="mt-6" /> : null}
-          {overmind ? <ClosedSection now={now} hosts={hostSet} query={query} className="mt-4" /> : null}
+          {overmind ? <DormantSection hosts={hostSet} query={query} className="mt-6" /> : null}
+          {overmind ? <ClosedSection hosts={hostSet} query={query} className="mt-4" /> : null}
         </div>
       </main>
 

@@ -18,13 +18,12 @@ import { cn } from '@/lib/utils'
 
 export interface SidebarProps {
   list: SessionListState
-  now: number
   cursorKey: string | null
   selectedKey: string | null
 }
 
 /** Desktop left column under the top bar (TopBar): the session list, dormant and recently closed. */
-export function Sidebar({ list, now, cursorKey, selectedKey }: SidebarProps) {
+export function Sidebar({ list, cursorKey, selectedKey }: SidebarProps) {
   const { overmind, error, query, hostSet, view, unreachable, setFrozen } = list
   const listRef = useRef<HTMLDivElement>(null)
   useFlip(listRef, view.sessions.map(sessionKey).join(' '))
@@ -60,7 +59,7 @@ export function Sidebar({ list, now, cursorKey, selectedKey }: SidebarProps) {
             {stackRuns(view.sessions).map((e) => {
               const row = (s: Session, inStack?: boolean) => {
                 const key = sessionKey(s)
-                return <SessionRow key={key} session={s} now={now} selected={key === selectedKey} cursor={key === cursorKey && key !== selectedKey} inStack={inStack} />
+                return <SessionRow key={key} session={s} selected={key === selectedKey} cursor={key === cursorKey && key !== selectedKey} inStack={inStack} />
               }
               return e.kind === 'stack' ? (
                 <StackGroup
@@ -80,8 +79,8 @@ export function Sidebar({ list, now, cursorKey, selectedKey }: SidebarProps) {
             {allSessions(overmind).length > 0 ? 'Nothing matches.' : unreachable.length ? 'No sessions from the reachable hosts.' : 'No Claude sessions running.'}
           </div>
         )}
-        {overmind ? <DormantSection now={now} hosts={hostSet} query={query} desktop className="mt-4" /> : null}
-        {overmind ? <ClosedSection now={now} hosts={hostSet} query={query} desktop className="mt-3" /> : null}
+        {overmind ? <DormantSection hosts={hostSet} query={query} desktop className="mt-4" /> : null}
+        {overmind ? <ClosedSection hosts={hostSet} query={query} desktop className="mt-3" /> : null}
       </div>
 
     </div>

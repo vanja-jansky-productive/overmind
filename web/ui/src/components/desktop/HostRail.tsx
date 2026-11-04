@@ -19,7 +19,7 @@ const addKey = (e: MouseEvent) => e.metaKey || e.ctrlKey || e.shiftKey
  * opens the host card (state, error, terminal). A shared chip carries how many of its sessions
  * wait, since they stay out of the Inbox and the waiting count.
  */
-export function HostRail({ list, now }: { list: SessionListState; now: number }) {
+export function HostRail({ list }: { list: SessionListState }) {
   const { overmind, hosts, hostSet, setSelection, hostCounts, sharedWaiting } = list
   if (!hosts.length) return null
   const shown = hostSet ?? new Set(hosts.map((h) => h.name))
@@ -35,7 +35,6 @@ export function HostRail({ list, now }: { list: SessionListState; now: number })
         count={hostCounts.get(h.name) ?? 0}
         waiting={sharedWaiting.get(h.name) ?? 0}
         self={h.name === overmind?.self}
-        now={now}
         onPick={(add) => setSelection(clickHost(shown, h.name, hosts, add))}
       />
     ))
@@ -62,7 +61,6 @@ function HostChip({
   count,
   waiting,
   self,
-  now,
   onPick,
 }: {
   host: Host
@@ -70,7 +68,6 @@ function HostChip({
   count: number
   waiting: number
   self: boolean
-  now: number
   onPick: (add: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -104,7 +101,7 @@ function HostChip({
         </button>
       </PopoverAnchor>
       <PopoverContent align="end" className="w-80">
-        <HostCard host={h} self={self} now={now} />
+        <HostCard host={h} self={self} />
       </PopoverContent>
     </Popover>
   )

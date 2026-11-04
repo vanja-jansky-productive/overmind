@@ -28,7 +28,6 @@ type Over = { id: string; side?: 'before' | 'after' } | { id: 'new' }
 
 export interface BoardColumnsProps {
   columns: BoardColumn[]
-  now: number
   cursorKey: string | null
   selectedKey: string | null
   onOpen: (s: Session) => void
@@ -45,7 +44,7 @@ export interface BoardColumnsProps {
  * column's name to rename it (a stack column renames the stack). "+ New group" at the end makes an empty column (a group of the
  * user's: it stays until "Delete group"). Ungrouped takes no drops and stays last.
  */
-export function BoardColumns({ columns, now, cursorKey, selectedKey, onOpen, editable, onEdit, onMoveColumn }: BoardColumnsProps) {
+export function BoardColumns({ columns, cursorKey, selectedKey, onOpen, editable, onEdit, onMoveColumn }: BoardColumnsProps) {
   const [drag, setDrag] = useState<Drag | null>(null)
   const [over, setOver] = useState<Over | null>(null)
   /** A session dropped on "New group", waiting for the group's name. */
@@ -174,7 +173,6 @@ export function BoardColumns({ columns, now, cursorKey, selectedKey, onOpen, edi
                   <BoardCard
                     key={key}
                     session={s}
-                    now={now}
                     selected={key === selectedKey}
                     cursor={key === cursorKey && key !== selectedKey}
                     onOpen={onOpen}
@@ -186,7 +184,7 @@ export function BoardColumns({ columns, now, cursorKey, selectedKey, onOpen, edi
                   />
                 )
               })}
-              {c.dormant?.map((m) => <DormantCard key={`${m.host}/${m.id}`} member={m} now={now} desktop />)}
+              {c.dormant?.map((m) => <DormantCard key={`${m.host}/${m.id}`} member={m} desktop />)}
             </div>
           </section>
         )

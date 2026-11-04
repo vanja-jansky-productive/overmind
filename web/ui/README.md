@@ -35,7 +35,9 @@ src/
   lib/title.ts        the one session title: sessionTitle() (display_title + optimistic override), validateTitle(),
                       titleChanged(), renameFailure() / tmuxNote() toast copy, echoesTitle()
   lib/sessions.ts     status meta/labels, filters, search, sort, listView(), findSession(), sessionHref(),
-                      spawnTargets(), findSpawned(), withoutSession(), clusterByStack() (a stack's rows adjacent)
+                      spawnTargets(), findSpawned(), withoutSession(), clusterByStack() (a stack's rows adjacent),
+                      overmindKey() / nextOvermind() (a poll that only moved the clocks keeps the old object)
+  lib/stamp.ts        createStamp() / useStamp(): a timestamp in a tiny store — per-poll clocks live here, not in state
   lib/chat.ts         detail-view constants + pure helpers (sizes, limits, grouping, interim notes)
   lib/markdown.ts     safe markdown → AST, linkify()
   lib/autoname.ts     naming-pass summaries for toasts / the menu
@@ -107,7 +109,8 @@ src/
   hooks/usePoller.ts  setTimeout-chained poller: no overlap, pauses while hidden, abort on unmount,
                       refresh() (runs even while hidden)
   hooks/useFollowScroll.ts  follow-the-tail scrolling for chat / term
-  hooks/useOvermind.ts   overmind context + localStorage snapshot (`overmind.snapshot`)
+  hooks/useOvermind.ts   overmind context + localStorage snapshot (`overmind.snapshot`); the clocks of the last body
+                      as stamps: useOvermindAt() ("updated Xs ago"), useHostCheckedAt(name) ("checked Xs ago")
   hooks/useSessionList.ts  list state shared by the mobile list and the desktop sidebar (search, filters, counts)
   hooks/useGroups.ts  useViewMode() (`overmind.view`: list | board), useGroups(enabled): polls /api/groups
                       every 30s (4s while a pass runs) only while the Board is shown; run() = Regroup now;
@@ -128,7 +131,9 @@ src/
   hooks/useNotes.ts   useNotesHosts() (hosts whose overmind entry has `notes`), useNotesTree() (cached, 30s poll),
                       useNotesSearch() (debounced, aborts the previous), useNoteFile()
   hooks/useOutbox.ts  the session screen's Outbox: keepalive POSTs, flush on unmount / background, pagehide hand-off
-  hooks/useSettings.ts, useTheme.ts, usePrefs.ts, useNow.ts, usePersistentState.ts
+  hooks/useNow.ts     useNow(ms): one shared clock per interval (one timer, cached tick); <Ago at every> (components/Ago.tsx)
+                      is the text leaf over it
+  hooks/useSettings.ts, useTheme.ts, usePrefs.ts, usePersistentState.ts
   hooks/useJobs.ts    useJobs() (every reachable host's GET …/jobs, 30s poll, patch() for the enabled switch),
                       useJobShow(host, name, enabled) (one job's runs, 15s poll while expanded)
   hooks/useDormant.ts DormantContext / useDormant(): hosts with dormant / recently closed sessions, index, resume / resumeAll / forget, resumeClosed / forgetClosed
@@ -168,7 +173,12 @@ src/
 - **Routing**: wouter with hash location, (`#/`, `#/s/<host>/<id>`; plus `#/settings`, `#/notes…`),
   so no server SPA fallback is needed and old bookmarks/PWA installs keep working.
 - **Data**: one `OvermindProvider` polls `/api/overmind` for the whole app; screens read it with
-  `useOvermind()` (`overmind`, `overmindAt`, `error`, `refreshing`, `refresh()`, `applyOvermind()`).
+  `useOvermind()` (`overmind`, `error`, `refreshing` (an explicit `refresh()` only), `refresh()`, `applyOvermind()`).
+  A poll that brings nothing new (clocks aside) changes no state; the clocks are stamps (`useOvermindAt()`,
+  `useHostCheckedAt()`) read by the leaf that shows them.
+- **Clocks**: a relative time ("5s ago") is a leaf that reads the clock itself — `<Ago at={…} />` or
+  `useNow(ms)` in the smallest component that shows it. Never pass `now` as a prop: a clock above a list
+  re-renders the whole list every tick.
   Per-screen loops (messages, peek) use `usePoller(fn, ms)` — `fn` gets an `AbortSignal`; pass it to
   the `api.*` call. Never `setInterval` + fetch.
 - **Colours**: tokens in `src/index.css` — shadcn's (`background`, `card`, `muted-foreground`, …)

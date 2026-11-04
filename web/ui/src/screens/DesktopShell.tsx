@@ -35,7 +35,7 @@ import { Redirect, useLocation, useRoute } from 'wouter'
 import { api, sessionErrorMessage } from '@/api/client'
 import type { Session } from '@/api/types'
 import { Board } from '@/components/board/Board'
-import { CommandPalette, type PaletteAction } from '@/components/desktop/CommandPalette'
+import { CommandPalette, type PaletteAction, type PaletteItem } from '@/components/desktop/CommandPalette'
 import { ShortcutsDialog } from '@/components/desktop/ShortcutsDialog'
 import { Sidebar } from '@/components/desktop/Sidebar'
 import { TopBar } from '@/components/desktop/TopBar'
@@ -46,7 +46,6 @@ import { useOvermind } from '@/hooks/useOvermind'
 import { focusLeft, toggleFocus, useFocus } from '@/hooks/useFocus'
 import { useBoardColumns, useGroups, useViewMode } from '@/hooks/useGroups'
 import { useNotesHosts, useNotesTree } from '@/hooks/useNotes'
-import { useNow } from '@/hooks/useNow'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { useSessionList } from '@/hooks/useSessionList'
 import { useSettings } from '@/hooks/useSettings'
@@ -109,9 +108,8 @@ import { OperatorScreen } from '@/screens/OperatorScreen'
  * listener drives the keyboard shortcuts (lib/shortcuts.ts).
  */
 export function DesktopShell() {
-  const now = useNow(1000)
   const focus = useFocus()
-  const list = useSessionList(now)
+  const list = useSessionList()
   const { overmind, refresh, dropSession } = useOvermind()
   const { setTheme, setPalette } = useTheme()
   const [location, navigate] = useLocation()
@@ -483,7 +481,7 @@ export function DesktopShell() {
         : [],
     [paletteNotes, paletteNotesHost, navigate],
   )
-  const actions: { heading: string; items: PaletteAction[] }[] = [
+  const actions: { heading: string; items: PaletteItem[] }[] = [
     {
       heading: 'Actions',
       items: [
@@ -535,18 +533,18 @@ export function DesktopShell() {
           ? [{ id: 'editor', label: editorText, icon: <CodeXmlIcon />, keywords: ['editor', 'vscode', 'cursor', 'code'], run: () => window.location.assign(editorUrl) }]
           : []),
         ...(focus.host
-          ? (() => {
-              const remaining = focusLeft(focus, now)
-              return [
-                {
+          ? [
+              (now: number) => {
+                const remaining = focusLeft(focus, now)
+                return {
                   id: 'focus',
                   label: remaining ? `Stop focus mode (${remaining} left)` : 'Start focus mode',
                   icon: <MoonIcon className={cn(remaining && 'fill-current')} />,
                   keywords: ['focus', 'do not disturb', 'dnd', 'distraction', 'quiet', 'deep work'],
                   run: () => void toggleFocus(focus),
-                },
-              ]
-            })()
+                }
+              },
+            ]
           : []),
         { id: 'scratchpad', label: 'Scratchpad', icon: <NotebookPenIcon />, shortcut: shortcutHint('scratchpad'), keywords: ['editor', 'text', 'paste', 'clipboard', 'draft'], run: () => scratchpad.show() },
         ...(notesHosts.length
@@ -681,7 +679,6 @@ export function DesktopShell() {
         <>
           <TopBar
             list={list}
-            now={now}
             view={mode}
             onView={switchView}
             searchRef={searchRef}
@@ -698,7 +695,6 @@ export function DesktopShell() {
                     groups={groups}
                     columns={columns}
                     onMoveColumn={moveColumn}
-                    now={now}
                     cursorKey={cursorKey}
                     selectedKey={selectedKey}
                     overlayInset={pane ? flyoutW : 0}
@@ -758,7 +754,6 @@ export function DesktopShell() {
                 <aside aria-label="Session list" className="relative shrink-0 border-r bg-background" style={{ width: sidebarW }}>
                   <Sidebar
                     list={list}
-                    now={now}
                     cursorKey={cursorKey}
                     selectedKey={selectedKey}
                   />

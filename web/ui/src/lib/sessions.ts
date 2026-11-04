@@ -272,6 +272,40 @@ export function withoutClosed(overmind: OvermindResponse, closed: ReadonlyMap<st
   return { ...overmind, hosts: overmind.hosts.map((h) => ({ ...h, sessions: h.sessions.filter((s) => !hidden(h.name, s.session_id)) })) }
 }
 
+/**
+ * The identity of an overmind body for "did anything change": everything but the per-poll clocks —
+ * the top-level `snapshotAt` and each host's own `fetchedAt` (a `fetchedAt` deeper down, inside a
+ * session, still counts). Those clocks live in stamps (hooks/useOvermind.ts), not in this object.
+ */
+export function overmindKey(o: OvermindResponse): string {
+  const { snapshotAt: _at, hosts, ...rest } = o
+  return JSON.stringify([rest, hosts.map(({ fetchedAt: _f, ...h }) => h)])
+}
+
+export interface OvermindSnap {
+  overmind: OvermindResponse | null
+  /** overmindKey of `overmind`; null until the first body lands (a localStorage snapshot has none). */
+  key: string | null
+}
+
+/**
+ * The next overmind state for a body: expire old entries of `closed` (in place), hide the closed
+ * sessions, and keep `prev` (`changed: false`) when nothing but the clocks moved. `fresh` is the
+ * body as received (closed sessions hidden), clocks included — what the localStorage snapshot keeps.
+ */
+export function nextOvermind(
+  prev: OvermindSnap,
+  data: OvermindResponse,
+  closed: Map<string, number>,
+  now: number,
+): { overmind: OvermindResponse; key: string; changed: boolean; fresh: OvermindResponse } {
+  for (const [k, until] of closed) if (until <= now) closed.delete(k)
+  const fresh = withoutClosed(data, closed, now)
+  const key = overmindKey(fresh)
+  if (prev.overmind && key === prev.key) return { overmind: prev.overmind, key, changed: false, fresh }
+  return { overmind: fresh, key, changed: true, fresh }
+}
+
 /** A list entry: one session, or the adjacent members of one stack (2 or more) shown as a group. */
 export type ListEntry = { kind: 'session'; session: Session } | { kind: 'stack'; key: string; sessions: Session[] }
 

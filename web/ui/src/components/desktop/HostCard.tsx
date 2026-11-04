@@ -3,6 +3,8 @@ import { CopyIcon, SquareTerminalIcon } from 'lucide-react'
 import type { Host } from '@/api/types'
 import { HostDot } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
+import { useNow } from '@/hooks/useNow'
+import { useHostCheckedAt } from '@/hooks/useOvermind'
 import { copyWithToast, hostShellCommand, hostShellLink } from '@/lib/clipboard'
 import { relTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -12,9 +14,12 @@ import { cn } from '@/lib/utils'
  * state, error, terminal. Overmind.app opens an iTerm tab (`overmind://shell` → `overmind -H <host> new`;
  * the Mac it runs on gets a plain iTerm tab); a browser copies the command.
  */
-export function HostCard({ host: h, self, now }: { host: Host; self: boolean; now: number }) {
+export function HostCard({ host: h, self }: { host: Host; self: boolean }) {
   const down = h.ok === false
-  const checked = relTime(h.fetchedAt, now)
+  // The host's own clock: its last answer, or last try when unreachable (no `fetchedAt`: the list's).
+  const checkedAt = useHostCheckedAt(h.name)
+  const now = useNow(1000)
+  const checked = relTime(checkedAt, now)
   const link = hostShellLink(h.name)
   const cmd = hostShellCommand(h.name)
   const n = h.sessions?.length ?? 0

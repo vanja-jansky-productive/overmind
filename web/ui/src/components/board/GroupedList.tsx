@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 const COLLAPSED_KEY = 'overmind.groupsCollapsed'
 
 /** Mobile board: one collapsible section per group / session stack (collapsed ids persist in `overmind.groupsCollapsed`); stacks get a ⋯ menu. */
-export function GroupedList({ columns, now }: { columns: BoardColumn[]; now: number }) {
+export function GroupedList({ columns }: { columns: BoardColumn[] }) {
   const [collapsed, setCollapsed] = useState<string[]>(() => parseIdList(storage.getJSON(COLLAPSED_KEY)))
   const toggle = (id: string) => {
     const next = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id]
@@ -57,9 +57,9 @@ export function GroupedList({ columns, now }: { columns: BoardColumn[]; now: num
             {open ? (
               <div id={bodyId} className="mt-1 flex flex-col gap-2">
                 {c.sessions.map((s) => (
-                  <SessionRow key={sessionKey(s)} session={s} now={now} />
+                  <SessionRow key={sessionKey(s)} session={s} />
                 ))}
-                {c.dormant?.map((m) => <DormantCard key={`${m.host}/${m.id}`} member={m} now={now} />)}
+                {c.dormant?.map((m) => <DormantCard key={`${m.host}/${m.id}`} member={m} />)}
               </div>
             ) : null}
           </section>

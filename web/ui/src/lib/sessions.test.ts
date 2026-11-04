@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import type { OvermindResponse, Session } from '@/api/types'
 import {
@@ -24,6 +24,8 @@ import {
   withoutClosed,
   withoutSession,
   closedKey,
+  nextOvermind,
+  overmindKey,
 } from './sessions'
 
 const s = (over: Partial<Session>): Session => ({ host: 'laptop', session_id: 'id', status: 'idle', ...over })
@@ -317,4 +319,61 @@ test('sessionDone: the mark counts only while the session sits idle on it', () =
   expect(sessionDone({ status: 'idle', done: null })).toBeNull()
   expect(sessionDone({ status: 'idle' })).toBeNull()
   expect(sessionDone(null)).toBeNull()
+})
+
+describe('overmindKey / nextOvermind: an unchanged body keeps its identity', () => {
+  const body = (over: { snapshotAt?: number; fetchedAt?: number; updated?: number; nested?: number } = {}): OvermindResponse => ({
+    self: 'laptop',
+    snapshotAt: over.snapshotAt ?? 1,
+    hosts: [
+      {
+        name: 'laptop',
+        ok: true,
+        fetchedAt: over.fetchedAt ?? 1,
+        sessions: [s({ session_id: 'a', updated_at: over.updated ?? 100, ...(over.nested != null ? ({ fetchedAt: over.nested } as Partial<Session>) : {}) })],
+      },
+      { name: 'workstation', ok: true, sessions: [s({ host: 'workstation', session_id: 'b' })] },
+    ],
+  })
+
+  test('overmindKey ignores snapshotAt and each host\'s fetchedAt, nothing else', () => {
+    expect(overmindKey(body())).toBe(overmindKey(body()))
+    expect(overmindKey(body({ snapshotAt: 2, fetchedAt: 2 }))).toBe(overmindKey(body()))
+    expect(overmindKey(body({ updated: 101 }))).not.toBe(overmindKey(body()))
+    // A fetchedAt inside a session is data, not the host's clock.
+    expect(overmindKey(body({ nested: 2 }))).not.toBe(overmindKey(body({ nested: 1 })))
+    expect(overmindKey({ ...body(), self: 'workstation' })).not.toBe(overmindKey(body()))
+  })
+
+  test('nextOvermind: first body lands, an identical one (clocks aside) keeps prev, a real change lands', () => {
+    const closed = new Map<string, number>()
+    const first = nextOvermind({ overmind: null, key: null }, body(), closed, 0)
+    expect(first.changed).toBe(true)
+    const same = nextOvermind(first, body({ snapshotAt: 9, fetchedAt: 9 }), closed, 0)
+    expect(same.changed).toBe(false)
+    expect(same.overmind).toBe(first.overmind)
+    expect(same.fresh.snapshotAt).toBe(9)
+    const moved = nextOvermind(same, body({ updated: 200 }), closed, 0)
+    expect(moved.changed).toBe(true)
+    expect(moved.overmind.hosts[0].sessions[0].updated_at).toBe(200)
+  })
+
+  test('nextOvermind: a snapshot without a key always takes the first body', () => {
+    const snap = { overmind: body(), key: null }
+    expect(nextOvermind(snap, body(), new Map(), 0).changed).toBe(true)
+  })
+
+  test('nextOvermind: dropSession hides at once (changed), the expiry brings it back (changed again)', () => {
+    const closed = new Map<string, number>()
+    const first = nextOvermind({ overmind: null, key: null }, body(), closed, 0)
+    closed.set(closedKey('laptop', 'a'), 20_000)
+    const dropped = nextOvermind(first, body(), closed, 1000)
+    expect(dropped.changed).toBe(true)
+    expect(dropped.overmind.hosts[0].sessions).toEqual([])
+    expect(nextOvermind(dropped, body(), closed, 10_000).changed).toBe(false)
+    const back = nextOvermind(dropped, body(), closed, 20_000)
+    expect(back.changed).toBe(true)
+    expect(back.overmind.hosts[0].sessions.map((x) => x.session_id)).toEqual(['a'])
+    expect(closed.size).toBe(0)
+  })
 })

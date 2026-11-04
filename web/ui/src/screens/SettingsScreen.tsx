@@ -31,10 +31,12 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useInbox } from '@/hooks/useInbox'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { useNow } from '@/hooks/useNow'
+import { useOvermindAt } from '@/hooks/useOvermind'
 import { usePrefs } from '@/hooks/usePrefs'
 import { useSessionList } from '@/hooks/useSessionList'
 import { useSwipeBack } from '@/hooks/useSwipeBack'
 import { useTheme, type ThemeChoice } from '@/hooks/useTheme'
+import { relTime } from '@/lib/format'
 import { WEEKDAYS } from '@/lib/inbox'
 import { SEND_DELAYS, SEND_DELAY_LABELS } from '@/lib/outbox'
 import { PALETTES, parsePalette } from '@/lib/palettes'
@@ -521,16 +523,22 @@ function ViewportInfo() {
   )
 }
 
+/** "updated 5s ago" on a 5 s clock (only this text re-renders); "—" before any body. */
+function UpdatedAgo() {
+  const at = useOvermindAt()
+  const now = useNow(5_000)
+  return at ? `updated ${relTime(at, now)} ago` : '—'
+}
+
 /** Connection status: how fresh the list is and which hosts answer (the list header only shows a ⚠ on trouble). */
 function OvermindStatus() {
-  const now = useNow(5_000)
-  const { note, hosts } = useSessionList(now)
+  const { note, hosts } = useSessionList()
   return (
     <Section title="Status">
       <div className="flex min-h-12 items-center justify-between gap-3 py-2">
         <div className="text-sm">Session list</div>
         <div className={cn('text-right text-xs tabular-nums', note.error ? 'text-destructive' : 'text-dimmer')} aria-live="polite">
-          {note.text || '—'}
+          {note.text === 'updated' ? <UpdatedAgo /> : note.text}
         </div>
       </div>
       {hosts.map((h) => (

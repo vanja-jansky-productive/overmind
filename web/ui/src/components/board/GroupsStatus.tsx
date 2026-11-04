@@ -2,6 +2,7 @@ import { LoaderCircleIcon, SparklesIcon } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import type { GroupsState } from '@/hooks/useGroups'
+import { useNow } from '@/hooks/useNow'
 import { groupsStatusText } from '@/lib/groups'
 import { cn } from '@/lib/utils'
 
@@ -11,18 +12,17 @@ import { cn } from '@/lib/utils'
  */
 export function GroupsStatus({
   state,
-  now,
   size = 'sm',
   quiet = false,
   className,
 }: {
   state: GroupsState
-  now: number
   size?: 'sm' | 'lg'
   quiet?: boolean
   className?: string
 }) {
   const { groups, running, run, error } = state
+  const now = useNow(1000)
   const enabled = !!groups?.enabled
   const text = error ? 'groups unavailable — by repo' : groupsStatusText(groups, now)
   const failed = !!groups?.lastRun && groups.lastRun.ok === false

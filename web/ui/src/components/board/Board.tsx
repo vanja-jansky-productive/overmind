@@ -17,7 +17,6 @@ export interface BoardProps {
   columns: BoardColumn[]
   /** Reorder: column `id` just before `before` (null: to the end) — a header drag. */
   onMoveColumn: (id: string, before: string | null) => void
-  now: number
   cursorKey: string | null
   selectedKey: string | null
   /**
@@ -34,7 +33,7 @@ export interface BoardProps {
  * sessions. The same search / status / host filters as the list apply to the cards. Columns can be renamed,
  * reordered and cards dragged between them (BoardColumns).
  */
-export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, selectedKey, overlayInset, onOpen }: BoardProps) {
+export function Board({ list, groups, columns, onMoveColumn, cursorKey, selectedKey, overlayInset, onOpen }: BoardProps) {
   const { overmind, error, query, hostSet, unreachable } = list
   const boardRef = useRef<HTMLDivElement>(null)
 
@@ -88,7 +87,6 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
         ) : (
           <BoardColumns
             columns={columns}
-            now={now}
             cursorKey={cursorKey}
             selectedKey={selectedKey}
             onOpen={openCard}
@@ -97,7 +95,7 @@ export function Board({ list, groups, columns, onMoveColumn, now, cursorKey, sel
             onMoveColumn={onMoveColumn}
           />
         )}
-        {overmind ? <DormantSection now={now} hosts={hostSet} query={query} desktop className="max-h-full w-72 shrink-0 overflow-y-auto rounded-xl border border-dashed p-2" /> : null}
+        {overmind ? <DormantSection hosts={hostSet} query={query} desktop className="max-h-full w-72 shrink-0 overflow-y-auto rounded-xl border border-dashed p-2" /> : null}
         {overmind && columns.length && overlayInset ? <div aria-hidden className="shrink-0" style={{ width: overlayInset }} /> : null}
       </div>
     </div>

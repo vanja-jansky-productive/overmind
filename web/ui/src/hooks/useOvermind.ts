@@ -1,16 +1,15 @@
 import { createContext, useContext } from 'react'
 
 import type { OvermindResponse } from '@/api/types'
+import { createStamp, useStamp, type Stamp } from '@/lib/stamp'
 import { storage } from '@/lib/storage'
 
 export interface OvermindState {
   /** Last good /api/overmind body (or the localStorage snapshot before the first poll). */
   overmind: OvermindResponse | null
-  /** When `overmind` was built (server `snapshotAt`, else receive time); 0 = never. */
-  overmindAt: number
   /** Last poll error message; null after a successful poll. */
   error: string | null
-  /** A poll is in flight. */
+  /** An explicit refresh() is in flight (background polls do not show). */
   refreshing: boolean
   /** Poll now (e.g. after a spawn/kill). */
   refresh: () => void
@@ -27,6 +26,36 @@ export function useOvermind(): OvermindState {
   const ctx = useContext(OvermindContext)
   if (!ctx) throw new Error('useOvermind() outside <OvermindProvider>')
   return ctx
+}
+
+// The clocks of the last good body. They move on every poll, so they live in stamps (lib/stamp.ts)
+// read by the leaves that show them, never in the context: an unchanged body re-renders nothing.
+
+/** When the last good body was built (server `snapshotAt`, else receive time); 0 = never. */
+export const overmindStamp = createStamp()
+const hostStamps = new Map<string, Stamp>()
+
+/** One host's "checked" clock (its `fetchedAt`). */
+export function hostStamp(name: string): Stamp {
+  let s = hostStamps.get(name)
+  if (!s) hostStamps.set(name, (s = createStamp()))
+  return s
+}
+
+/** Move the clocks to a body: `at` for the list, each host's `fetchedAt` (else `at`) for that host. */
+export function stampOvermind(overmind: OvermindResponse | null | undefined, at: number): void {
+  overmindStamp.set(at)
+  for (const h of overmind?.hosts ?? []) hostStamp(h.name).set(h.fetchedAt || at)
+}
+
+/** "updated Xs ago": when the session list was last fetched (0 = never). */
+export function useOvermindAt(): number {
+  return useStamp(overmindStamp)
+}
+
+/** "checked Xs ago": when this host last answered (or was last tried, when unreachable). */
+export function useHostCheckedAt(name: string): number {
+  return useStamp(hostStamp(name))
 }
 
 // A reload paints the last list instantly while the first poll runs.

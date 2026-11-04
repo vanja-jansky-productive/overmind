@@ -2,6 +2,7 @@ import { CircleCheckBigIcon } from 'lucide-react'
 import { Link } from 'wouter'
 
 import type { Session } from '@/api/types'
+import { Ago } from '@/components/Ago'
 import { ContextMeter } from '@/components/ContextMeter'
 import { EditableTitle } from '@/components/EditableTitle'
 import { GhIdentityChip } from '@/components/GhIdentityChip'
@@ -15,7 +16,7 @@ import { StackChip } from '@/components/stack/StackChip'
 import { StatusDot } from '@/components/StatusDot'
 import { useLongPress } from '@/hooks/useLongPress'
 import { openTitleEditor, useSessionTitle } from '@/hooks/useTitles'
-import { relTime, sessionSubtitle, shortCwd } from '@/lib/format'
+import { sessionSubtitle, shortCwd } from '@/lib/format'
 import { harnessLabel, sessionHarness } from '@/lib/harness'
 import { sessionDone, sessionHref, statusLabel, statusMeta } from '@/lib/sessions'
 import { sessionKey } from '@/lib/shortcuts'
@@ -26,7 +27,6 @@ const chip = 'inline-flex h-4.5 shrink-0 items-center rounded-[5px] border px-1 
 
 export interface SessionRowProps {
   session: Session
-  now: number
   /** Desktop sidebar: this row is the session open in the detail pane. */
   selected?: boolean
   /** Desktop sidebar: the keyboard cursor (↑/↓) is on this row. */
@@ -40,7 +40,7 @@ export interface SessionRowProps {
  * stack chip (opens the Stack sheet), Done chip + its note in place of the prompt (it ran `overmind done`), job chip (started by a scheduled job), cwd, backend, context, age. The title is editable in place: the pencil on hover
  * (desktop), ⌘E / F2 on the cursor row, or a long press (touch). Clicking the row opens it.
  */
-export function SessionRow({ session: s, now, selected, cursor, inStack }: SessionRowProps) {
+export function SessionRow({ session: s, selected, cursor, inStack }: SessionRowProps) {
   const meta = statusMeta(s.status)
   const { title } = useSessionTitle(s)
   const prompt = sessionSubtitle(s)
@@ -103,7 +103,7 @@ export function SessionRow({ session: s, now, selected, cursor, inStack }: Sessi
         {backend !== 'unknown' ? <span className={cn(chip, 'border-border')}>{backend}</span> : null}
         <span className="ml-auto flex shrink-0 items-center gap-2">
           <ContextMeter context={s.context} />
-          <span className="tabular-nums">{relTime(s.updated_at, now)}</span>
+          <span className="tabular-nums"><Ago at={s.updated_at} /></span>
         </span>
       </div>
     </Link>

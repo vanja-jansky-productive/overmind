@@ -3,6 +3,7 @@ import { Loader2Icon, MoonIcon, PlayIcon } from 'lucide-react'
 import { HostBadge } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
 import { useDormant } from '@/hooks/useDormant'
+import { useNow } from '@/hooks/useNow'
 import type { DormantMember } from '@/lib/dormant'
 import { relTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -11,9 +12,10 @@ import { cn } from '@/lib/utils'
  * A group member a reboot left dormant, on the Board (and the mobile grouped list): dimmed, with
  * Resume (`overmind restore <session id>` on its host — its whole tmux session comes back).
  */
-export function DormantCard({ member: m, now, desktop = false }: { member: DormantMember; now: number; desktop?: boolean }) {
+export function DormantCard({ member: m, desktop = false }: { member: DormantMember; desktop?: boolean }) {
   const { busy, resume } = useDormant()
   const working = busy.has(`${m.host}/${m.id}`) || busy.has(`${m.host}/*`)
+  const now = useNow(1000)
   const since = relTime(m.since, now)
   return (
     <div className={cn('flex items-center gap-2 rounded-lg border border-dashed border-border/70 px-3', desktop ? 'py-2' : 'min-h-14 py-2')}>

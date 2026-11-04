@@ -18,7 +18,6 @@ import { ariaShortcut, shortcutHint, withHint } from '@/lib/shortcuts'
 
 export interface TopBarProps {
   list: SessionListState
-  now: number
   view: ViewMode
   onView: (v: ViewMode) => void
   searchRef: Ref<HTMLInputElement>
@@ -33,7 +32,7 @@ export interface TopBarProps {
  * The desktop top bar, the same over the List and the Board: summary (own hosts), session filters,
  * search, List | Board, the hosts (HostRail), modules, New. The desktop app's traffic lights sit over its left end.
  */
-export function TopBar({ list, now, view, onView, searchRef, onSearchNav, onNew, groups }: TopBarProps) {
+export function TopBar({ list, view, onView, searchRef, onSearchNav, onNew, groups }: TopBarProps) {
   const { overmind, query, setQuery, summary, note } = list
 
   const onSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -111,10 +110,10 @@ export function TopBar({ list, now, view, onView, searchRef, onSearchNav, onNew,
 
       <ViewToggle value={view} onChange={onView} />
       {/* The hosts: the host filter (Mine / Shared, multi-select) and each one's state and terminal. */}
-      <HostRail list={list} now={now} />
+      <HostRail list={list} />
 
       <div className="ml-auto flex min-w-0 items-center gap-2">
-        {groups ? <GroupsStatus state={groups} now={now} quiet /> : null}
+        {groups ? <GroupsStatus state={groups} quiet /> : null}
         {note.error ? <span className="hidden truncate text-[0.6875rem] text-destructive tabular-nums xl:inline">{note.text}</span> : null}
         {/* Modules you work in, then the helpers (focus, usage, settings) in their own group. */}
         <nav aria-label="Modules" className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-card p-0.5">

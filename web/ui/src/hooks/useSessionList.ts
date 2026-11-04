@@ -3,7 +3,6 @@ import { useMemo, useState } from 'react'
 import { useOvermind } from '@/hooks/useOvermind'
 import { usePersistentState } from '@/hooks/usePersistentState'
 import { useSlack } from '@/hooks/useSlack'
-import { relTime } from '@/lib/format'
 import { DEFAULT_SELECTION, isShared, parseSelection, resolveSelection, serializeSelection, type HostSelection } from '@/lib/hosts'
 import { allSessions, findStatusFilter, keepOrder, listView, slackLinked, statusSummary, type StatusFilterId } from '@/lib/sessions'
 
@@ -12,12 +11,13 @@ import { allSessions, findStatusFilter, keepOrder, listView, slackLinked, status
  * search, status + host filters (persisted in `overmind.filter` / `overmind.hostFilter`; Bots / Slack / Apps
  * are status filters; the host filter is a scope or a multi-select, lib/hosts.ts), the filtered view,
  * per-host counts, the header summary (own hosts only: a shared shed's sessions are not yours to
- * answer) and the "updated Xs ago" note.
+ * answer) and the list's status note (`listNote`; the "updated Xs ago" clock itself is
+ * `useOvermindAt()` in the one place that shows it, so polls re-render nothing here).
  * While `frozen` (the pointer is on the list) the view keeps its order: rows don't move
  * under the mouse; the new order lands when it leaves.
  */
-export function useSessionList(now: number) {
-  const { overmind, overmindAt, error, refreshing } = useOvermind()
+export function useSessionList() {
+  const { overmind, error, refreshing } = useOvermind()
   const [query, setQuery] = useState('')
   const [status, setStatus] = usePersistentState<StatusFilterId>('overmind.filter', 'all', (raw) => findStatusFilter(raw).id)
   const [hostFilter, setHostFilter] = usePersistentState<string>('overmind.hostFilter', serializeSelection(DEFAULT_SELECTION))
@@ -57,11 +57,7 @@ export function useSessionList(now: number) {
 
   const unreachable = hosts.filter((h) => h.ok === false && (hostSet == null || hostSet.has(h.name)))
 
-  let note: { text: string; error?: boolean }
-  if (!overmind && refreshing) note = { text: 'loading…' }
-  else if (error) note = { text: 'offline — retrying', error: true }
-  else if (refreshing) note = { text: 'refreshing…' }
-  else note = { text: overmindAt ? `updated ${relTime(overmindAt, now)} ago` : '' }
+  const note = listNote(overmind, error, refreshing)
 
   return {
     overmind,
@@ -84,6 +80,22 @@ export function useSessionList(now: number) {
     unreachable,
     note,
   }
+}
+
+export interface ListNote {
+  text: string
+  error?: boolean
+}
+
+/**
+ * The list's status: "loading…" before the first body, "offline — retrying" on error, "refreshing…"
+ * during an explicit refresh, else `updated` — the caller adds the age (`useOvermindAt()`).
+ */
+export function listNote(overmind: unknown, error: string | null, refreshing: boolean): ListNote {
+  if (!overmind && !error) return { text: 'loading…' }
+  if (error) return { text: 'offline — retrying', error: true }
+  if (refreshing) return { text: 'refreshing…' }
+  return { text: 'updated' }
 }
 
 export type SessionListState = ReturnType<typeof useSessionList>

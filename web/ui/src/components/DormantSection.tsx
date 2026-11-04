@@ -5,6 +5,7 @@ import type { DormantView } from '@/api/types'
 import { HostBadge } from '@/components/HostBadge'
 import { Button } from '@/components/ui/button'
 import { useDormant } from '@/hooks/useDormant'
+import { useNow } from '@/hooks/useNow'
 import { byActivity, dormantMeta, dormantTitles, searchDormant } from '@/lib/dormant'
 import { cn } from '@/lib/utils'
 
@@ -69,7 +70,7 @@ export function ArmButton({
  * until expanded, like Recently closed; a search shows its matches expanded.
  * `hosts`: only those (the list's host filter; null = all). `query`: the session search — only matching entries. `desktop`: the denser sidebar / board sizes.
  */
-export function DormantSection({ now, hosts: only = null, query = '', desktop = false, className }: { now: number; hosts?: ReadonlySet<string> | null; query?: string; desktop?: boolean; className?: string }) {
+export function DormantSection({ hosts: only = null, query = '', desktop = false, className }: { hosts?: ReadonlySet<string> | null; query?: string; desktop?: boolean; className?: string }) {
   const { hosts: all, busy, resume, resumeAll, forget } = useDormant()
   const [open, setOpen] = useState(false)
   const shown = (only ? all.filter((h) => only.has(h.host)) : all).map((h) => searchDormant(h, query)).filter((h) => h.views.length > 0)
@@ -117,7 +118,6 @@ export function DormantSection({ now, hosts: only = null, query = '', desktop = 
               key={`${h}/${v.kind}/${v.target}`}
               host={h}
               view={v}
-              now={now}
               size={size}
               busy={busy.has(`${h}/${v.target}`) || busy.has(`${h}/*`)}
               onResume={() => void resume(h, v.target)}
@@ -133,7 +133,6 @@ export function DormantSection({ now, hosts: only = null, query = '', desktop = 
 function DormantRow({
   host,
   view: v,
-  now,
   size,
   busy,
   onResume,
@@ -141,12 +140,12 @@ function DormantRow({
 }: {
   host: string
   view: DormantView
-  now: number
   size: 'sm' | 'lg'
   busy: boolean
   onResume: () => void
   onForget: () => void
 }) {
+  const now = useNow(1000)
   const titles = dormantTitles(v)
   return (
     <div className="rounded-lg border border-dashed border-border/70 bg-card/50 px-3 py-2">

@@ -3,6 +3,7 @@ import { CircleCheckBigIcon } from 'lucide-react'
 import { Link } from 'wouter'
 
 import type { Session } from '@/api/types'
+import { Ago } from '@/components/Ago'
 import { ContextMeter } from '@/components/ContextMeter'
 import { EditableTitle } from '@/components/EditableTitle'
 import { GhIdentityChip } from '@/components/GhIdentityChip'
@@ -15,7 +16,7 @@ import { TaskChip } from '@/components/TaskChip'
 import { StatusDot } from '@/components/StatusDot'
 import { useLongPress } from '@/hooks/useLongPress'
 import { openTitleEditor, useEditing, useSessionTitle } from '@/hooks/useTitles'
-import { relTime, sessionSubtitle } from '@/lib/format'
+import { sessionSubtitle } from '@/lib/format'
 import { sessionDone, sessionHref, statusLabel, statusMeta } from '@/lib/sessions'
 import { sessionKey } from '@/lib/shortcuts'
 import { STATUS_TEXT } from '@/lib/styles'
@@ -24,7 +25,6 @@ import { cn } from '@/lib/utils'
 
 export interface BoardCardProps {
   session: Session
-  now: number
   selected?: boolean
   cursor?: boolean
   /** Desktop: open through the shell (cursor + focus handling) instead of plain navigation. */
@@ -34,7 +34,7 @@ export interface BoardCardProps {
 }
 
 /** One session on the desktop board: status, title (editable in place, see SessionRow), host, subtitle (a done session: its note), status / waiting_for / done, context, age. */
-export function BoardCard({ session: s, now, selected, cursor, onOpen, drag }: BoardCardProps) {
+export function BoardCard({ session: s, selected, cursor, onOpen, drag }: BoardCardProps) {
   const meta = statusMeta(s.status)
   const { title } = useSessionTitle(s)
   // Selecting text in the title field must not drag the card.
@@ -89,7 +89,7 @@ export function BoardCard({ session: s, now, selected, cursor, onOpen, drag }: B
         <span className={cn('min-w-0 truncate', done ? 'font-medium text-primary' : STATUS_TEXT[meta.key])}>{done ? 'done' : statusLabel(s)}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2">
           <ContextMeter context={s.context} />
-          <span className="tabular-nums">{relTime(s.updated_at, now)}</span>
+          <span className="tabular-nums"><Ago at={s.updated_at} /></span>
         </span>
       </div>
     </Link>
