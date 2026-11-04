@@ -235,12 +235,15 @@ prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`
 
 Codex runs a session's shell commands through a shared app-server daemon, so in them `$TMUX_PANE` is the pane that started the daemon (or unset); `$CODEX_THREAD_ID` is the session's `session_id`, and `overmind done` / `overmind slack link|reply` find their own session by it (`core::done::own_pane`).
 
-Status from the transcript tail (512 KiB): Codex is `busy` from `task_started` until
-`task_complete` / `turn_aborted`, `waiting` on an `*_approval_request` (until anything else
-happens). An embedded-mode Codex killed mid-turn never closes its turn, and `codex resume` does
-not either, so an open turn that started before the current process (2 s slack for `etime`) in a
-rollout not written since is `idle`; a daemon-mode turn the new TUI reattached to keeps writing and
-stays `busy`. pi is `busy` while the last message is the user's, a tool result, or an assistant turn
+Status from the transcript tail (512 KiB; for Codex, widened to 16 MiB when the tail holds no
+`task_started` / `task_complete` / `turn_aborted`, since one turn's tool output can outgrow it):
+Codex is `busy` from `task_started` until `task_complete` / `turn_aborted`, `waiting` on an
+`*_approval_request` (until anything else happens). An embedded-mode Codex killed mid-turn never
+closes its turn, and `codex resume` does not either, so an open turn in a rollout nothing was
+written to since the current process started (2 s slack for `etime`) is `idle`; a daemon-mode turn
+the new TUI reattached to keeps writing and stays `busy`. "Written" is the newest line `timestamp`
+in the tail, mtime only when no line has one: a branch's synthetic rollout is new on disk but keeps
+the original turn's stamps. pi is `busy` while the last message is the user's, a tool result, or an assistant turn
 that stopped for a tool call. `context` comes from Codex's last `token_count`
 (`last_token_usage.input_tokens` of `model_context_window`); pi records no window, so it is `null`.
 
