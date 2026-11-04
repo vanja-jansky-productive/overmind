@@ -22,7 +22,7 @@ pub enum HooksAction {
     Install,
     /// Remove Overmind's hook, leaving every other hook alone
     Uninstall,
-    /// Installed? Trusted and enabled per event? Is the Codex daemon older than it?
+    /// Installed? Trusted and enabled per event? (and the Codex daemon it runs under)
     Status {
         #[arg(long)]
         json: bool,
@@ -53,14 +53,18 @@ fn exe() -> Result<PathBuf> {
     let argv0 = std::env::args_os().next().map(PathBuf::from);
     match argv0 {
         Some(p) if p.is_absolute() => Ok(p),
-        Some(p) if p.components().count() > 1 => Ok(std::env::current_dir()?.join(p)),
+        Some(p) if p.components().count() > 1 => Ok(std::env::current_dir()?
+            .join(p)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()),
         _ => std::env::current_exe().map_err(Error::from),
     }
 }
 
-const DAEMON_NOTE: &str = "The running Codex daemon started before this hooks.json: sessions started \
-without `-c` keep the old hook set until `codex app-server daemon restart` (that interrupts running \
-daemon turns — run it when `codex agents` shows nothing Working). Overmind never restarts it.";
+/// Verified on Codex 0.166: the app-server daemon applies a new hooks.json to sessions
+/// started after it, without a restart (docs/notes/codex-0166-findings.md).
+const RUNNING_NOTE: &str = "Codex sessions already running keep the hooks they started with; new ones (daemon or embedded) get it.";
 
 fn install(home: &std::path::Path) -> Result<()> {
     let exe = exe()?;
@@ -80,9 +84,8 @@ fn install(home: &std::path::Path) -> Result<()> {
     if what != Installed::AlreadyInstalled {
         println!("Codex reviews new hooks at its next start — accept the review.");
     }
-    let st = codex_hooks::status(home, &exe)?;
-    if st.daemon.as_ref().is_some_and(|d| d.older_than_hooks) {
-        println!("{DAEMON_NOTE}");
+    if what != Installed::AlreadyInstalled {
+        println!("{RUNNING_NOTE}");
     }
     Ok(())
 }
@@ -132,10 +135,5 @@ fn print_status(st: &Status) {
             "trusted, enabled"
         };
         println!("  {event}: {line}");
-    }
-    if let Some(d) = &st.daemon
-        && d.older_than_hooks
-    {
-        println!("{DAEMON_NOTE}");
     }
 }

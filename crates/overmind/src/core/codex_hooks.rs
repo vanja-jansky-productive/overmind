@@ -216,6 +216,278 @@ pub fn prune_sidecars(dir: &Path, live: &[&str], max_age_ms: i64, now: i64) {
     }
 }
 
+// ------------------------------------------------------------------ triggers and truth
+//
+// A sidecar or a rollout match only *triggers* a look; the screen is the truth: a Codex
+// row is `waiting` while, and only while, its terminal shows the approval menu. Where no
+// backend can peek, the sidecar's word stands until the rollout resolves it.
+
+/// Why discovery should look at a busy Codex row's screen.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Trigger {
+    /// The sidecar says `waiting` and nothing after it in the rollout says otherwise.
+    pub sidecar: bool,
+    /// The sidecar's command has not run yet (for rows no backend can peek).
+    pub sidecar_unresolved: bool,
+    /// The current turn's last `exec` call asks for escalation and has no outcome yet.
+    pub rollout: bool,
+    /// "exec approval", "<tool> approval".
+    pub label: String,
+    /// The command, when known (first line; " (+N)" for several escalated calls).
+    pub command: Option<String>,
+}
+
+/// `sandbox_permissions\W{1,4}require_escalated`, without a regex crate: the key is
+/// quoted in one call shape (`"sandbox_permissions":"require_escalated"`) and bare in
+/// the other (`sandbox_permissions:"require_escalated"`).
+pub fn asks_escalation(s: &str) -> bool {
+    const KEY: &str = "sandbox_permissions";
+    const VAL: &str = "require_escalated";
+    s.match_indices(KEY).any(|(i, _)| {
+        let rest = &s.as_bytes()[i + KEY.len()..];
+        (1..=4).any(|k| {
+            rest.len() >= k + VAL.len()
+                && rest[..k]
+                    .iter()
+                    .all(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+                && rest[k..].starts_with(VAL.as_bytes())
+        })
+    })
+}
+
+/// The first `cmd` JS string literal in `seg` (`"…"`, `'…'` or a backtick, escapes
+/// honoured; nothing else of the JS is parsed).
+fn cmd_literal(seg: &str) -> Option<String> {
+    let b = seg.as_bytes();
+    for (i, _) in seg.match_indices("cmd") {
+        let before = i.checked_sub(1).map(|j| b[j]);
+        if !matches!(
+            before,
+            None | Some(b'{' | b',' | b'"' | b'\'' | b' ' | b'\n' | b'\t')
+        ) {
+            continue;
+        }
+        let mut j = i + 3;
+        if matches!(b.get(j), Some(b'"' | b'\'')) {
+            j += 1;
+        }
+        while b.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+            j += 1;
+        }
+        if b.get(j) != Some(&b':') {
+            continue;
+        }
+        j += 1;
+        while b.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+            j += 1;
+        }
+        let Some(&q) = b.get(j).filter(|c| matches!(c, b'"' | b'\'' | b'`')) else {
+            continue;
+        };
+        let mut out = String::new();
+        let mut chars = seg[j + 1..].chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => match chars.next()? {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    c => out.push(c),
+                },
+                c if c as u32 == q as u32 => return Some(out),
+                c => out.push(c),
+            }
+        }
+        return None;
+    }
+    None
+}
+
+/// The escalated command(s) of one code-mode `exec` input: the first one's `cmd` and how
+/// many more there are. None when no `exec_command(` in it asks for escalation.
+pub fn escalated_commands(input: &str) -> Option<(Option<String>, usize)> {
+    let segs: Vec<&str> = input
+        .split("exec_command(")
+        .skip(1)
+        .filter(|seg| asks_escalation(seg))
+        .collect();
+    let first = segs.first()?;
+    Some((cmd_literal(first), segs.len() - 1))
+}
+
+fn first_line_max(s: &str, max: usize) -> String {
+    let l = s.lines().next().unwrap_or("").trim();
+    if l.chars().count() > max {
+        format!("{}…", l.chars().take(max - 1).collect::<String>())
+    } else {
+        l.to_string()
+    }
+}
+
+fn line_ms(v: &Value) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(v.get("timestamp")?.as_str()?)
+        .ok()
+        .map(|d| d.timestamp_millis())
+}
+
+/// An `item_completed` CommandExecution's command, as the user's shell line.
+fn completed_command(p: &Value) -> Option<String> {
+    let item = p.get("item")?;
+    (item.get("type")?.as_str()? == "CommandExecution").then_some(())?;
+    match item.get("command")? {
+        Value::Array(a) => a.last()?.as_str().map(str::to_string),
+        Value::String(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// What a busy Codex row's rollout tail (`text`) and sidecar say about a pending
+/// approval, for a process started at `proc_start_ms`. None: nothing to look at.
+pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Option<Trigger> {
+    const SLACK_MS: i64 = 2000;
+    let sidecar = sidecar.filter(|s| s.waiting && s.at >= proc_start_ms - SLACK_MS);
+    // (call_id, command, more) of the current turn's last exec call, if escalated.
+    let mut pending: Option<(String, Option<String>, usize)> = None;
+    let mut sidecar_live = sidecar.is_some();
+    let mut sidecar_ran = false;
+    for line in text.lines() {
+        // Cheap filter before parsing: the lines that matter name one of these.
+        if !(line.contains("custom_tool_call")
+            || line.contains("item_completed")
+            || line.contains("task_")
+            || line.contains("turn_aborted"))
+        {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(p) = v.get("payload") else {
+            continue;
+        };
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        let ptype = p.get("type").and_then(Value::as_str).unwrap_or("");
+        let after_sidecar = sidecar.is_some_and(|s| line_ms(&v).is_some_and(|t| t > s.at));
+        match (kind, ptype) {
+            ("event_msg", "task_started" | "task_complete" | "turn_aborted") => {
+                pending = None;
+                if after_sidecar {
+                    sidecar_live = false;
+                }
+            }
+            ("response_item", "custom_tool_call")
+                if p.get("name").and_then(Value::as_str) == Some("exec") =>
+            {
+                let input = p.get("input").and_then(Value::as_str).unwrap_or("");
+                let call_id = p.get("call_id").and_then(Value::as_str).unwrap_or("");
+                pending = escalated_commands(input).map(|(c, n)| (call_id.to_string(), c, n));
+            }
+            ("response_item", "custom_tool_call_output") => {
+                let id = p.get("call_id").and_then(Value::as_str);
+                if pending
+                    .as_ref()
+                    .is_some_and(|(c, _, _)| Some(c.as_str()) == id)
+                {
+                    pending = None;
+                }
+            }
+            ("event_msg", "item_completed") => {
+                let done = completed_command(p);
+                // A sibling command's completion resolves nothing.
+                if done.is_some() && pending.as_ref().is_some_and(|(_, c, _)| *c == done) {
+                    pending = None;
+                }
+                if after_sidecar && done.is_some() && sidecar.is_some_and(|s| s.command == done) {
+                    sidecar_ran = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let rollout = pending.is_some();
+    if !rollout && !sidecar_live {
+        return None;
+    }
+    let sc = sidecar.filter(|_| sidecar_live);
+    let label = match sc.and_then(|s| s.tool.as_deref()) {
+        None | Some("Bash") => "exec approval".to_string(),
+        Some(t) => format!("{t} approval"),
+    };
+    let command = match (sc.and_then(|s| s.command.clone()), &pending) {
+        (Some(c), _) => Some(first_line_max(&c, 80)),
+        (None, Some((_, Some(c), more))) => Some(if *more > 0 {
+            format!("{} (+{more})", first_line_max(c, 80))
+        } else {
+            first_line_max(c, 80)
+        }),
+        _ => None,
+    };
+    Some(Trigger {
+        sidecar: sidecar_live,
+        sidecar_unresolved: sidecar_live && !sidecar_ran,
+        rollout,
+        label,
+        command,
+    })
+}
+
+/// Is the terminal showing Codex's approval menu? Both its first line and its footer
+/// within the last 40 lines: `✔ You approved …` shares neither, and a stale menu in the
+/// scrollback has lost its footer to the next screen.
+pub fn screen_shows_approval(screen: &str) -> bool {
+    let lines: Vec<&str> = screen.lines().collect();
+    let tail = &lines[lines.len().saturating_sub(40)..];
+    let last = |pat: &str| tail.iter().rposition(|l| l.contains(pat));
+    matches!(
+        (last("Would you like to run"), last("Press enter to confirm")),
+        (Some(a), Some(b)) if a < b
+    )
+}
+
+/// The `$ <cmd>` line of the menu on screen (its first line).
+pub fn screen_command(screen: &str) -> Option<String> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|l| l.contains("Would you like to run"))?;
+    lines[start..]
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("$ "))
+        .map(|c| first_line_max(c, 80))
+}
+
+/// Which peek a row's backend allows for a trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// tmux: one `capture-pane`, cheap — any trigger.
+    Cheap,
+    /// iTerm: one osascript (0.1–0.3 s) — only when the hook said so.
+    Costly,
+    /// No backend: nothing to peek.
+    None,
+}
+
+/// The row's `waiting_for` when it waits on an approval, None when it doesn't (busy).
+/// `peek` reads the terminal; it is called at most once.
+pub fn truth(
+    trig: &Trigger,
+    look: Look,
+    peek: impl FnOnce() -> std::result::Result<String, String>,
+) -> Option<String> {
+    let label = |cmd: Option<String>| match cmd {
+        Some(c) if !c.is_empty() => format!("{}: `{c}`", trig.label),
+        _ => trig.label.clone(),
+    };
+    match look {
+        Look::Cheap | Look::Costly if look == Look::Cheap || trig.sidecar => {
+            let screen = peek().ok()?;
+            screen_shows_approval(&screen)
+                .then(|| label(screen_command(&screen).or_else(|| trig.command.clone())))
+        }
+        Look::None if trig.sidecar_unresolved => Some(label(trig.command.clone())),
+        _ => None,
+    }
+}
+
 // ------------------------------------------------------------------ hooks.json
 
 /// POSIX single-quoting: Codex runs command hooks through a shell.
@@ -869,5 +1141,202 @@ x = 1
                 .unwrap()
                 .binary_matches
         );
+    }
+
+    // ---- read side. Lines modelled on Codex 0.166's real rollout (instructions, ids and
+    // paths replaced): L17 is the embedded-mode shape (quoted key), L168 the daemon one.
+    const STARTED: &str = r#"{"timestamp":"2026-11-04T17:52:40.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"#;
+    const L17: &str = r#"{"timestamp":"2026-11-04T17:52:44.163Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_a","name":"exec","input":"text(await tools.exec_command({cmd:\"printf hi > hello.txt\",\"sandbox_permissions\":\"require_escalated\",\"justification\":\"Allow creating hello.txt?\",\"max_output_tokens\":1000}));\n"}}"#;
+    const L168: &str = r#"{"timestamp":"2026-11-04T17:59:38.014Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_b","name":"exec","input":"text(await tools.exec_command({cmd:\"printf bye > bye.txt\",sandbox_permissions:\"require_escalated\",justification:\"Allow creating bye.txt?\",max_output_tokens:1000}));\n"}}"#;
+    const L75: &str = r#"{"timestamp":"2026-11-04T17:54:49.528Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_c","name":"exec","input":"for (let i = 0; i < 9; i++) {\n  await tools.exec_command({cmd:\"cat big.txt\",\"max_output_tokens\":1000});\n}\n"}}"#;
+    const COMPACTED: &str = r#"{"timestamp":"2026-11-04T17:55:00.000Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","content":"use sandbox_permissions: \"require_escalated\" to ask"}]}}"#;
+    const ITEM_HI: &str = r#"{"timestamp":"2026-11-04T17:53:14.576Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","printf hi > hello.txt"],"status":"completed"}}}"#;
+    const ITEM_OTHER: &str = r#"{"timestamp":"2026-11-04T17:53:14.576Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","ls"],"status":"completed"}}}"#;
+    const OUT_A: &str = r#"{"timestamp":"2026-11-04T17:53:14.580Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_a","output":"ok"}}"#;
+    const ABORTED: &str = r#"{"timestamp":"2026-11-04T18:00:04.538Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#;
+
+    fn text(lines: &[&str]) -> String {
+        lines.join("\n") + "\n"
+    }
+
+    #[test]
+    fn the_escalation_match_reads_both_call_shapes_and_nothing_else() {
+        assert!(asks_escalation(
+            r#"{cmd:"x","sandbox_permissions":"require_escalated"}"#
+        ));
+        assert!(asks_escalation(
+            r#"{cmd:"x",sandbox_permissions:"require_escalated"}"#
+        ));
+        assert!(asks_escalation("sandbox_permissions: 'require_escalated'"));
+        assert!(!asks_escalation(r#"sandbox_permissions:"use_default""#));
+        assert!(!asks_escalation("sandbox_permissions_x:require_escalated"));
+        assert!(!asks_escalation(
+            "sandbox_permissions      require_escalated"
+        ));
+        assert_eq!(
+            escalated_commands(
+                r#"text(await tools.exec_command({cmd:"printf \"a b\" > c.txt",sandbox_permissions:"require_escalated"}))"#
+            ),
+            Some((Some(r#"printf "a b" > c.txt"#.to_string()), 0))
+        );
+        let script = r#"await tools.exec_command({cmd:'ls'}); await tools.exec_command({"cmd": `mkdir -p out`, sandbox_permissions:"require_escalated"}); await tools.exec_command({cmd:"rm x",sandbox_permissions:"require_escalated"})"#;
+        assert_eq!(
+            escalated_commands(script),
+            Some((Some("mkdir -p out".to_string()), 1)),
+            "one escalated call among several: the first escalated one, + the rest"
+        );
+        assert_eq!(escalated_commands(r#"exec_command({cmd:"ls"})"#), None);
+        assert_eq!(
+            escalated_commands(
+                r#"exec_command({command:x,sandbox_permissions:"require_escalated"})"#
+            ),
+            Some((None, 0)),
+            "no literal: label only"
+        );
+    }
+
+    #[test]
+    fn a_pending_escalated_call_triggers_until_it_resolves() {
+        let t = |lines: &[&str]| trigger(&text(lines), None, 0);
+        let hi = t(&[STARTED, L17]).unwrap();
+        assert!(hi.rollout && !hi.sidecar);
+        assert_eq!(hi.label, "exec approval");
+        assert_eq!(hi.command.as_deref(), Some("printf hi > hello.txt"));
+        assert_eq!(
+            t(&[STARTED, L168]).unwrap().command.as_deref(),
+            Some("printf bye > bye.txt")
+        );
+        // Resolution: its output, its own command completing, a turn end.
+        assert_eq!(t(&[STARTED, L17, OUT_A]), None);
+        assert_eq!(t(&[STARTED, L17, ITEM_HI]), None);
+        assert_eq!(t(&[STARTED, L17, ABORTED]), None);
+        assert_eq!(t(&[STARTED, L17, STARTED]), None);
+        // A sibling command's completion resolves nothing.
+        assert!(t(&[STARTED, L17, ITEM_OTHER]).is_some());
+        // The nine-command loop asks nothing; a later plain call replaces the pending one.
+        assert_eq!(t(&[STARTED, L75]), None);
+        assert_eq!(t(&[STARTED, L17, L75]), None);
+        // `require_escalated` in a compacted history or instructions is never a call.
+        assert_eq!(t(&[STARTED, COMPACTED]), None);
+    }
+
+    fn sc(waiting: bool, at: i64, command: Option<&str>) -> Sidecar {
+        Sidecar {
+            thread_id: "t".into(),
+            turn_id: None,
+            waiting,
+            tool: Some("Bash".into()),
+            command: command.map(str::to_string),
+            reason: None,
+            at,
+        }
+    }
+
+    #[test]
+    fn a_waiting_sidecar_triggers_until_the_turn_moves_on() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-11-04T17:52:45.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let s = sc(true, at, Some("printf hi > hello.txt"));
+        let trig = trigger(&text(&[STARTED, L17]), Some(&s), at - 60_000).unwrap();
+        assert!(trig.sidecar && trig.sidecar_unresolved && trig.rollout);
+        assert_eq!(trig.command.as_deref(), Some("printf hi > hello.txt"));
+        // The command ran (approved): still a trigger (the screen decides) but resolved for Unknown.
+        let ran = trigger(&text(&[STARTED, L17, ITEM_HI]), Some(&s), at - 60_000).unwrap();
+        assert!(ran.sidecar && !ran.sidecar_unresolved && !ran.rollout);
+        // A turn end after it, a `clear`, a sidecar from before this process: no trigger.
+        assert_eq!(
+            trigger(&text(&[STARTED, L17, OUT_A, ABORTED]), Some(&s), 0),
+            None
+        );
+        assert_eq!(
+            trigger(&text(&[STARTED]), Some(&sc(false, at, None)), 0),
+            None
+        );
+        assert_eq!(trigger(&text(&[STARTED]), Some(&s), at + 10_000), None);
+        // A turn boundary *before* the sidecar does not clear it.
+        assert!(trigger(&text(&[STARTED]), Some(&s), 0).is_some());
+        let mut patch = s.clone();
+        patch.tool = Some("apply_patch".into());
+        assert_eq!(
+            trigger(&text(&[STARTED]), Some(&patch), 0).unwrap().label,
+            "apply_patch approval"
+        );
+    }
+
+    const MENU: &str = "› create a file hello.txt containing the word hi
+• Running printf hi > hello.txt
+  Would you like to run the following command?
+  Environment: local
+  Reason: Allow creating hello.txt containing hi in this directory?
+  $ printf hi > hello.txt
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `printf hi > hello.txt` (p)
+  3. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel
+";
+    const APPROVED: &str = "✔ You approved codex to run printf hi > hello.txt this time
+• Working (3s • esc to interrupt)
+› Ask Codex to do anything
+";
+
+    #[test]
+    fn the_screen_decides_waiting() {
+        assert!(screen_shows_approval(MENU));
+        assert!(!screen_shows_approval(APPROVED));
+        let scrolled = format!("{MENU}{}", "• more output\n".repeat(45));
+        assert!(
+            !screen_shows_approval(&scrolled),
+            "a menu scrolled away is gone"
+        );
+        assert_eq!(
+            screen_command(MENU).as_deref(),
+            Some("printf hi > hello.txt")
+        );
+        let trig = Trigger {
+            sidecar: false,
+            sidecar_unresolved: false,
+            rollout: true,
+            label: "exec approval".into(),
+            command: Some("from rollout".into()),
+        };
+        let menu = || Ok(MENU.to_string());
+        assert_eq!(
+            truth(&trig, Look::Cheap, menu).as_deref(),
+            Some("exec approval: `printf hi > hello.txt`")
+        );
+        assert_eq!(
+            truth(&trig, Look::Cheap, || Ok(APPROVED.into())),
+            None,
+            "approved → busy"
+        );
+        assert_eq!(
+            truth(&trig, Look::Cheap, || Err("no pane".into())),
+            None,
+            "peek error → busy"
+        );
+        // iTerm peeks only for the hook; no backend: the sidecar's word, the rollout alone never.
+        assert_eq!(
+            truth(&trig, Look::Costly, || panic!(
+                "no osascript without the hook"
+            )),
+            None
+        );
+        assert_eq!(truth(&trig, Look::None, || panic!("nothing to peek")), None);
+        let hooked = Trigger {
+            sidecar: true,
+            sidecar_unresolved: true,
+            ..trig.clone()
+        };
+        assert!(truth(&hooked, Look::Costly, menu).is_some());
+        assert_eq!(
+            truth(&hooked, Look::None, || panic!()).as_deref(),
+            Some("exec approval: `from rollout`")
+        );
+        let ran = Trigger {
+            sidecar_unresolved: false,
+            ..hooked
+        };
+        assert_eq!(truth(&ran, Look::None, || panic!()), None);
     }
 }

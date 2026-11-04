@@ -7,7 +7,9 @@
 //!
 //! - **Codex** — `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<stamp>-<id>.jsonl` (default
 //!   `~/.codex`); the first line is `session_meta` with `id` and `cwd`. A turn runs from
-//!   `task_started` to `task_complete` / `turn_aborted`; an `*_approval_request` waits.
+//!   `task_started` to `task_complete` / `turn_aborted`. Codex 0.166 persists no
+//!   approval request: a busy row's pending approval is read off its screen (see
+//!   [`crate::core::codex_hooks`]); the old `*_approval_request` branch stays for older Codex.
 //!   A turn left open by a crashed TUI (no line stamped since the current process
 //!   started) is idle. Sub-agent threads (`session_meta.payload.thread_source:
 //!   "subagent"`) write their own rollout in the parent's cwd; they are never a session.
@@ -1039,6 +1041,8 @@ pub struct State {
     pub waiting_for: Option<String>,
     pub model: Option<String>,
     pub context: Option<ContextUsage>,
+    /// A busy Codex row that may wait on an approval: discovery looks at its screen.
+    pub approval: Option<crate::core::codex_hooks::Trigger>,
 }
 
 /// The last `max` bytes of a file, starting at a line boundary.
@@ -1085,6 +1089,11 @@ pub fn state(h: Harness, t: &TranscriptRef, proc_start_ms: i64) -> State {
             let mut st = codex_state(&text);
             if st.status == "busy" && codex_turn_is_stale(&text, t.mtime_ms, proc_start_ms) {
                 st.status = "idle".into();
+            }
+            if st.status == "busy" {
+                use crate::core::codex_hooks;
+                let sidecar = codex_hooks::read_sidecar(&codex_hooks::sidecar_dir(), &t.session_id);
+                st.approval = codex_hooks::trigger(&text, sidecar.as_ref(), proc_start_ms);
             }
             st
         }

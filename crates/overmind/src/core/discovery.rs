@@ -450,9 +450,21 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
             }
             out.push(s);
         }
+        if h == Harness::Codex {
+            let live: Vec<&str> = out.iter().filter_map(|s| s.session_id.as_deref()).collect();
+            crate::core::codex_hooks::prune_sidecars(
+                &crate::core::codex_hooks::sidecar_dir(),
+                &live,
+                SIDECAR_MAX_AGE_MS,
+                chrono::Utc::now().timestamp_millis(),
+            );
+        }
     }
     out
 }
+
+/// A sidecar of a thread no live row has is deleted after this long.
+const SIDECAR_MAX_AGE_MS: i64 = 3_600_000;
 
 fn harness_session(
     p: &harness::Proc,
@@ -463,13 +475,14 @@ fn harness_session(
     let pane = (backend == Backend::Tmux)
         .then(|| panes.get(&format!("/dev/{}", p.tty)))
         .flatten();
-    let state = t
+    let mut state = t
         .map(|t| harness::state(p.harness, t, p.start_ms))
         .unwrap_or_else(|| harness::State {
             status: "idle".into(),
             ..Default::default()
         });
-    Session {
+    let approval = state.approval.take();
+    let mut s = Session {
         pid: p.pid,
         name_source: state.name.is_some().then(|| "user".to_string()),
         name: state.name,
@@ -499,6 +512,30 @@ fn harness_session(
         harness: p.harness,
         transcript: t.map(|t| t.path.display().to_string()),
         ..Default::default()
+    };
+    if let Some(trig) = approval {
+        apply_approval(&mut s, &trig, |s| {
+            crate::core::backend::peek(s).map_err(|e| e.to_string())
+        });
+    }
+    s
+}
+
+/// A Codex row's pending approval, settled by its screen: `waiting` while the menu shows.
+fn apply_approval(
+    s: &mut Session,
+    trig: &crate::core::codex_hooks::Trigger,
+    peek: impl FnOnce(&Session) -> Result<String, String>,
+) {
+    use crate::core::codex_hooks::{Look, truth};
+    let look = match (s.backend, s.handle.is_some()) {
+        (Backend::Tmux, true) => Look::Cheap,
+        (Backend::Iterm, true) => Look::Costly,
+        _ => Look::None,
+    };
+    if let Some(w) = truth(trig, look, || peek(s)) {
+        s.status = "waiting".into();
+        s.waiting_for = Some(w);
     }
 }
 
@@ -901,6 +938,42 @@ fn claude_prompts(cwd: &str, session_id: &str, n: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_codex_approval_is_waiting_only_while_the_screen_shows_the_menu() {
+        use crate::core::codex_hooks::Trigger;
+        let trig = Trigger {
+            rollout: true,
+            label: "exec approval".into(),
+            command: Some("printf hi > hello.txt".into()),
+            ..Default::default()
+        };
+        let row = |backend| Session {
+            status: "busy".into(),
+            backend,
+            handle: Some("%1".into()),
+            harness: Harness::Codex,
+            ..Default::default()
+        };
+        let menu = "  Would you like to run the following command?\n  $ printf hi > hello.txt\n› 1. Yes, proceed (y)\n  Press enter to confirm or esc to cancel\n";
+        let mut s = row(Backend::Tmux);
+        apply_approval(&mut s, &trig, |_| Ok(menu.into()));
+        assert_eq!(s.status, "waiting");
+        assert_eq!(
+            s.waiting_for.as_deref(),
+            Some("exec approval: `printf hi > hello.txt`")
+        );
+        let mut s = row(Backend::Tmux);
+        apply_approval(&mut s, &trig, |_| {
+            Ok("✔ You approved codex to run printf hi".into())
+        });
+        assert_eq!((s.status.as_str(), s.waiting_for), ("busy", None));
+        // iTerm without the hook: no osascript, busy.
+        let mut s = row(Backend::Iterm);
+        apply_approval(&mut s, &trig, |_| panic!("no peek"));
+        assert_eq!(s.status, "busy");
+    }
+
     use super::*;
 
     // `ask_claude` shells out to `claude -p`, and that child registers itself as a
