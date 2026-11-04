@@ -84,15 +84,17 @@ Esc first so the turn ends with `turn_aborted` (see [architecture](architecture.
 
 | command | what it does |
 | --- | --- |
-| `overmind codex hooks install` | add one command hook (`'<this overmind>' _codex-hook`, `timeout: 5`) to `PermissionRequest`, `Stop` and `UserPromptSubmit` in `$CODEX_HOME/hooks.json` (default `~/.codex`), after any hooks already there; creates the sidecar dir. Codex reviews new hooks at its next start — accept the review once ("Trust all and continue"). Running sessions keep the hooks they started with; new ones, daemon-attached or embedded, get it (no daemon restart). The binary path is the one you ran, unresolved — run it from a stable path (`~/.local/bin/overmind`), since another path means a new hook to trust. Run again after moving the binary: it rewrites the path ("re-trust needed"). Refuses when hooks.json changes while it writes (a `/hooks` toggle) — re-run |
+| `overmind codex hooks install` | add one command hook (`'<this overmind>' _codex-hook`, `timeout: 5` seconds, `async: true`) to `PermissionRequest`, `Stop` and `UserPromptSubmit` in `$CODEX_HOME/hooks.json` (default `~/.codex`), after any hooks already there; creates the sidecar dir. Codex reviews new hooks at its next start — accept the review once ("Trust all and continue"). Running sessions keep the hooks they started with; new ones, daemon-attached or embedded, get it (no daemon restart). The binary path is the one you ran, unresolved — run it from a stable path (`~/.local/bin/overmind`), since another path means a new hook to trust. Run again after moving the binary: it rewrites the path ("re-trust needed"). Refuses when hooks.json changes while it writes (a `/hooks` toggle) — re-run |
 | `overmind codex hooks uninstall` | remove only Overmind's hooks (empty events dropped) and the sidecar dir; says so when a hook of yours followed ours under the same event (Codex asks to trust it again). `config.toml`'s `[hooks.state]` is left alone |
 | `overmind codex hooks status [--json]` | installed? which binary, and is it this one? per event: trusted, enabled (a hook switched off in `/hooks` is trusted and does nothing). `--json`: `{ installed, path, binary, binaryMatches, daemon: { pid, startedAt, olderThanHooks }, events: { permission_request \| stop \| user_prompt_submit: { installed, trusted, enabled } } }` |
 
 The hook makes iTerm rows and sub-agent approvals wait too; without it, a tmux row still waits (its
 rollout shows the pending escalated call and one screen read confirms it), an iTerm row stays `busy`.
 `overmind _codex-hook` is what Codex runs: it reads the event on stdin, writes one sidecar per
-session and always exits 0 with no output — a `PermissionRequest` hook that printed a decision would
-approve or deny for you. Not for direct use.
+session and always exits 0 with no output. The hook is async, so Codex shows its menu without
+waiting and ignores what the hook prints or exits with: a sync `PermissionRequest` hook that exited 2
+(an overmind without `_codex-hook` at that path) or printed a decision would deny for you
+([findings](notes/codex-0166-findings.md#4-a-hook-that-fails)). Not for direct use.
 
 Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are config
 `harnesses.<id>.command` (default the bare name). `overmind harness list --json`:

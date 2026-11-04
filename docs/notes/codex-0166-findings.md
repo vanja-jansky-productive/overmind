@@ -36,8 +36,8 @@ Hence Overmind's rule: the hook or the rollout only *triggers* a look; the scree
 | Sub-agent approval | the hook carries the **parent's** `session_id` and the child's `transcript_path`; the **parent's** screen shows the menu, with a `Thread: Agent (<child id>)` line and `… or o to open thread` in the footer. So the parent row waits, through the hook. Without the hook the parent row stays `busy`: the escalated call is in the child's rollout | `snaps/223132-c1-child-approval.txt`, `web/tests/fixtures/codex-approval-child.txt` |
 | `_codex-hook` cost (release build, warm) | median 3.5 ms, p90 3.7 ms (first run 310 ms, cold); exit 0 with empty stdout/stderr also on garbage, empty stdin and a path-like `session_id` | measured with `OVERMIND_CODEX_HOOKS_DIR` in a temp dir |
 | `uninstall` | removes only Overmind's groups; the user's `PostToolUse` group stays; `[hooks.state]` left alone | `05-uninstall.txt` |
-| `timeout` unit | seconds (`timeoutSec` in Codex's hook metadata) — not yet confirmed live | §4 |
-| A hook that cannot run (missing binary, timeout, exit 2, prints a decision) | **not yet run live** | §4 |
+| `timeout` unit | **seconds**: the `/hooks` detail shows `Timeout 5s`, a sync `sleep 10` is killed after 5 s (`hook timed out after 5s`) | §4 |
+| A hook that fails, exits 2, prints a decision, or is async | **a sync hook can deny for the user**; Overmind's hook is async | §4 |
 
 ## 3. Menu, interrupt and resume
 
@@ -52,14 +52,33 @@ Hence Overmind's rule: the hook or the rollout only *triggers* a look; the scree
 | Esc on a waiting embedded-mode row (menu = "No"), then SIGTERM | same `turn_aborted interrupted` | `accept-a4-kill-waiting-embedded.log` |
 | Embedded TUI killed mid-turn (`sleep 45`), then `codex resume <id>` | **resume writes nothing** before the first prompt: the rollout's last line stays the open turn's `custom_tool_call` (21:32:58Z) until the next prompt (21:42:23Z). The resumed row reads `idle` (open turn, nothing written since this process started) | `snaps/223303-k1-embedded-busy-sleep.txt`, `snaps/223331-s1-resumed-after-crash.txt`, archived rollout `01a1a87a-…` lines 36–38 |
 
-## 4. Open
+## 4. A hook that fails
 
-- The broken-hook matrix (hooks.json pointing at a missing binary, at `sleep 10` with
-  `timeout: 5`, at a script exiting 2, at one printing a `deny` decision), the `timeout` unit and
-  whether `"async": true` delivers the payload without blocking. The plan runs these only on the
-  throwaway session (`-c hooks.*`), and only while the other Codex sessions on the host are idle.
-  Until then Overmind's hook relies on its own guarantees: it prints nothing, always exits 0, and
-  takes milliseconds.
+One project `.codex/hooks.json` per variant (a `PermissionRequest` group only, `timeout: 5`) in a
+throwaway dir without `.git`, a fresh embedded TUI (`-s read-only -a on-request`) per variant,
+trusted through Codex's own folder-trust and hook-review prompts; the prompt asks for one
+escalated `printf … > file`. Times are from the hook's start to the screen.
+
+| Variant | `/hooks` shows | What Codex does | Time |
+| --- | --- | --- | --- |
+| Command not found (`…/does-not-exist/overmind _codex-hook`) | Sync, 5s | `• Hook failed └ hook exited with code 127` (hooks run through a shell, so no spawn error), then the **normal menu** | immediate |
+| `sleep 10`, `timeout: 5` | Sync, 5s | `hook timed out after 5s`, hook process killed (its line after `sleep` never written), then the **normal menu** | 5 s blocked |
+| Exit 2, a stderr line | Sync, 5s | **`• Blocked by hook └ <stderr>`: denied, no menu** — the model reads "Automatic approval review rejected it" | immediate |
+| Prints `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","permissionDecision":"deny"}}` (PreToolUse shape) | Sync, 5s | `Hook failed └ hook returned invalid permission-request JSON output`, then the **normal menu** | immediate |
+| Prints `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"…"}}}` (Claude Code's shape) | Sync, 5s | **`Blocked by hook └ <message>`: denied, no menu** | immediate |
+| `"async": true`, `sleep 10` | **Async**, 5s | the **normal menu** at once (it was on screen before the hook's first line), the full payload delivered on stdin, no failure line; the script is still stopped by the timeout | 0 s |
+| `"async": true`, prints the `decision: deny` above **and** exits 2 | Async, 5s | the **normal menu**: output and exit code ignored | 0 s |
+
+So a **sync** `PermissionRequest` hook decides for the user on exit 2 — clap's exit code for an
+unknown subcommand, i.e. what an overmind build without `_codex-hook` at the hooked path returns —
+and on a Claude-shaped `decision`. Overmind installs its hook with `"async": true`: the sidecar
+arrives a few ms after the menu (the screen is the truth anyway), and no binary at that path can
+block or decide. A changed hook (sync → async, a moved binary) is a new hash: Codex asks for review
+again at the next start. A hook that is not trusted does not run at all (one mis-trusted run above:
+the menu, no hook line).
+
+## 5. Open
+
 - `apply_patch` and other non-exec approvals: untested; their screen is not the exec menu, so
   such rows stay `busy`.
 - iTerm rows: covered by unit tests only (one osascript peek, only when the hook triggered).

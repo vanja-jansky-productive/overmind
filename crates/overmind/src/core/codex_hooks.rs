@@ -1,8 +1,11 @@
 //! The opt-in Codex hook: `overmind codex hooks install` adds one command hook to
 //! `PermissionRequest`, `Stop` and `UserPromptSubmit` in `$CODEX_HOME/hooks.json`
 //! (default `~/.codex`). Codex runs `'<overmind>' _codex-hook` with the event on stdin;
-//! [`handle_hook`] writes one sidecar per thread and prints nothing — a
-//! `PermissionRequest` hook that prints a decision would approve or deny for the user.
+//! [`handle_hook`] writes one sidecar per thread and prints nothing. The hook is
+//! `"async": true`: Codex 0.166 shows the approval menu without waiting for it and ignores
+//! its output and exit code. A sync `PermissionRequest` hook that exits 2 (clap's exit for
+//! an unknown subcommand, i.e. an overmind without `_codex-hook` at that path) or prints a
+//! `decision` denies for the user — `docs/notes/codex-0166-findings.md` §4.
 //!
 //! Sidecar (`$OVERMIND_CODEX_HOOKS_DIR`, else
 //! `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks/<session_id>.json`, v1):
@@ -29,7 +32,8 @@ pub const EVENTS: [(&str, &str); 3] = [
     ("Stop", "stop"),
     ("UserPromptSubmit", "user_prompt_submit"),
 ];
-/// Codex's command-hook `timeout`, in seconds (`timeoutSec` in its hook metadata).
+/// Codex's command-hook `timeout`, in seconds (its `/hooks` view shows `Timeout 5s`; a sync
+/// hook still running then is killed, "hook timed out after 5s"; async hooks get it too).
 pub const TIMEOUT_SECS: u64 = 5;
 /// The most of stdin the hook reads; a bigger payload is dropped.
 const MAX_PAYLOAD: u64 = 1024 * 1024;
@@ -562,7 +566,7 @@ fn hook_is_ours(h: &Value) -> bool {
 }
 
 fn our_hook(cmd: &str) -> Value {
-    json!({ "type": "command", "command": cmd, "timeout": TIMEOUT_SECS })
+    json!({ "type": "command", "command": cmd, "timeout": TIMEOUT_SECS, "async": true })
 }
 
 /// Index of the first group under `event` holding our hook.
@@ -1003,6 +1007,10 @@ mod tests {
         assert_eq!(stop[0]["hooks"][0]["command"], "say done");
         assert_eq!(stop[1]["hooks"][0]["command"], cmd);
         assert_eq!(stop[1]["hooks"][0]["timeout"], TIMEOUT_SECS);
+        assert_eq!(
+            stop[1]["hooks"][0]["async"], true,
+            "never blocks, never decides"
+        );
         for (ev, _) in EVENTS {
             assert!(our_group(hooks[ev].as_array().unwrap()).is_some());
         }
@@ -1015,6 +1023,15 @@ mod tests {
         let moved = merged(&once, &hook_command(Path::new("/new/overmind"))).unwrap();
         assert_eq!(moved["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(installed_binary(&moved).as_deref(), Some("/new/overmind"));
+        // A sync hook from an earlier install: made async in place, nothing appended.
+        let sync = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": cmd, "timeout": 5}]}]}});
+        let upgraded = merged(&sync, &cmd).unwrap();
+        assert_ne!(
+            upgraded, sync,
+            "install rewrites it (not \"already installed\")"
+        );
+        assert_eq!(upgraded["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(upgraded["hooks"]["Stop"][0]["hooks"][0]["async"], true);
         assert!(merged(&json!([1]), &cmd).is_err());
         assert!(merged(&json!({"hooks": {"Stop": {}}}), &cmd).is_err());
     }

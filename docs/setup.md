@@ -243,8 +243,9 @@ overmind codex hooks status           # trusted, enabled per event
 Install it from the binary's stable path (`~/.local/bin/overmind`, as `scripts/deploy.sh` puts it):
 the hook runs that exact path, and a different one is a new hook Codex asks you to trust again.
 Running Codex sessions keep the hooks they started with; new ones get it, through the Codex daemon
-too (no daemon restart). The hook only records that an approval is pending — it prints nothing, so it
-never approves or denies anything. `overmind codex hooks uninstall` takes it out again.
+too (no daemon restart). The hook only records that an approval is pending — it runs async (Codex shows
+its menu without waiting and ignores the hook's output), so it never approves or denies anything,
+even if the binary at that path is gone or too old. `overmind codex hooks uninstall` takes it out again.
 
 **Updating** a machine that runs from a repo checkout: `scripts/deploy.sh` there (over ssh:
 `ssh workstation '~/Code/project/scripts/deploy.sh'`) — pulls `main` (refuses uncommitted

@@ -252,7 +252,7 @@ approval, so a busy Codex row is `waiting` while, and only while, its terminal s
 menu. Two things only *trigger* a look at the screen:
 
 - a **sidecar** from the opt-in hook (`overmind codex hooks install`, see [cli.md](cli.md#harnesses)):
-  `PermissionRequest` runs `overmind _codex-hook`, which writes
+  `PermissionRequest` runs `overmind _codex-hook` (async: it never blocks or decides), which writes
   `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks/<session_id>.json` (`$OVERMIND_CODEX_HOOKS_DIR`
   overrides; tmp file + rename) — `{ v: 1, thread_id, turn_id, transcript_path, state:
   "waiting"|"clear", event, tool, command, reason, cwd, at }`; `Stop` and `UserPromptSubmit` write
