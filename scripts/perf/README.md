@@ -33,17 +33,27 @@ rows at start/end. No npm dependencies.
 ```sh
 node scripts/perf/server-cpu.mjs --scenario fleet --watch 0 --seconds 300 --json   # before (kill-switch)
 node scripts/perf/server-cpu.mjs --scenario fleet --watch 1 --seconds 300 --json   # after
-node scripts/perf/server-cpu.mjs --scenario burst --watch 1 --seconds 300 --json
+node scripts/perf/server-cpu.mjs --scenario burst --watch 1 --seconds 300 --list-delay 0.5 --json
+node scripts/perf/server-cpu.mjs --scenario idle --watch 1 --seconds 300 --list-delay 0.2 --json
 node scripts/perf/server-cpu.mjs --scenario latency --watch 1 --seconds 120 --json [--burst-latency]
 ```
 
-- `fleet`: this machine's real sessions and config, read-only — autoname, grouping, briefs, inbox,
-  slack and stacks sync off, bound to 127.0.0.1 on `--port` (default 7897, never 7878/7999); the
-  server's own state goes to a temp `XDG_STATE_HOME` while the CLI gets the real one, so `list`
-  reads and records `snapshot.json` as in production. Peers in the config are polled as usual.
+- `fleet`: this machine's real sessions, read-only whatever the config says. Bound to 127.0.0.1 on
+  `--port` (default 7897, never 7878/7999).
+  - **Only `overmind list` runs.** The `OVERMIND_BIN` wrapper runs the real CLI for `list` and
+    refuses every other subcommand (restore, send, kill, name, stack sync, …): it exits 1 and logs
+    it, and the result's `refused` lists them. It should be empty.
+  - **A scrubbed config.** The server reads a copy (`OVERMIND_CONFIG`) holding only your
+    `web.discovery`, with uploads and memos in the temp dir: no hosts or peers, no `restore.onBoot`,
+    operator, jobs, slack, inbox, grouping or briefs.
+  - Autoname, grouping, briefs, inbox, slack and stacks sync are also off by env.
+  - The server's own state goes to a temp `XDG_STATE_HOME`; the CLI gets the real one, so `list`
+    reads and records `snapshot.json` as in production.
 - `burst`: a temp `HOME` with 3 fake sessions and a fake `overmind` printing their rows;
   transcripts appended 10 lines/s each, a registry rewrite every 20 s. Compare list runs per mode;
-  CPU ≈ runs × the per-list cost on the real fleet.
+  CPU ≈ runs × the per-list cost on the real fleet. `--list-delay <s>` makes each fake list take
+  that long, so events land mid-list as they do on a real fleet (use 0.5).
+- `idle`: the same temp `HOME`, nothing writes: what a host with no busy session costs.
 - `latency`: the same temp `HOME`, a registry rewrite every 10 s; reports write → list start
   (`/api/health` polled every 100 ms). `--burst-latency` keeps the appenders running.
 - Run modes interleaved (0, 1, 0, 1): the fleet's busy rows change under you.

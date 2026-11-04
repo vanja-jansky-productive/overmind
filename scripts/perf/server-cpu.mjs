@@ -1,6 +1,6 @@
 // Web server CPU and `overmind list` runs while a UI watches — the #38 harness.
 //
-//   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency [--watch 0|1] [--seconds 300]
+//   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency|idle [--watch 0|1] [--seconds 300]
 //                                    [--interval 5] [--port 7897] [--list-delay 0.5] [--json]
 //
 // Starts `web/server.mjs` under `/usr/bin/time -l` (its user+sys include reaped children: every
@@ -25,6 +25,8 @@
 //            appended 10 lines/s each and a registry rewrite every 20 s: list runs per mode.
 //            `--list-delay 0.5` makes each fake list take 0.5 s, so events land mid-list as on a
 //            real fleet (a list that stays dirty must still wait out its gap).
+// - idle     the same temp HOME, nothing writes: what a host with no busy session costs (lists on
+//            the age bound only; CPU ≈ node + the fake CLI, scale lists by the fleet's per-list cost).
 // - latency  the same temp HOME, quiet: a registry rewrite every 10 s; reports write → list start
 //            (polls /api/health every 100 ms). With --burst-latency the appenders run too.
 //
@@ -185,7 +187,7 @@ async function main() {
 
   // Burst / latency drivers.
   const latencies = [];
-  if (fixture) {
+  if (fixture && opts.scenario !== 'idle') {
     if (opts.scenario === 'burst' || opts['burst-latency']) {
       timers.push(setInterval(() => {
         for (const r of fixture.rows) fs.appendFileSync(path.join(fixture.proj, `${r.session_id}.jsonl`), `{"type":"assistant","t":${Date.now()}}\n`);
