@@ -52,7 +52,7 @@ the first rung with hits wins. Two hits on the same rung is an error that lists 
 | `overmind group [-a, --all-hosts] [--json] [--apply] [--refresh] [--consolidate] [--input <file\|->] [--cached]` | sort sessions into work-stream groups (the web Board view) — see [Grouping](#grouping). Reads sessions and asks `claude -p`; never sends anything to a session |
 | `overmind group --rename <group id> --label <l>` / `--move <host/id> (--to <group id> \| --label <l>)` / `--create --label <l>` / `--delete <group id>` | edit the stored groups by hand (the Board's rename / drag'n'drop) — see [Grouping](#grouping) |
 | `overmind spawn [prompt] --dir <path> [--harness claude\|codex\|pi] [--name <n>] [--model <id>] [--backend iterm\|tmux] [--tmux-session <s>] [--window]` | start a new agent session in a new tab/pane. `--harness` picks the coding agent (default `claude`; see [Harnesses](#harnesses)). A Codex spawn in tmux answers "Trust this folder?" with "Trust and continue" (the directory was picked explicitly), as the web spawner does. `--model <id>` runs `<harness> --model '<id>'` (letters, digits and `._[]-/:` only — pi's ids are `provider/model`; blank = the harness's default). `--name` is passed as `-n` to Claude and pi; Codex has no such flag (the tmux session carries the name). Default backend: tmux inside tmux, over ssh or off macOS; else iTerm. With tmux, each spawn gets its own tmux session (one session per job) named from `--name` or the dir's basename, sanitised like `overmind new`; a taken `--name` is an error, a taken basename is uniquified (`app-2`). `--tmux-session <s>` opens a window in `s` instead (created if missing). `--ask-done`: the [instruction](#ask-done) goes below the prompt and the session runs in tmux. `--slack <slack-url \| @person> [--slack-for 2h] [--slack-task <instructions>] [--slack-proactive]`: start [linked to Slack](#slack-links) (tmux, any host whose web server reaches `slack.host`; checked before anything opens). The session starts with no prompt and is linked once it has registered (≤ ~45 s); the prompt goes in last in the link's intro, as the owner's request to start on — so it never works on it, or reaches Slack another way, before it knows it is linked. Max 4000 chars. If the link fails, the session stays, idle, and the prompt was not sent |
-| `overmind harness list [--json] [--no-models]` | the [harnesses](#harnesses) on this host: id, label, launch command, `installed`, and the models each offers for a picker. `-H <host>` asks another machine |
+| `overmind harness list [--json] [--no-models]` | the [harnesses](#harnesses) on this host: id, label, launch command, `installed`, `problem` (why it can't run here, with the fix — the text output prints it under the row), and the models each offers for a picker. `-H <host>` asks another machine |
 | `overmind codex hooks install\|uninstall\|status [--json]` | the optional [Codex approval hook](#harnesses): iTerm rows and sub-agent approvals read `waiting` too |
 | `overmind spawn --from <target> [prompt] [--name <n>] [--model <id>] [--backend …]` | continue a session's work in a new one: same host (with `-H`, the host the session is on) and its cwd (`--dir` overrides), first prompt = its [brief](#briefs)'s continue prompt (summary, origin, PRs, worktree, then a `---` line), then a blank line and `prompt` — the task (default: pick up where it left off). The prompt goes through a file under `~/.claude/overmind-handoffs/`, like a handoff. Errors when the session has no brief yet. `-n` prints the launch command and the prompt and writes nothing |
 | `overmind handoff [brief] [--file <f\|->] --dir <path> [--harness <h>] [--name <n>] [--model <id>] [--tmux-session <s>] [--tab] [--no-wait]` | start a new session in another window seeded with a brief (saved under `~/.claude/overmind-handoffs/`); waits until it registers. Same tmux placement as `spawn` |
@@ -100,10 +100,26 @@ sidecar dir in Codex's environment — in daemon mode the app-server daemon's: s
 `OVERMIND_CODEX_HOOKS_DIR` / `XDG_STATE_HOME` there too, or leave both unset everywhere.
 
 Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are config
-`harnesses.<id>.command` (default the bare name). `overmind harness list --json`:
+`harnesses.<id>.command` (default the bare name). A bare name is looked for on `$PATH`, then in
+`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.cargo/bin`, `~/bin`, `~/.npm-global/bin`,
+`~/.volta/bin`, fnm's default alias and each nvm Node's `bin` (newest first) — so an
+`npm i -g @openai/codex` is found from an ssh shell whose PATH lacks it. `installed` says whether the
+first word resolves; `problem` says why the harness can't run here, with the fix, or is `null`: not
+found (where overmind looked, how to install, which setting), a configured path that is not an
+executable, or — Codex — `never run here (no ~/.codex) — run \`codex login\`` / `not logged in — run
+\`codex login\`` (no `auth.json` in `$CODEX_HOME`; a config that keeps credentials in the OS keyring,
+`cli_auth_credentials_store = "keyring"` or `"auto"`, counts as logged in). A Codex that is not
+logged in is still `installed` and offered.
+
+Codex's sandbox and approval mode are part of its launcher, not a per-spawn pick: set
+`harnesses.codex.command` to e.g. `"codex -a on-request -s workspace-write"` (Codex's own default
+when bare; `--approve-for-me` routes approvals through Codex's automatic review instead) and every spawn, branch, bot and
+stack sibling starts that way; a restored session runs `<launcher> resume <id>`, so it keeps the mode.
+
+`overmind harness list --json`:
 
 ```json
-[{ "id": "codex", "label": "Codex", "command": "codex", "installed": true,
+[{ "id": "codex", "label": "Codex", "command": "codex", "installed": true, "problem": null,
    "models": [{ "id": "", "label": "Default" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1 Sol" }],
    "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultModel": null, "defaultEffort": "high" }]
 ```
@@ -513,7 +529,7 @@ JSON shapes:
 | --- | --- |
 | `overmind exec [-C <dir>] [-t] -- <cmd…>` | run a command on the host, outside tmux (cwd defaults to `$HOME`; `-t` allocates a tty) |
 | `overmind ssh [cmd…]` | plain shell on the host, no tmux |
-| `overmind doctor` | reachability, dispatch mode and why, tools and versions on both ends, config sanity |
+| `overmind doctor` | reachability, dispatch mode and why, tools and versions on both ends, config sanity. Per harness: `claude`, `codex` and `pi` (when installed) with their version and live sessions. Codex adds `never run here` (info) or `not logged in` (✘) with `codex login`, and `codex: missing` is info with the install command. `claude: missing` is ✘ only when no other harness is installed — a Codex- or pi-only host is fine. Neither line counts as a failure (exit 1 is tmux, a bot, the config or a host) |
 
 ## Setup
 

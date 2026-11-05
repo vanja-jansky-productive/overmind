@@ -124,6 +124,8 @@ export interface HarnessInfo {
   label: string
   command: string
   installed: boolean
+  /** Why it can't run on this host, with the fix (not found, Codex not logged in); null when fine (older servers: absent). */
+  problem?: string | null
   /** The picker; `id: ''` is the harness's own default. */
   models: ModelOption[]
   /** Reasoning-effort levels it takes, lowest first (older servers: absent). */

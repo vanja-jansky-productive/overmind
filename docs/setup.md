@@ -230,9 +230,23 @@ Bot sessions run unattended, so a bot usually sets `command` to a launcher that 
 permission prompts, and its working directory must already be trusted by Claude Code (a first-run
 "trust this folder" prompt would stall the session).
 
-**Codex** (optional, on each machine that runs Codex sessions): Codex records nothing while it
-waits on an approval, so Overmind reads its approval menu off the terminal. tmux rows need nothing
-installed; for iTerm rows and sub-agent approvals, add Overmind's approval hook:
+**Codex** (optional, on each machine that runs Codex sessions). A host can run Codex alone — no
+Claude Code at all — and still lists, spawns and drives Codex sessions. Install and log in on each such
+host, the same way as Claude Code (log in inside tmux, open the printed URL on your laptop):
+
+```sh
+brew install codex                    # or: npm i -g @openai/codex (nvm, Volta, fnm and ~/.npm-global bins are found too)
+codex login                           # ChatGPT sign-in (--device-auth over ssh); `codex login status` checks it
+overmind harness list                 # codex: installed — or what is missing and the fix
+overmind doctor                       # codex <version> — N live session(s)
+```
+
+The approval and sandbox mode belong to the launcher: to make it explicit (or pick another), set it
+once per host in the config — `"harnesses": { "codex": { "command": "codex -a on-request -s workspace-write" } }`
+— and every spawn, branch, bot and restore uses it (see [cli.md → Harnesses](cli.md#harnesses)).
+
+Codex records nothing while it waits on an approval, so Overmind reads its approval menu off the
+terminal. tmux rows need nothing installed; for iTerm rows and sub-agent approvals, add Overmind's approval hook:
 
 ```sh
 overmind codex hooks install          # appends one hook to PermissionRequest/Stop/UserPromptSubmit in ~/.codex/hooks.json
@@ -284,6 +298,8 @@ changes), builds the CLI into `~/.local/bin/overmind`, runs `overmind web build`
 
 | symptom | fix |
 | --- | --- |
+| `codex: missing` / Codex not offered in New session | `overmind harness list` says where it looked; install it, or set `harnesses.codex.command` to its path |
+| `codex …: not logged in` in `overmind doctor` | `codex login` on that host (inside tmux over ssh) |
 | `tmux: command not found` over ssh | PATH in `~/.zshenv`, not `~/.zprofile` (step 1.6) |
 | `overmind: command not found` on the remote | `overmind install --host <name>`; ensure `~/.local/bin` is on the remote PATH |
 | remote commands hang ~5 s then fail | host asleep/offline or Tailscale down; `overmind doctor`, `tailscale status` |
