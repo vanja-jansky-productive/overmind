@@ -294,6 +294,50 @@ fn probe_is_json() {
     assert_eq!(v["configExists"], false);
 }
 
+// The probe counts live sessions per harness (Claude's registry rows no longer include Codex
+// and pi rows) and reports Codex: its version, whether it has a home here and a login.
+#[test]
+fn probe_counts_sessions_per_harness_and_reports_codex() {
+    let env = Env::new();
+    let fixture = fixture(
+        env.dir.path(),
+        r#"[{"pid":1,"status":"idle","harness":"claude"},
+            {"pid":2,"status":"busy","harness":"codex"},
+            {"pid":3,"status":"idle","harness":"codex"},
+            {"pid":4,"status":"idle","harness":"pi"}]"#,
+    );
+    let stub = env.path("bin/codex");
+    std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
+    std::fs::write(&stub, "#!/bin/sh\necho codex-cli 9.9.9\n").unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let codex_home = env.path("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    env.write_config(&serde_json::json!({
+        "version": 1,
+        "harnesses": { "codex": { "command": format!("{} -a on-request", stub.display()) } }
+    }));
+    let probe = || {
+        let out = env
+            .cmd()
+            .arg("_probe")
+            .env("OVERMIND_FIXTURE", &fixture)
+            .env("CODEX_HOME", &codex_home)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let v = probe();
+    assert_eq!(v["claudeSessions"], 1, "{v}");
+    assert_eq!(v["codexSessions"], 2, "{v}");
+    assert_eq!(v["piSessions"], 1, "{v}");
+    assert_eq!(v["codex"], "codex-cli 9.9.9", "{v}");
+    assert_eq!(v["codexHome"], true, "{v}");
+    assert_eq!(v["codexLogin"], false, "{v}");
+    std::fs::write(codex_home.join("auth.json"), "{}").unwrap();
+    assert_eq!(probe()["codexLogin"], true);
+}
+
 #[test]
 fn skill_is_embedded_and_generic() {
     let env = Env::new();

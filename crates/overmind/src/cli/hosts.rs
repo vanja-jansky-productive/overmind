@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::config;
 use crate::core::discovery::Session;
+use crate::core::harness::{self, Harness};
 use crate::core::hosts::{self, Remote, Target, Tty};
 use crate::core::tools::{self, remote_path, shq, shq_min};
 use crate::error::{Error, Result};
@@ -134,9 +135,20 @@ pub struct Probe {
     pub platform: String,
     pub tmux: Option<String>,
     pub claude: Option<String>,
+    /// `codex --version` of the launcher `harness list` uses; `null` when there is none.
+    pub codex: Option<String>,
+    /// Codex's home (`$CODEX_HOME`, default `~/.codex`) exists: it has run here.
+    pub codex_home: bool,
+    /// Codex has a login there ([`crate::core::harness::codex_logged_in`]).
+    pub codex_login: bool,
+    /// `pi --version`; `null` when pi isn't installed.
+    pub pi: Option<String>,
     pub node: Option<String>,
     pub tmux_sessions: usize,
+    /// Live sessions per harness.
     pub claude_sessions: usize,
+    pub codex_sessions: usize,
+    pub pi_sessions: usize,
     pub config_path: String,
     pub config_exists: bool,
     pub config_self: Option<String>,
@@ -180,6 +192,15 @@ pub fn gather_probe() -> Probe {
     let claude = tools::claude().and_then(|c| first_line(&c, &["--version"]));
     let node = tools::find_binary("node")
         .and_then(|n| first_line(&n.display().to_string(), &["--version"]));
+    // A launcher that runs but prints no version still counts as there.
+    let version_of = |h: Harness| {
+        harness::binary(&h.command()).map(|b| {
+            first_line(&b.display().to_string(), &["--version"]).unwrap_or_else(|| "?".into())
+        })
+    };
+    let codex_home = harness::codex_home();
+    let rows = crate::core::discovery::discover();
+    let sessions = |h: Harness| rows.iter().filter(|s| s.harness == h).count();
     Probe {
         overmind_version: crate::VERSION.into(),
         overmind_path: std::env::current_exe()
@@ -190,11 +211,17 @@ pub fn gather_probe() -> Probe {
         platform: uname(),
         tmux: crate::core::tmux::version(),
         claude,
+        codex: version_of(Harness::Codex),
+        codex_home: codex_home.is_dir(),
+        codex_login: harness::codex_logged_in(&codex_home),
+        pi: version_of(Harness::Pi),
         node,
         tmux_sessions: crate::core::tmux::list_sessions()
             .map(|v| v.len())
             .unwrap_or(0),
-        claude_sessions: crate::core::discovery::discover().len(),
+        claude_sessions: sessions(Harness::Claude),
+        codex_sessions: sessions(Harness::Codex),
+        pi_sessions: sessions(Harness::Pi),
         config_path: tools::tildify(&loaded.path.display().to_string()),
         config_exists: loaded.exists,
         config_self: loaded.config.self_name.clone(),
@@ -209,7 +236,54 @@ pub fn probe() -> Result<()> {
     Ok(())
 }
 
+/// How a doctor line is marked: ✔, ✘, or plain.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mark {
+    Ok,
+    Bad,
+    Info,
+}
+
 fn report_probe(p: &Probe, compare: Option<&str>) -> usize {
+    let (lines, failures) = probe_lines(p, compare);
+    for (mark, line) in lines {
+        match mark {
+            Mark::Ok => ok(&line),
+            Mark::Bad => bad(&line),
+            Mark::Info => info(&line),
+        }
+    }
+    failures
+}
+
+/// `codex-cli 0.166.0` → `codex 0.166.0`.
+fn codex_version(v: &str) -> String {
+    let v = v.trim();
+    let bare = v
+        .strip_prefix("codex-cli ")
+        .or_else(|| v.strip_prefix("codex "))
+        .unwrap_or(v);
+    format!("codex {bare}")
+}
+
+#[derive(Default)]
+struct Lines(Vec<(Mark, String)>);
+
+impl Lines {
+    fn ok(&mut self, s: &str) {
+        self.0.push((Mark::Ok, s.into()));
+    }
+    fn bad(&mut self, s: &str) {
+        self.0.push((Mark::Bad, s.into()));
+    }
+    fn info(&mut self, s: &str) {
+        self.0.push((Mark::Info, s.into()));
+    }
+}
+
+/// The doctor's lines about one machine, and how many of them are failures.
+fn probe_lines(p: &Probe, compare: Option<&str>) -> (Vec<(Mark, String)>, usize) {
+    let mut l = Lines::default();
     let mut failures = 0;
     let overmind = format!(
         "overmind {} ({})",
@@ -218,72 +292,101 @@ fn report_probe(p: &Probe, compare: Option<&str>) -> usize {
     );
     match compare {
         Some(v) if v != p.overmind_version => {
-            bad(&format!(
+            l.bad(&format!(
                 "{overmind} — differs from this machine's {v}; run: overmind install --host <name>"
             ));
             failures += 1;
         }
-        _ => ok(&overmind),
+        _ => l.ok(&overmind),
     }
-    info(&format!(
+    l.info(&format!(
         "host: {} ({}, {})",
         p.hostname, p.user, p.platform
     ));
     match &p.tmux {
-        Some(t) => ok(&format!("{t} — {} session(s)", p.tmux_sessions)),
+        Some(t) => l.ok(&format!("{t} — {} session(s)", p.tmux_sessions)),
         None => {
-            bad("tmux: missing");
+            l.bad("tmux: missing");
             failures += 1;
         }
     }
     match &p.claude {
-        Some(c) => ok(&format!(
+        Some(c) => l.ok(&format!(
             "claude {c} — {} live session(s)",
             p.claude_sessions
         )),
-        None => bad("claude: missing"),
+        // A Codex- or pi-only host is a supported setup.
+        None if p.codex.is_some() || p.pi.is_some() => l.info(&format!(
+            "{} claude: missing (fine: this host runs another harness)",
+            "·".dimmed()
+        )),
+        None => l.bad("claude: missing"),
+    }
+    match &p.codex {
+        Some(v) if !p.codex_home => l.info(&format!(
+                "{} {}: never run here (no ~/.codex) — run `codex login`",
+                "·".dimmed(),
+                codex_version(v)
+            ),
+        ),
+        Some(v) if !p.codex_login => l.bad(&format!("{}: not logged in — run `codex login`", codex_version(v)),
+        ),
+        Some(v) => l.ok(&format!(
+                "{} — {} live session(s)",
+                codex_version(v),
+                p.codex_sessions
+            ),
+        ),
+        None => l.info(&format!(
+                "{} codex: missing (optional — brew install codex, or npm i -g @openai/codex; or set harnesses.codex.command)",
+                "·".dimmed()
+            ),
+        ),
+    }
+    if let Some(v) = &p.pi {
+        l.ok(&format!("pi {v} — {} live session(s)", p.pi_sessions));
     }
     match &p.node {
-        Some(n) => ok(&format!("node {n}")),
-        None => info(&format!(
+        Some(n) => l.ok(&format!("node {n}")),
+        None => l.info(&format!(
             "{} node: missing (only needed for `overmind web serve`)",
             "·".dimmed()
         )),
     }
     match &p.web_dir {
-        Some(d) => ok(&format!("web app: {d}")),
-        None => info(&format!(
+        Some(d) => l.ok(&format!("web app: {d}")),
+        None => l.info(&format!(
             "{} web app: not found (only needed for `overmind web serve`)",
             "·".dimmed()
         )),
     }
     for b in &p.bots {
         if b.ok {
-            ok(&b.line);
+            l.ok(&b.line);
         } else {
-            bad(&b.line);
+            l.bad(&b.line);
             failures += 1;
         }
     }
     if p.config_exists {
         let who = p.config_self.as_deref().unwrap_or("(self unset)");
         if p.config_problems.is_empty() {
-            ok(&format!("config {} — self: {who}", p.config_path));
+            l.ok(&format!("config {} — self: {who}", p.config_path));
         } else {
-            bad(&format!("config {} — self: {who}", p.config_path));
+            l.bad(&format!("config {} — self: {who}", p.config_path));
             for pr in &p.config_problems {
-                info(&format!("    {pr}"));
+                l.info(&format!("    {pr}"));
             }
             failures += 1;
         }
     } else {
-        info(&format!(
+        l.info(&format!(
             "{} config: none at {} (run: overmind init)",
             "·".dimmed(),
             p.config_path
         ));
     }
-    failures
+    (l.0, failures)
 }
 
 /// Reachability, versions on both ends, and config sanity.
@@ -763,4 +866,125 @@ pub fn install(target: &Target, o: InstallOpts) -> Result<()> {
 pub fn current_exe() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmux_host() -> Probe {
+        Probe {
+            overmind_version: "1.0.0".into(),
+            tmux: Some("tmux 3.5".into()),
+            ..Probe::default()
+        }
+    }
+
+    fn has(lines: &[(Mark, String)], mark: Mark, text: &str) -> bool {
+        lines.iter().any(|(m, l)| *m == mark && l.contains(text))
+    }
+
+    #[test]
+    fn a_codex_only_host_is_fine_claude_missing_is_info() {
+        let p = Probe {
+            codex: Some("codex-cli 0.166.0".into()),
+            codex_home: true,
+            codex_login: true,
+            codex_sessions: 2,
+            ..tmux_host()
+        };
+        let (lines, failures) = probe_lines(&p, None);
+        assert_eq!(failures, 0, "{lines:?}");
+        assert!(
+            has(&lines, Mark::Ok, "codex 0.166.0 — 2 live session(s)"),
+            "{lines:?}"
+        );
+        assert!(has(&lines, Mark::Info, "claude: missing"), "{lines:?}");
+        assert!(!lines.iter().any(|(m, _)| *m == Mark::Bad), "{lines:?}");
+
+        // pi alone also makes Claude optional
+        let p = Probe {
+            pi: Some("0.9.0".into()),
+            pi_sessions: 1,
+            ..tmux_host()
+        };
+        let (lines, _) = probe_lines(&p, None);
+        assert!(
+            has(&lines, Mark::Ok, "pi 0.9.0 — 1 live session(s)"),
+            "{lines:?}"
+        );
+        assert!(has(&lines, Mark::Info, "claude: missing"), "{lines:?}");
+    }
+
+    #[test]
+    fn no_harness_at_all_keeps_claude_missing_red_and_the_failure_count_unchanged() {
+        let (lines, failures) = probe_lines(&tmux_host(), None);
+        assert_eq!(failures, 0);
+        assert!(has(&lines, Mark::Bad, "claude: missing"), "{lines:?}");
+        assert!(has(&lines, Mark::Info, "codex: missing"), "{lines:?}");
+        assert!(
+            has(&lines, Mark::Info, "npm i -g @openai/codex"),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|(_, l)| l.starts_with("pi")), "{lines:?}");
+    }
+
+    #[test]
+    fn codex_says_never_run_and_not_logged_in() {
+        let base = Probe {
+            claude: Some("2.1.0 (Claude Code)".into()),
+            claude_sessions: 3,
+            codex: Some("codex-cli 0.166.0".into()),
+            ..tmux_host()
+        };
+        let (lines, failures) = probe_lines(&base, None);
+        assert_eq!(failures, 0);
+        assert!(
+            has(
+                &lines,
+                Mark::Ok,
+                "claude 2.1.0 (Claude Code) — 3 live session(s)"
+            ),
+            "{lines:?}"
+        );
+        assert!(
+            has(&lines, Mark::Info, "codex 0.166.0: never run here"),
+            "{lines:?}"
+        );
+        let p = Probe {
+            codex_home: true,
+            ..base
+        };
+        let (lines, failures) = probe_lines(&p, None);
+        assert_eq!(failures, 0);
+        assert!(
+            has(
+                &lines,
+                Mark::Bad,
+                "codex 0.166.0: not logged in — run `codex login`"
+            ),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_old_probe_without_the_harness_keys_still_parses() {
+        let p: Probe = serde_json::from_str(
+            r#"{"overmindVersion":"0.9.0","claude":"2.0.0","claudeSessions":4,"tmux":"tmux 3.4"}"#,
+        )
+        .unwrap();
+        assert_eq!(p.claude_sessions, 4);
+        assert_eq!((p.codex, p.codex_sessions, p.codex_login), (None, 0, false));
+        let back: serde_json::Value = serde_json::to_value(Probe::default()).unwrap();
+        for k in [
+            "codex",
+            "codexHome",
+            "codexLogin",
+            "codexSessions",
+            "pi",
+            "piSessions",
+        ] {
+            assert!(back.get(k).is_some(), "{k} missing from {back}");
+        }
+    }
 }
