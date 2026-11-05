@@ -8,17 +8,58 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Directories searched after `$PATH`.
-fn fallback_dirs() -> Vec<PathBuf> {
+pub fn fallback_dirs() -> Vec<PathBuf> {
+    fallback_dirs_in(dirs::home_dir().as_deref())
+}
+
+/// [`fallback_dirs`] for a given home: Homebrew and `/usr/local/bin`, then the per-user bins —
+/// `~/.local/bin`, `~/.cargo/bin`, `~/bin` and the ones npm-installed CLIs (Codex) land in: a
+/// `~/.npm-global` prefix, Volta, fnm's default alias, and every nvm-installed Node, newest first.
+pub fn fallback_dirs_in(home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
     ];
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local/bin"));
-        dirs.push(home.join(".cargo/bin"));
-        dirs.push(home.join("bin"));
+    if let Some(home) = home {
+        for rel in [
+            ".local/bin",
+            ".cargo/bin",
+            "bin",
+            ".npm-global/bin",
+            ".volta/bin",
+            ".local/share/fnm/aliases/default/bin",
+            "Library/Application Support/fnm/aliases/default/bin",
+        ] {
+            dirs.push(home.join(rel));
+        }
+        dirs.extend(nvm_bins(&home.join(".nvm/versions/node")));
     }
     dirs
+}
+
+/// `<dir>/<version>/bin` for each Node nvm installed, newest version first (a name that is
+/// not `v<major>.<minor>.<patch>` sorts last).
+fn nvm_bins(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut versions: Vec<(Option<(u32, u32, u32)>, String)> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .map(|name| {
+            let mut parts = name.trim_start_matches('v').split('.').map(str::parse::<u32>);
+            let v = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+                (Some(Ok(a)), Some(Ok(b)), Some(Ok(c)), None) => Some((a, b, c)),
+                _ => None,
+            };
+            (v, name)
+        })
+        .collect();
+    versions.sort_by(|a, b| b.cmp(a));
+    versions
+        .into_iter()
+        .map(|(_, name)| dir.join(name).join("bin"))
+        .collect()
 }
 
 /// `$PATH` with the fallback dirs appended — for a child that itself looks things up
@@ -38,8 +79,12 @@ pub fn is_executable(p: &Path) -> bool {
 /// First executable called `name` on `$PATH`, then in the fallback dirs.
 pub fn find_binary(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .chain(fallback_dirs())
+    find_in(name, std::env::split_paths(&path).chain(fallback_dirs()))
+}
+
+/// First executable called `name` in `dirs`, in order.
+pub fn find_in(name: &str, dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    dirs.into_iter()
         .map(|d| d.join(name))
         .find(|p| is_executable(p))
 }
@@ -196,6 +241,67 @@ mod tests {
         assert_eq!(remote_path("~/Code/x"), "\"$HOME\"/Code/x");
         assert_eq!(remote_path("~/a b"), "\"$HOME\"/'a b'");
         assert_eq!(remote_path("/tmp/x"), "'/tmp/x'");
+    }
+
+    fn exe(p: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn fallback_dirs_cover_npm_volta_fnm_and_every_nvm_node_newest_first() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        for v in ["v9.11.2", "v22.1.0", "v20.10.1", "system"] {
+            std::fs::create_dir_all(h.join(".nvm/versions/node").join(v).join("bin")).unwrap();
+        }
+        let dirs = fallback_dirs_in(Some(h));
+        assert_eq!(dirs[0], PathBuf::from("/opt/homebrew/bin"));
+        for rel in [
+            ".local/bin",
+            ".npm-global/bin",
+            ".volta/bin",
+            ".local/share/fnm/aliases/default/bin",
+            "Library/Application Support/fnm/aliases/default/bin",
+        ] {
+            assert!(dirs.contains(&h.join(rel)), "{rel} missing from {dirs:?}");
+        }
+        let nvm: Vec<_> = dirs
+            .iter()
+            .filter_map(|d| d.strip_prefix(h.join(".nvm/versions/node")).ok())
+            .map(|d| d.display().to_string())
+            .collect();
+        assert_eq!(
+            nvm,
+            ["v22.1.0/bin", "v20.10.1/bin", "v9.11.2/bin", "system/bin"]
+        );
+        assert_eq!(fallback_dirs_in(None).len(), 2);
+    }
+
+    #[test]
+    fn a_binary_only_in_an_npm_global_or_nvm_bin_is_found() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        // only the per-user dirs: this machine's Homebrew may hold a real codex
+        let user_dirs = || fallback_dirs_in(Some(h)).into_iter().filter(|d| d.starts_with(h));
+        exe(&h.join(".nvm/versions/node/v20.0.0/bin/codex"));
+        exe(&h.join(".nvm/versions/node/v22.0.0/bin/codex"));
+        assert_eq!(
+            find_in("codex", user_dirs()),
+            Some(h.join(".nvm/versions/node/v22.0.0/bin/codex"))
+        );
+        exe(&h.join(".npm-global/bin/codex"));
+        assert_eq!(
+            find_in("codex", user_dirs()),
+            Some(h.join(".npm-global/bin/codex"))
+        );
+        // not executable → not found
+        let plain = h.join("plain/codex");
+        std::fs::create_dir_all(plain.parent().unwrap()).unwrap();
+        std::fs::write(&plain, "").unwrap();
+        assert_eq!(find_in("codex", [h.join("plain")]), None);
     }
 
     #[test]
