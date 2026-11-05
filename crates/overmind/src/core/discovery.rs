@@ -1059,7 +1059,7 @@ mod tests {
         std::fs::write(&p, r#"{"codex":{"t":{"pid":4,"startMs":10,"mtimeMs":20}}}"#).unwrap();
         let (o, corrupt) = read_owners(&p);
         assert!(!corrupt);
-        assert_eq!(o["codex"]["t"].pid, 4);
+        assert_eq!(o["codex"]["t"].by.pid, 4);
         assert_eq!(o["codex"]["t"].closed_mtime_ms, None);
     }
 

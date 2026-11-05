@@ -240,33 +240,40 @@ name `config.toml`'s `model` (pi's does, `Default (x)`).
 
 Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) wins; otherwise,
 later-started processes first, the newest transcript in the process's cwd created after it
-started (3 s slack), then the newest written to since it started. Two guards keep a closed
-sibling's transcript (same cwd) from taking a survivor's row — the survivor's id would change
-and the closed session would read live, sends included:
+started (3 s slack), then the newest written to since it started. Three guards keep a closed
+sibling's transcript (same cwd) from taking a survivor's row, and one pane's thread from another's
+— the row's id would change and sends, keys and approvals would go to the wrong pane:
 - **Owners**: each list records which process (pid + start time) runs each thread. The file is
   `$OVERMIND_HARNESS_OWNERS`, else `<state dir>/harness-owners.json`:
-  `{ "<harness>": { "<session id>": { pid, startMs, closedMtimeMs?, contested? } } }`. It is
-  read, matched and written under `<file>.lock` (lists run concurrently), and written only when
-  a thread starts, moves or closes. By cwd, a process never takes a thread another live process
-  runs, nor a gone process's thread. The first list that sees the owner gone stores the
-  transcript's mtime then (`closedMtimeMs`): the thread is foreign until it grows more than 10 s
-  past that (resumed inside another TUI with `/resume`; the 10 s cover the app-server daemon's
-  last writes after its TUI exits). A gone owner's entry is dropped once its transcript is older
-  than the oldest live process. An unreadable file is said once on stderr and starts empty.
-- **Contested**: a match is recorded as ownership only when it is certain — an id on the command
-  line, or no other live process in that cwd without a recorded thread started before the
-  thread did. Otherwise it is recorded `contested` (for good: which pane was typed into first
-  is not in any file) and matched afresh each list, so two fresh panes in one cwd and a first
-  prompt never hand one pane the other's thread for the life of both. Their rows may swap while
-  both are unrecorded, as before this record existed.
-- **Superseded**: a newer candidate is the process's `/new` only if the process's own recorded
-  older thread went quiet when it appeared (5 s slack). A thread nobody is recorded with, or a
-  sibling's, never knocks out the process's newer one.
+  `{ "<harness>": { "<session id>": { pid, startMs, closedMtimeMs?, contestedBy?, resumed? } } }`.
+  It is read, matched and written under `<file>.lock` (lists run concurrently), and written only
+  when a thread starts, moves, closes or narrows. By cwd, a process never takes a thread another
+  live process runs, nor a gone process's thread. The first list that sees the owner gone stores
+  the transcript's mtime then (`closedMtimeMs`): the thread is foreign until it grows more than
+  10 s past that (taken up again with `/resume`; the 10 s cover the app-server daemon's last
+  writes after its TUI exits). A gone owner's entry is dropped once its transcript is older than
+  the oldest live process. An unreadable file is said once on stderr and starts empty.
+- **Starters**: a thread no one is recorded with goes only to a process that could have started
+  it — one in its cwd that existed when it was created, less one that kept writing its own
+  recorded older thread past then (busy, so not its `/new`). Codex stamps a thread when its TUI
+  starts (the rollout appears at the first prompt), so a process with no recorded thread that
+  started then (3 s slack) is its only starter. The match is recorded as ownership only when the
+  starter is certain (or the id is on the command line). Otherwise the thread is recorded with
+  its possible starters (`contestedBy`; `resumed` when it was taken up again, judged by its last
+  write instead of its creation), also when no row took it, while they are all alive. A starter
+  drops out once seen busy on its own older thread; when one live starter is left (and no gone
+  one), it becomes the owner. A process that already runs a recorded thread takes a contested or
+  unrecorded one only when it is the only starter: a `/new` beside an idle sibling in the same
+  cwd keeps both rows on their own threads (the `/new` pane's row stale) until the sibling is
+  written again — never the sibling's row on the new thread. Two panes started within 3 s of each
+  other in one cwd stay contested for good; their rows may swap between lists, as before this
+  record existed, but neither is recorded with the other's thread.
+- **Superseded**: a newer candidate is the process's `/new` only if its own recorded older thread
+  went quiet when it appeared (5 s slack). Codex 0.166 does not write the old rollout after
+  `/new` (checked live with the mock).
 
 Left open: a thread started and closed between two lists, beside a sibling idle since before
-it, is still taken by the sibling; a contested thread whose pane closed can be taken by a
-sibling it was contested with, until that sibling's own thread is written later; and a `/new`
-beside a pane that was never prompted reads as the fresh pane's first thread. A `codex exec` / `codex review`
+it, is still taken by the sibling. A `codex exec` / `codex review`
 rollout (`session_meta` `source: "exec"` or `originator: "codex_exec"`, the markers the web
 watcher drops) is only ever matched by id: by cwd, one run beside an open TUI would take its row.
 A Codex session before its first prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`.
