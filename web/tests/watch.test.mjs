@@ -56,7 +56,7 @@ function fakeClock() {
 const roots = discoveryRoots({ env: {}, home: HOME });
 const dir = (id) => roots.find((r) => r.id === id).dir;
 
-function setup({ live = [{ session_id: 'sid-live', harness: 'claude' }], missing = [] } = {}) {
+function setup({ live = [{ session_id: 'sid-live', harness: 'claude' }], missing = [], readHead = null } = {}) {
   const fs = fakeFs();
   for (const r of roots) if (!missing.includes(r.id)) fs.dirs.add(r.dir);
   const clock = fakeClock();
@@ -68,7 +68,7 @@ function setup({ live = [{ session_id: 'sid-live', harness: 'claude' }], missing
     watch: fs.watch,
     readFile: fs.readFile,
     readTail: (f, n) => (fs.files.has(f) ? fs.files.get(f).slice(-n) : null),
-    readHead: (f) => (fs.files.get(f)?.includes('\n') ? fs.files.get(f).split('\n')[0] : null),
+    readHead: (f, max) => (readHead ?? ((x) => (fs.files.get(x)?.includes('\n') ? fs.files.get(x).split('\n')[0] : null)))(f, max),
     exists: fs.exists,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
@@ -325,6 +325,23 @@ test('review-38 S1/R1: a rollout no row owns is fast the first time, slow once m
   fs.fire(dir('codex'), fresh, 'change');
   clock.flush();
   assert.equal(changes.at(-1), 'fast', 'stop() forgets what it saw');
+});
+
+test('review-r3 N4: a head that never parses is read only on a pass that may signal — not on every event after two passes', () => {
+  let live = [{ session_id: 'sid-live', harness: 'claude' }];
+  let reads = 0;
+  const { fs, clock, changes, w } = setup({ live: () => live, readHead: () => ((reads += 1), null) });
+  w.start();
+  const rel = '2026/11/04/rollout-2026-11-04T10-01-00-badhead.jsonl';
+  fs.files.set(path.join(dir('codex'), rel), 'x'.repeat(64));
+  for (let i = 0; i < 10; i += 1) {
+    fs.fire(dir('codex'), rel, 'change');
+    fs.fire(dir('codex'), rel, 'change'); // same list: no read
+    clock.flush();
+    live = [...live];
+  }
+  assert.deepEqual(changes, ['fast', 'slow']);
+  assert.equal(reads, 2, 'one read per pass that could signal');
 });
 
 test('review-38 R1: a headless `codex exec` / `codex review` or a sub-agent rollout (its session_meta says so) never signals', () => {

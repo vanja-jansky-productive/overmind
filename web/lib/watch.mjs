@@ -197,9 +197,17 @@ export function createDiscoveryWatcher({
   const failed = new Map(); // root id -> error message (a watcher that errored, until rearm)
   const headless = new Set(); // registry basenames of headless runs: their delete is ignored too
   const contents = new Map(); // root id -> last content of a compared file
-  // Rollouts no listed row owns: id -> { passes, rows (the rows array of the last pass), headless }.
+  // Rollouts no listed row owns: id -> { passes, list (the seq of the last pass's list), headless }.
   // A row owning the id forgets it, so a rollout that is unknown again (a resume) is fast again.
+  // A list is known by a number, not its rows array: up to 1000 entries must not pin old lists.
   const unknown = new Map();
+  const listSeq = new WeakMap(); // rows array -> its seq
+  let lastSeq = 0;
+  const seqOf = (rows) => {
+    let n = listSeq.get(rows);
+    if (n === undefined) listSeq.set(rows, (n = ++lastSeq));
+    return n;
+  };
   const pending = { fast: null, slow: null };
   let started = false;
   let events = 0;
@@ -252,13 +260,17 @@ export function createDiscoveryWatcher({
     let u = unknown.get(id);
     if (!u) {
       if (unknown.size >= 1000) unknown.clear(); // a long-lived server: forget, at worst two lists each
-      u = { passes: 0, rows: null, headless: null };
+      u = { passes: 0, list: 0, headless: null };
       unknown.set(id, u);
     }
+    const seq = seqOf(rows);
+    // Decided, or this list already passed it: no head read (a head that never parses would
+    // otherwise be read, up to 1 MB, on every event).
+    if (u.headless || u.passes >= 2 || u.list === seq) return null;
     if (u.headless === null) u.headless = rolloutIsHeadless(root.harness, readHead(path.join(root.dir, rel), HEAD_BYTES));
-    if (u.headless || u.passes >= 2 || u.rows === rows) return null;
+    if (u.headless) return null;
     u.passes += 1;
-    u.rows = rows;
+    u.list = seq;
     return u.passes === 1 ? 'fast' : 'slow';
   }
 
