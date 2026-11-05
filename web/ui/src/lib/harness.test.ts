@@ -59,7 +59,7 @@ describe('overmind defaults in the picker', () => {
   it('offeredHarnesses carries it to every harness, Claude included', () => {
     const rows = [
       { id: 'claude', label: 'Claude Code', command: 'claude', installed: true, models: [], defaultModel: 'claude-opus-5-5', defaultEffort: 'high' },
-      { id: 'codex', label: 'Codex', command: 'codex', installed: true, models: [{ id: '', label: 'Default (gpt-6)' }], defaultEffort: 'xhigh' },
+      { id: 'codex', label: 'Codex', command: 'codex', installed: true, models: [{ id: '', label: 'Default' }], defaultEffort: 'xhigh' },
     ]
     const got = offeredHarnesses(rows, models)
     expect(got[0].models[0].label).toBe('Default · Opus 5.5 · high')
@@ -74,7 +74,7 @@ describe('Codex models (the host lists the newest of each family)', () => {
     command: 'codex',
     installed: true,
     models: [
-      { id: '', label: 'Default (gpt-6.1-sol)' },
+      { id: '', label: 'Default' },
       { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
       { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
       { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
@@ -84,6 +84,10 @@ describe('Codex models (the host lists the newest of each family)', () => {
   it('offers them as listed, in order', () => {
     const got = offeredHarnesses([codex], claudeModels).find((h) => h.id === 'codex')
     expect(got?.models).toEqual(codex.models)
+  })
+  it('its Default chip reads exactly as Claude\'s', () => {
+    const got = offeredHarnesses([codex], claudeModels)
+    expect(got.find((h) => h.id === 'codex')?.models[0]).toEqual(got.find((h) => h.id === 'claude')?.models[0])
   })
   it('a remembered older version the list no longer offers falls back to Default', () => {
     expect(pickModel(codex.models, 'gpt-5.6-sol')).toBe('')

@@ -71,6 +71,52 @@ fn list_on_a_host_without_claude_still_runs_codex_discovery() {
     );
 }
 
+// `harness list` gives Codex the same plain "Default" first entry as Claude's: a model set in
+// Codex's own `config.toml` does not rename the chip.
+#[test]
+fn harness_list_codex_default_reads_plain_default() {
+    let env = common::Env::new();
+    let codex_home = env.path("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../testdata/codex/models_cache.json"
+        ),
+        codex_home.join("models_cache.json"),
+    )
+    .unwrap();
+    std::fs::write(codex_home.join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
+    let stub = env.path("codex-stub");
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    env.write_config(&serde_json::json!({
+        "version": 1,
+        "harnesses": { "codex": { "command": stub.to_str().unwrap() } }
+    }));
+
+    let out = env
+        .cmd()
+        .args(["--local", "harness", "list", "--json"])
+        .env("CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    let codex = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "codex")
+        .expect("a codex row");
+    assert_eq!(codex["installed"], true, "{codex}");
+    assert_eq!(
+        codex["models"][0],
+        serde_json::json!({ "id": "", "label": "Default" })
+    );
+    assert_eq!(codex["models"][1]["label"], "GPT-6.1 Sol");
+}
+
 // Bare `overmind` opens the TUI on a terminal, but a piped stdout (this test, a
 // script, an agent) must get the one-shot list and *exit* — not the watch loop.
 // Enforced with a timeout so a regression fails the suite instead of hanging it.

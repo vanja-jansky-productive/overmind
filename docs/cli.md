@@ -104,7 +104,7 @@ Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are c
 
 ```json
 [{ "id": "codex", "label": "Codex", "command": "codex", "installed": true,
-   "models": [{ "id": "", "label": "Default (gpt-6.1-sol)" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1 Sol" }],
+   "models": [{ "id": "", "label": "Default" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1 Sol" }],
    "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultModel": null, "defaultEffort": "high" }]
 ```
 
@@ -117,7 +117,8 @@ typing it into config `harnesses.codex.model`; Settings → Models keeps a confi
 does not offer); a newer cache (a Codex update) shows after the web server's 10-minute harness cache
 expires and the page reloads, or after `overmind web serve` restarts;
 pi's from `pi --list-models` (ids `provider/model`), narrowed to the `enabledModels` patterns of
-pi's `settings.json` when set. `id: ""` is the harness's own default.
+pi's `settings.json` when set. `id: ""` is the harness's own default: Claude's and Codex's read plain
+`Default` (Codex's does not name `config.toml`'s `model`), pi's names its `defaultModel` (`Default (x)`).
 Efforts: Claude `low…max`; Codex the levels its model cache lists; pi `off…max`.
 
 **Default model and effort.** Config `harnesses.<id>.model` / `harnesses.<id>.effort` (Settings →

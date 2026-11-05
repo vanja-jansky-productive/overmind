@@ -328,28 +328,21 @@ pub fn pi_home() -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".pi/agent"))
 }
 
-/// Codex's picker: the default (labelled with `model` from `config.toml`), then the newest
-/// listed model of each family in its own cache (`models_cache.json`).
+/// Codex's picker: Default, then the newest listed model of each family in its own cache
+/// (`models_cache.json`). Default reads plain "Default", like Claude's: `config.toml`'s
+/// `model` is what it starts, but the chip does not name it.
 pub fn codex_models(home: &Path) -> Vec<ModelOption> {
-    let default = std::fs::read_to_string(home.join("config.toml"))
-        .ok()
-        .and_then(|t| {
-            t.lines().find_map(|l| {
-                let (k, v) = l.split_once('=')?;
-                (k.trim() == "model").then(|| v.trim().trim_matches('"').to_string())
-            })
-        });
     let cache: Value = std::fs::read_to_string(home.join("models_cache.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(Value::Null);
-    codex_models_from(&cache, default.as_deref())
+    codex_models_from(&cache)
 }
 
 /// The picker from Codex's model cache: Default, then of the `visibility: "list"` models the
 /// newest version of each family (`gpt-6.1-sol` beats `gpt-6-sol`), in Codex's priority order.
 /// A slug without a `<prefix>-<version>` shape is a family of its own at version 0.
-pub fn codex_models_from(cache: &Value, default: Option<&str>) -> Vec<ModelOption> {
+pub fn codex_models_from(cache: &Value) -> Vec<ModelOption> {
     // family -> (version, priority, option); a tie on version goes to the lower priority
     let mut newest: Vec<(String, (u32, u32), i64, ModelOption)> = Vec::new();
     for m in cache
@@ -387,7 +380,7 @@ pub fn codex_models_from(cache: &Value, default: Option<&str>) -> Vec<ModelOptio
         }
     }
     newest.sort_by_key(|n| n.2);
-    let mut out = vec![opt("", &default_label(default))];
+    let mut out = vec![opt("", "Default")];
     out.extend(newest.into_iter().map(|n| n.3));
     out
 }
@@ -1564,7 +1557,7 @@ mod tests {
             m("codex-auto-review", "Codex Auto Review", "hide", 10),
         ]});
         assert_eq!(
-            ids(&super::codex_models_from(&cache, None)),
+            ids(&super::codex_models_from(&cache)),
             vec![
                 ("", "Default"),
                 ("gpt-6.1-sol", "GPT-6.1 Sol"),
@@ -1572,10 +1565,6 @@ mod tests {
                 ("gpt-6-astra", "GPT-6 Astra"),
                 ("gpt-6-luna", "GPT-6 Luna"),
             ]
-        );
-        assert_eq!(
-            super::codex_models_from(&cache, Some("gpt-6.1-sol"))[0].label,
-            "Default (gpt-6.1-sol)"
         );
 
         // a slug without a version is its own family; a listed one is shown, never wins
@@ -1588,7 +1577,7 @@ mod tests {
             m("gpt-6.2-sol-mini", "GPT-6.2-Sol-Mini", "list", 2),
         ]});
         assert_eq!(
-            ids(&super::codex_models_from(&cache, None)),
+            ids(&super::codex_models_from(&cache)),
             vec![
                 ("", "Default"),
                 ("gpt-6.2-sol-mini", "GPT-6.2 Sol-Mini"),
@@ -1604,12 +1593,12 @@ mod tests {
             m("GPT-6.0-sol", "A", "list", 2),
         ]});
         assert_eq!(
-            ids(&super::codex_models_from(&cache, None)),
+            ids(&super::codex_models_from(&cache)),
             vec![("", "Default"), ("GPT-6.0-sol", "A")]
         );
 
         assert_eq!(
-            ids(&super::codex_models_from(&Value::Null, None)),
+            ids(&super::codex_models_from(&Value::Null)),
             vec![("", "Default")]
         );
     }
@@ -1662,23 +1651,22 @@ mod tests {
     }
 
     #[test]
-    fn codex_models_read_the_cache_and_config_from_codex_home() {
-        let dir =
-            std::env::temp_dir().join(format!("overmind-codex-models-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn codex_models_read_the_cache_from_codex_home_and_default_stays_plain() {
+        let dir = tempfile::tempdir().unwrap();
         std::fs::copy(
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../testdata/codex/models_cache.json"
             ),
-            dir.join("models_cache.json"),
+            dir.path().join("models_cache.json"),
         )
         .unwrap();
-        std::fs::write(dir.join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
+        // a configured model does not rename the chip: Default reads "Default", as Claude's
+        std::fs::write(dir.path().join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
         assert_eq!(
-            ids(&super::codex_models(&dir)),
+            ids(&super::codex_models(dir.path())),
             vec![
-                ("", "Default (gpt-6.1-sol)"),
+                ("", "Default"),
                 ("gpt-6.1-sol", "GPT-6.1 Sol"),
                 ("gpt-6.1-terra", "GPT-6.1 Terra"),
                 ("gpt-6-astra", "GPT-6 Astra"),
@@ -1686,10 +1674,9 @@ mod tests {
             ]
         );
         assert_eq!(
-            ids(&super::codex_models(&dir.join("missing"))),
+            ids(&super::codex_models(&dir.path().join("missing"))),
             vec![("", "Default")]
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     use super::*;
