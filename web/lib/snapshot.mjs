@@ -93,11 +93,18 @@ export function createSnapshot({
     if (pokeTimer && pokeAt <= at) return;
     clearTimer(pokeTimer);
     pokeAt = at;
+    arm();
+  }
+
+  // Timers run on the monotonic clock and can fire a millisecond before `at` by `now()`: a build
+  // then would still find the change not due and serve the dirty list until the next tick.
+  function arm() {
     pokeTimer = setTimer(() => {
+      if (now() < pokeAt) return arm();
       pokeTimer = null;
       pokeAt = Infinity;
       refresh({ fresh: true }).catch(() => {});
-    }, Math.max(0, at - now()));
+    }, Math.max(0, pokeAt - now()));
     pokeTimer?.unref?.();
   }
 

@@ -148,6 +148,7 @@ test('poke: no-op while nobody watches; two pokes → one build at the earliest'
   snap.poke(clock.now() + 2000);
   const pokes = live().filter((t) => t.ms !== 3000);
   assert.deepEqual(pokes.map((t) => t.ms), [1000], 'one pending poke, the earliest');
+  clock.advance(1000);
   pokes[0].fn();
   await new Promise((r) => setImmediate(r));
   assert.equal(builds, 2);
@@ -155,4 +156,37 @@ test('poke: no-op while nobody watches; two pokes → one build at the earliest'
   for (const t of live()) t.cleared = true;
   snap.poke(clock.now());
   assert.equal(live().length, 0, 'idle: no build');
+});
+
+test('review-38 N1: a poke timer that fires before its time (monotonic vs wall clock) waits out the rest', async () => {
+  const clock = fakeClock();
+  let builds = 0;
+  const timers = [];
+  const snap = createSnapshot({
+    build: async () => ({ n: ++builds }),
+    now: clock.now,
+    setTimer: (fn, ms) => {
+      const t = { fn, ms, cleared: false };
+      timers.push(t);
+      return t;
+    },
+    clearTimer: (t) => t && (t.cleared = true),
+    refreshMs: 3000,
+  });
+  await snap.get();
+  const pokes = () => timers.filter((t) => !t.cleared && t.ms !== 3000);
+  snap.poke(clock.now() + 1000);
+  const [early] = pokes();
+  assert.equal(early.ms, 1000);
+  clock.advance(999); // fires 1 ms early by now()
+  early.cleared = true;
+  early.fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(builds, 1, 'not yet: the change is not due');
+  const [rest] = pokes();
+  assert.equal(rest?.ms, 1, 're-armed for the last millisecond');
+  clock.advance(1);
+  rest.fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(builds, 2);
 });
