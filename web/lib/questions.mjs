@@ -154,9 +154,10 @@ const OPTION = /^\s*(❯\s*)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*)$/;
 const RULE = /^\s*─{8,}/;
 
 /**
- * The question the terminal shows, as `{ id, questions: [q], untouched }` (`q.noOther` on the
- * review screen: no "Type something" row); null when it shows none. `untouched`: cursor on
- * option 1, nothing checked — only then is it safe to answer by typing.
+ * The question the terminal shows, as `{ id, questions: [q], untouched, cursorAt }` (`q.noOther`
+ * on the review screen: no "Type something" row); null when it shows none. `untouched`: cursor
+ * on option 1, nothing checked — only then is it safe to answer by typing. `cursorAt`: the
+ * option index the cursor is on (-1 when none).
  */
 export function parseScreenPrompt(screen) {
   const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
@@ -213,7 +214,7 @@ export function parseScreenPrompt(screen) {
   if (review) q.noOther = true;
   const sig = squash([question, ...q.options.map((o) => o.label)].join('\n'));
   const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
-  return { id, questions: [q], untouched: cursorAt === 0 && !checked };
+  return { id, questions: [q], untouched: cursorAt === 0 && !checked, cursorAt };
 }
 
 // ------------------------------------------------------------------ Codex's approval menu
@@ -237,7 +238,7 @@ const CODEX_FOOT = /Press enter to confirm/;
 const CODEX_OPTION = /^\s*(›\s*)?(\d+)\.\s+(.*)$/;
 const CODEX_HOTKEY = /\s*\((?:y|p|esc|a|n)\)\s*$/;
 
-/** The approval menu Codex shows, as `{ id, questions: [q], untouched }`; null when none. */
+/** The approval menu Codex shows, as `{ id, questions: [q], untouched, cursorAt }`; null when none. */
 export function parseCodexScreenPrompt(screen) {
   const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
   let head = -1;
@@ -310,7 +311,17 @@ export function parseCodexScreenPrompt(screen) {
   const q = { header: 'Approval', question, multiSelect: false, noOther: true, options };
   const sig = squash([question, ...options.map((o) => o.label)].join('\n'));
   const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
-  return { id, questions: [q], untouched: cursorAt === 0 };
+  return { id, questions: [q], untouched: cursorAt === 0, cursorAt };
+}
+
+/**
+ * The option a screen answer ends on, when it is one Enter on one option (single-select, no
+ * text — every Codex approval): the server checks the cursor is there before that Enter.
+ * Null otherwise.
+ */
+export function finalPick(questions, answers) {
+  if (questions.length !== 1 || questions[0].multiSelect || answers[0].text) return null;
+  return answers[0].options[0];
 }
 
 /** The screen-prompt parser for a session's harness; null when it has none. */

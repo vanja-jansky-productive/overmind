@@ -817,6 +817,18 @@ test('overmind CLI usage runs `overmind --local usage --json [--refresh]` and su
   await assert.rejects(cli.usage(), /^OvermindCliError: no Claude Code login found/);
 });
 
+/** A terminal's ↓: the cursor mark (col 0) moves to the next numbered option line. */
+function cursorDown(screen) {
+  const lines = screen.split('\n');
+  const i = lines.findIndex((l) => /^[❯›] \d+\./.test(l));
+  const j = lines.findIndex((l, k) => k > i && /^ {2}\d+\./.test(l));
+  if (i < 0 || j < 0) return screen;
+  const mark = lines[i][0];
+  lines[i] = ` ${lines[i].slice(1)}`;
+  lines[j] = `${mark}${lines[j].slice(1)}`;
+  return lines.join('\n');
+}
+
 test('a question only on screen (not yet in the transcript) shows in messages and is answered tab by tab', async (t) => {
   const id = 'cccccccc-0000-0000-0000-000000000004';
   const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%4', updated_at: 4 }]);
@@ -825,6 +837,10 @@ test('a question only on screen (not yet in the transcript) shows in messages an
     `←  ☐ A  ☐ B  ✔ Submit  →\n\n${q}\n\n${cursor === 1 ? '❯' : ' '} 1. Yes\n${cursor === 2 ? '❯' : ' '} 2. No\n  3. Type something.\n${'─'.repeat(20)}\n  4. Chat about this\n\nEnter to select · Esc to cancel`;
   let screen = tab('First?');
   host.backend.peek = async () => screen;
+  host.backend.keys = async (s, key) => {
+    host.calls.push(['keys', s.session_id, key]);
+    if (key === 'Down') screen = cursorDown(screen);
+  };
   host.backend.type = async (s, text) => void host.calls.push(['type', s.session_id, text]);
   const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
   const api = createApi({ config, ...host, warmOvermind: false, sleep: async () => {} });
@@ -862,6 +878,10 @@ test('a waiting Codex row: its approval menu is a card, answered by its menu ind
   host.transcripts = { messages: async () => ({ messages: [{ role: 'user', kind: 'user', text: 'create hello.txt' }], total: 1, truncated: false }) };
   let screen = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
   host.backend.peek = async () => screen;
+  host.backend.keys = async (s, key) => {
+    host.calls.push(['keys', s.session_id, key]);
+    if (key === 'Down') screen = cursorDown(screen);
+  };
   const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
   const api = createApi({ config, ...host, warmOvermind: false, sleep: async () => {} });
   const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
@@ -887,6 +907,64 @@ test('a waiting Codex row: its approval menu is a card, answered by its menu ind
   screen = before;
   assert.equal(await call({ toolUseId: m.id, answers: [{ options: [2] }] }), 200);
   assert.deepEqual(typed(), ['Down', 'Down', 'Enter']);
+});
+
+test('review-codex S1: the screen is read again before Enter — a moved cursor or another approval gets no Enter', async (t) => {
+  const id = '01a1a876-0000-7000-8000-000000000002';
+  const host = fakeHost('solo', [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', backend: 'tmux', handle: '%9', updated_at: 9 }]);
+  host.transcripts = { messages: async () => ({ messages: [], total: 0, truncated: false }) };
+  const menu = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
+  const other = menu.replaceAll('printf hi > hello.txt', 'rm -rf build');
+  let screen = menu;
+  let onKey = () => {}; // what the terminal does on our next key, besides moving the cursor
+  host.backend.peek = async () => screen;
+  host.backend.keys = async (s, key) => {
+    host.calls.push(['keys', s.session_id, key]);
+    if (key === 'Down') screen = cursorDown(screen);
+    onKey(key);
+  };
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, warmOvermind: false, sleep: async () => {} });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  const card = async () => (await (await fetch(`${base}/api/hosts/solo/sessions/${id}/messages`)).json()).messages.at(-1);
+  const call = async (body) => (await post(`${base}/api/hosts/solo/sessions/${id}/answer`, body)).status;
+  const keys = () => host.calls.filter((c) => c[0] === 'keys').map((c) => c[2]);
+  const m = await card();
+
+  // Option 1 is a lone Enter: someone presses ↓ in the terminal between our check and our key.
+  let peeks = 0;
+  host.backend.peek = async () => (++peeks === 2 ? (screen = cursorDown(screen)) : screen);
+  assert.equal(await call({ toolUseId: m.id, answers: [{ options: [0] }] }), 409, 'the cursor sits on "don\'t ask again"');
+  assert.deepEqual(keys(), [], 'no Enter');
+
+  // Another approval takes its place while we press ↓↓.
+  screen = menu;
+  host.backend.peek = async () => screen;
+  onKey = (key) => key === 'Down' && (screen = other);
+  assert.equal(await call({ toolUseId: m.id, answers: [{ options: [2] }] }), 409);
+  assert.ok(!keys().includes('Enter'), 'never an Enter on a menu the user did not see');
+
+  // The redraw lags a key: it waits for the cursor, then picks.
+  screen = menu;
+  onKey = () => {};
+  let lag = 0;
+  host.backend.keys = async (s, key) => {
+    host.calls.push(['keys', s.session_id, key]);
+    if (key === 'Down') lag += 1;
+  };
+  host.backend.peek = async () => {
+    if (lag) {
+      screen = cursorDown(screen);
+      lag -= 1;
+      return menu; // this read still shows the old frame
+    }
+    return screen;
+  };
+  host.calls.length = 0;
+  assert.equal(await call({ toolUseId: m.id, answers: [{ options: [1] }] }), 200);
+  assert.deepEqual(keys(), ['Down', 'Enter']);
 });
 
 test('answer types the keys for the pending question, only when it is safe to', async (t) => {

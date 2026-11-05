@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { HttpError, readJsonBody } from './http.mjs';
 import { clampLines, findSession, resolveHost, sleep as defaultSleep, validateInputData, validateKey, validateSendText, validateTitle } from './util.mjs';
-import { answerSteps, questionsText, screenPromptParser, screenShowsPrompt, validateAnswer } from './questions.mjs';
+import { answerSteps, finalPick, questionsText, screenPromptParser, screenShowsPrompt, validateAnswer } from './questions.mjs';
 import { resolveAllowedDir, validateSpawnRequest } from './spawn.mjs';
 import {
   fetchPeerHost as defaultFetchPeerHost,
@@ -551,22 +551,43 @@ export function createApi({
     return { status: 200, body: { ok: true } };
   }
 
-  /** The same for a prompt read off the screen: one tab at a time, each its own `screen:` id. */
+  /**
+   * The same for a prompt read off the screen: one tab at a time, each its own `screen:` id.
+   * The keys move a cursor relative to where it is, so a single pick (every Codex approval) reads
+   * the screen again before its Enter: the same prompt, the cursor on the chosen option — else
+   * no Enter and a 409 (someone pressed a key in the terminal, or another approval took its
+   * place: Enter would pick what the user did not).
+   */
   async function answerScreenQuestion(session, toolUseId, body) {
     if (session.status !== 'waiting') throw new HttpError('the session is not waiting on a question', 409);
     const parse = screenPromptParser(session.harness);
-    const prompt = parse ? parse(await backend.peek(session, 80)) : null;
+    const read = async () => (parse ? parse(await backend.peek(session, 80)) : null);
+    const prompt = await read();
     if (prompt?.id !== toolUseId) throw new HttpError('the terminal is no longer showing this question', 409);
     const check = validateAnswer(body, prompt.questions);
     if (!check.ok) throw new HttpError(check.error, 400);
     if (!prompt.untouched) throw new HttpError('the terminal is not showing this question untouched — answer it there', 409);
-    for (const step of answerSteps(prompt.questions, check.answers)) {
+    const pick = finalPick(prompt.questions, check.answers);
+    const steps = answerSteps(prompt.questions, check.answers);
+    for (const [i, step] of steps.entries()) {
+      if (pick != null && i === steps.length - 1) await cursorOn(read, toolUseId, pick);
       if (step.text) await backend.type(session, step.text);
       else await backend.keys(session, step.key);
       await sleep(answerKeyGapMs);
     }
     refreshOvermind();
     return { status: 200, body: { ok: true } };
+  }
+
+  /** Resolves once the screen shows prompt `id` with the cursor on `pick` (the redraw may lag a key). */
+  async function cursorOn(read, id, pick) {
+    for (let tries = 0; ; tries += 1) {
+      const now = await read().catch(() => null);
+      if (now?.id !== id) throw new HttpError('the terminal changed while answering — nothing was picked; answer it there', 409);
+      if (now.cursorAt === pick) return;
+      if (tries >= 4) throw new HttpError('the cursor is not on that option — nothing was picked; answer it there', 409);
+      await sleep(answerKeyGapMs);
+    }
   }
 
   /**
