@@ -442,6 +442,24 @@ test('reader deltas: the anchored span keeps indices while the file grows past m
   assert.deepEqual([b.full, b.from, b.total], [false, a.total, a.total + 1], 'today a re-slice would have shifted every index');
 });
 
+test('reader deltas: an anchored reload that falls below the limit (a queued prompt removed) grows the tail at once', async () => {
+  const f = claudeFixture();
+  const q = (operation, content) => line({ type: 'queue-operation', operation, timestamp: '2026-01-01T00:00:00Z', content });
+  for (let i = 0; i < 20; i++) f.add(user(`p${i} ${'y'.repeat(80)}`));
+  f.add(q('enqueue', 'later'));
+  // The limit = what the 1000-byte span holds, its last message the queued prompt.
+  const limit = (await createTranscriptReader({ home: f.home, maxBytes: 1000 }).delta(f.session, { limit: 1, after: '' })).total;
+  const r = createTranscriptReader({ home: f.home, maxBytes: 1000, maxGrownBytes: 1 << 20 });
+  const a = await r.delta(f.session, { limit, after: '' });
+  assert.deepEqual([a.messages.length, a.truncated, a.messages.at(-1).queued], [limit, true, true]);
+  f.add(q('remove', 'later'));
+  const b = await r.delta(f.session, { limit, after: a.cursor });
+  assert.equal(b.all.slice(-limit).length, limit, 'not limit − 1 while the file holds more');
+  assert.equal(b.all.at(-1).queued, undefined);
+  const c = await r.delta(f.session, { limit, after: b.cursor });
+  assert.deepEqual([c.full, c.messages], [false, []], 'and the next poll is "same", not a second full');
+});
+
 test('reader deltas: concurrent polls after an append coalesce into one read', async () => {
   const f = claudeFixture();
   f.add(user('one'));

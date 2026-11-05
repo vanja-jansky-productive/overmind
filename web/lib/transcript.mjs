@@ -533,6 +533,8 @@ export function createTranscriptReader({ home = claudeHome(), maxBytes = MAX_TAI
     if (!rewritten && enough(cached, limit)) {
       if (stat.size === cached.size) return cached;
       next = await anchored(harness, file, cached);
+      // The span can hold fewer than before (a queued prompt removed): grow it now, not next poll.
+      if (next && !enough(next, limit)) next = null;
     }
     next ??= await fromScratch(harness, file, limit, cached);
     cache.set(id, next);
