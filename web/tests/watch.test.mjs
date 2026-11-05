@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { createDiscoveryWatcher, discoveryRoots } from '../lib/watch.mjs';
+import { createDiscoveryWatcher, discoveryRoots, readFileTail, turnState } from '../lib/watch.mjs';
 
 const HOME = '/home/tester';
 
@@ -63,10 +63,11 @@ function setup({ live = [{ session_id: 'sid-live', harness: 'claude' }], missing
   const changes = [];
   const w = createDiscoveryWatcher({
     roots,
-    live: () => live,
+    live: typeof live === 'function' ? live : () => live,
     onChange: (cls) => changes.push(cls),
     watch: fs.watch,
     readFile: fs.readFile,
+    readTail: (f, n) => (fs.files.has(f) ? fs.files.get(f).slice(-n) : null),
     exists: fs.exists,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
@@ -234,14 +235,15 @@ test('transcripts: a live session’s files (incl. subagents/, tool-results/) ar
   assert.deepEqual(changes, ['slow', 'slow']);
 });
 
-test('Codex / pi: the live session’s rollout passes; any rollout passes while one has no transcript yet', () => {
-  const live = [{ session_id: '01a1-uuid', harness: 'codex' }, { session_id: 'p1', harness: 'pi' }];
+const codexLine = (type) => JSON.stringify({ timestamp: '2026-11-04T10:00:00Z', type: 'event_msg', payload: { type } });
+const piLine = (role, stopReason) => JSON.stringify({ type: 'message', message: { role, ...(stopReason ? { stopReason } : {}) } });
+
+test('Codex / pi: a listed row’s rollout mid-turn is slow; session_index.jsonl is slow, other files in CODEX_HOME dropped', () => {
+  const live = [{ session_id: '01a1-uuid', harness: 'codex', status: 'busy' }, { session_id: 'p1', harness: 'pi', status: 'busy' }];
   const { fs, clock, changes, w } = setup({ live });
   w.start();
-  fs.fire(dir('codex'), '2026/11/04/rollout-2026-11-04T10-00-00-other.jsonl', 'change');
-  fs.fire(dir('pi'), '--home-tester-x--/2026-11-04T10-00-00-000Z_p2.jsonl', 'change');
-  clock.flush();
-  assert.deepEqual(changes, []);
+  const rollout = path.join(dir('codex'), '2026/11/04/rollout-2026-11-04T10-00-00-01a1-uuid.jsonl');
+  fs.files.set(rollout, [codexLine('task_started'), '{"type":"response_item","payload":{"type":"message"}}'].join('\n'));
   fs.fire(dir('codex'), '2026/11/04/rollout-2026-11-04T10-00-00-01a1-uuid.jsonl', 'change');
   clock.flush();
   fs.fire(dir('pi'), '--home-tester-x--/2026-11-04T10-00-00-000Z_p1.jsonl', 'change');
@@ -249,12 +251,98 @@ test('Codex / pi: the live session’s rollout passes; any rollout passes while 
   fs.fire(dir('codex-index'), 'session_index.jsonl', 'change');
   fs.fire(dir('codex-index'), 'auth.json', 'change');
   clock.flush();
-  assert.deepEqual(changes, ['slow', 'slow', 'slow']);
+  assert.deepEqual(changes, ['slow', 'slow', 'slow'], 'mid-turn writes, and a tail with no boundary, are slow');
+});
 
-  live.push({ session_id: 'pid-42', harness: 'codex', pid: 42 });
-  fs.fire(dir('codex'), '2026/11/04/rollout-2026-11-04T10-01-00-new.jsonl', 'change');
+test('review-38 S1: a Codex / pi session started outside the web UI is fast the first time, then slow once per list', () => {
+  let live = [{ session_id: 'sid-live', harness: 'claude' }]; // no Codex row at all
+  const { fs, clock, changes, w } = setup({ live: () => live });
+  w.start();
+  const fresh = '2026/11/04/rollout-2026-11-04T10-01-00-new-id.jsonl';
+  fs.fire(dir('codex'), fresh, 'change');
+  fs.fire(dir('codex'), fresh, 'change');
   clock.flush();
-  assert.deepEqual(changes, ['slow', 'slow', 'slow', 'slow'], 'a fresh Codex session’s first rollout');
+  assert.deepEqual(changes, ['fast'], 'its first prompt: the row appears within the fast gap');
+  fs.fire(dir('codex'), fresh, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast'], 'more writes before the next list are dropped');
+  live = [...live]; // a list ran, and still no row owns it (a sub-agent's rollout)
+  fs.fire(dir('codex'), fresh, 'change');
+  fs.fire(dir('codex'), fresh, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'slow'], 'once per list, slow');
+  fs.fire(dir('pi'), '--home-tester-x--/2026-11-04T10-00-00-000Z_p9.jsonl', 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'slow', 'fast'], 'pi too');
+  fs.fire(dir('codex'), '2026/11/05', 'rename'); // a day dir: not a rollout
+  clock.flush();
+  assert.equal(changes.length, 3);
+  w.stop();
+  w.start();
+  fs.fire(dir('codex'), fresh, 'change');
+  clock.flush();
+  assert.equal(changes.at(-1), 'fast', 'stop() forgets what it saw');
+});
+
+test('review-38 S2: a Codex / pi turn boundary the last list does not show is fast (busy ↔ idle within the fast gap)', () => {
+  const live = [
+    { session_id: '01a1-uuid', harness: 'codex', status: 'busy' },
+    { session_id: '02b2-uuid', harness: 'codex', status: 'waiting' },
+    { session_id: 'p1', harness: 'pi', status: 'idle' },
+  ];
+  const { fs, clock, changes, w } = setup({ live });
+  w.start();
+  const rel = '2026/11/04/rollout-2026-11-04T10-00-00-01a1-uuid.jsonl';
+  const file = path.join(dir('codex'), rel);
+  fs.files.set(file, [codexLine('task_started'), codexLine('agent_message'), codexLine('task_complete'), codexLine('token_count'), '{"type":"ev'].join('\n'));
+  fs.fire(dir('codex'), rel, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast'], 'busy row, the turn ended: idle is due within the fast gap');
+  live[0].status = 'idle';
+  fs.fire(dir('codex'), rel, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'slow'], 'listed idle: no news');
+  fs.files.set(file, `${fs.files.get(file)}\n${codexLine('task_started')}`);
+  fs.fire(dir('codex'), rel, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'slow', 'fast'], 'a new turn: busy');
+
+  const waiting = '2026/11/04/rollout-2026-11-04T10-00-00-02b2-uuid.jsonl';
+  fs.files.set(path.join(dir('codex'), waiting), [codexLine('task_started'), codexLine('exec_approval_request')].join('\n'));
+  fs.fire(dir('codex'), waiting, 'change');
+  clock.flush();
+  assert.deepEqual(changes.at(-1), 'slow', 'a waiting row counts as busy');
+
+  const pi = '--home-tester-x--/2026-11-04T10-00-00-000Z_p1.jsonl';
+  fs.files.set(path.join(dir('pi'), pi), [piLine('assistant', 'stop'), piLine('user')].join('\n'));
+  fs.fire(dir('pi'), pi, 'change');
+  clock.flush();
+  assert.deepEqual(changes.at(-1), 'fast', 'pi: a prompt on an idle row');
+});
+
+test('turnState mirrors the list: the last boundary in the tail wins; none → null', () => {
+  assert.equal(turnState('codex', [codexLine('task_started'), codexLine('item_completed')].join('\n')), 'busy');
+  assert.equal(turnState('codex', [codexLine('task_started'), codexLine('turn_aborted'), codexLine('token_count')].join('\n')), 'idle');
+  assert.equal(turnState('codex', codexLine('item_completed')), null);
+  assert.equal(turnState('codex', '{"type":"response_item","payload":{"type":"task_complete"}}'), null, 'only event_msg lines');
+  assert.equal(turnState('pi', [piLine('user'), piLine('assistant', 'toolUse')].join('\n')), 'busy');
+  assert.equal(turnState('pi', [piLine('user'), piLine('assistant', 'stop'), '{"type":"session_info"}'].join('\n')), 'idle');
+  assert.equal(turnState('pi', null), null);
+});
+
+test('readFileTail reads the end of a real file', async () => {
+  const os = await import('node:os');
+  const nfs = await import('node:fs');
+  const d = nfs.mkdtempSync(path.join(os.tmpdir(), 'overmind-watch-'));
+  try {
+    const f = path.join(d, 'r.jsonl');
+    nfs.writeFileSync(f, 'a'.repeat(100) + 'tail');
+    assert.equal(readFileTail(f, 4), 'tail');
+    assert.equal(readFileTail(f, 1000).length, 104);
+    assert.equal(readFileTail(path.join(d, 'none'), 4), null);
+  } finally {
+    nfs.rmSync(d, { recursive: true, force: true });
+  }
 });
 
 test('before the first list every transcript passes (unknown is never dropped)', () => {

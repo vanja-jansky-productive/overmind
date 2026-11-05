@@ -6,10 +6,15 @@
 //         idle / waiting), the names cache (`~/.claude/overmind-names.json`, only when its
 //         content changed), `done.json`, the stacks dir and the Codex approval-hook sidecars
 //         (`<state>/codex-hooks/<thread>.json`: a Codex row starts or stops waiting)
+//         A Codex / pi rollout is fast when its tail shows a turn boundary the last list does
+//         not (busy ↔ idle: `task_started` / `task_complete` / `turn_aborted`, pi's last
+//         message), and so is a rollout no listed row owns, the first time it is seen (a
+//         session started outside the web UI: its row appears)
 //   slow  transcripts of live sessions (`~/.claude/projects/<enc>/<sid>.jsonl` and `<sid>/…`),
-//         Codex rollouts and `session_index.jsonl`, pi sessions
-// What has no file signal (tmux/iTerm tab names, branches, a crashed process, a Codex start
-// before its first prompt) is left to the caller's age bound.
+//         Codex rollouts and `session_index.jsonl`, pi sessions; an unknown rollout already
+//         seen passes once per list (a sub-agent's, or a row the last list did not make yet)
+// What has no file signal (tmux/iTerm tab names, branches, a crashed process, a Codex or pi
+// exit, a Codex start before its first prompt) is left to the caller's age bound.
 //
 // A wrong filter costs one extra list, never a missed row: anything unrecognised passes.
 // What `overmind list` writes itself (`snapshot.json*`, the names file rewritten unchanged)
@@ -59,6 +64,57 @@ export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) 
   ];
 }
 
+/** How much of a rollout's end `turnState` reads: a turn boundary is a short line. */
+const TAIL_BYTES = 16 * 1024;
+
+/** The last `bytes` of a file as text (null when unreadable). */
+export function readFileTail(file, bytes) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    return buf.toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * The turn state a rollout's tail ends in, as `overmind list` reads it (core/harness.rs
+ * `codex_state` / `pi_state`): 'busy' | 'idle', or null when the tail has no boundary. A
+ * pending approval counts as busy (the list shows it as `waiting`, read off the screen).
+ */
+export function turnState(harness, text) {
+  if (typeof text !== 'string') return null;
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (harness === 'codex' ? !/task_started|task_complete|turn_aborted|approval_request|request_user_input/.test(line) : !line.includes('"message"')) continue;
+    let v;
+    try {
+      v = JSON.parse(line);
+    } catch {
+      continue; // the first (cut) or the last (half-written) line
+    }
+    if (harness === 'codex') {
+      if (v?.type !== 'event_msg') continue;
+      const t = v.payload?.type;
+      if (t === 'task_complete' || t === 'turn_aborted') return 'idle';
+      if (t === 'task_started' || t === 'request_user_input' || (typeof t === 'string' && t.endsWith('approval_request'))) return 'busy';
+    } else if (v?.type === 'message') {
+      const m = v.message ?? {};
+      if (['user', 'toolResult', 'bashExecution'].includes(m.role)) return 'busy';
+      if (m.role === 'assistant') return m.stopReason === 'toolUse' ? 'busy' : 'idle';
+    }
+  }
+  return null;
+}
+
 /**
  * @param roots      discoveryRoots()
  * @param live       () => the last list's rows (or null before the first): transcripts of other
@@ -72,6 +128,7 @@ export function createDiscoveryWatcher({
   onChange,
   watch = fs.watch,
   readFile = (file) => fs.readFileSync(file, 'utf8'),
+  readTail = readFileTail,
   exists = (dir) => fs.existsSync(dir),
   coalesceMs = 250,
   setTimer = setTimeout,
@@ -83,6 +140,9 @@ export function createDiscoveryWatcher({
   const failed = new Map(); // root id -> error message (a watcher that errored, until rearm)
   const headless = new Set(); // registry basenames of headless runs: their delete is ignored too
   const contents = new Map(); // root id -> last content of a compared file
+  const unknownSeen = new Set(); // rollouts no listed row owned, already let through as fast
+  const unknownThisList = new Set(); // …and let through since the last list (`unknownRows`)
+  let unknownRows = null;
   const pending = { fast: null, slow: null };
   let started = false;
   let events = 0;
@@ -105,22 +165,41 @@ export function createDiscoveryWatcher({
     pending[cls]?.unref?.();
   }
 
-  /** Is this transcript path one of a live session's? Unknown → pass (a list too many, never too few). */
-  function liveTranscript(root, rel) {
+  /**
+   * The class of a transcript event, or null to drop it. Claude: a live session's files are slow,
+   * others dropped. Codex / pi (`…/rollout-<stamp>-<id>.jsonl`, `--<cwd>--/<stamp>_<id>.jsonl`):
+   * a listed row's rollout is fast when its tail shows another turn state than the row (busy ↔
+   * idle), else slow; an unknown one is fast the first time (a session started in a terminal:
+   * its row appears after its first prompt), then slow once per list. Before the first list,
+   * anything passes (a list too many, never too few).
+   */
+  function transcriptClass(root, rel) {
     const rows = live();
-    if (!Array.isArray(rows)) return true;
+    if (!Array.isArray(rows)) return 'slow';
     const parts = rel.split(/[\\/]/);
     if (root.harness === 'claude') {
       // <enc>/<sid>.jsonl, <enc>/<sid>/subagents/…, <enc>/<sid>/tool-results/…
       const sid = parts[1]?.replace(/\.jsonl$/, '');
-      return Boolean(sid) && rows.some((r) => r?.session_id === sid);
+      return Boolean(sid) && rows.some((r) => r?.session_id === sid) ? 'slow' : null;
     }
-    // Codex `…/rollout-<stamp>-<id>.jsonl`, pi `--<cwd>--/<stamp>_<id>.jsonl`. A session of this
-    // harness with no transcript yet (`pid-<n>`) will write a new one: let those through.
-    const mine = rows.filter((r) => r?.harness === root.harness);
-    if (mine.some((r) => typeof r.session_id !== 'string' || r.session_id.startsWith('pid-'))) return true;
-    const base = parts[parts.length - 1].replace(/\.jsonl$/, '');
-    return mine.some((r) => base.endsWith(r.session_id));
+    const base = parts[parts.length - 1];
+    if (!base.endsWith('.jsonl')) return null;
+    const id = base.replace(/\.jsonl$/, '');
+    const row = rows.find((r) => r?.harness === root.harness && typeof r.session_id === 'string' && !r.session_id.startsWith('pid-') && id.endsWith(r.session_id));
+    if (row) {
+      const turn = turnState(root.harness, readTail(path.join(root.dir, rel), TAIL_BYTES));
+      return turn && turn !== (row.status === 'idle' ? 'idle' : 'busy') ? 'fast' : 'slow';
+    }
+    if (rows !== unknownRows) {
+      unknownRows = rows;
+      unknownThisList.clear();
+    }
+    if (unknownThisList.has(id)) return null;
+    unknownThisList.add(id);
+    if (unknownSeen.has(id)) return 'slow';
+    if (unknownSeen.size >= 1000) unknownSeen.clear(); // a long-lived server: forget, at worst a list
+    unknownSeen.add(id);
+    return 'fast';
   }
 
   function classify(root, filename) {
@@ -161,7 +240,7 @@ export function createDiscoveryWatcher({
       case 'dir':
         return /\.(tmp|lock)$/.test(base) || base.startsWith('.') ? null : 'fast';
       case 'transcripts':
-        return liveTranscript(root, rel) ? 'slow' : null;
+        return transcriptClass(root, rel);
       default:
         return null;
     }
@@ -236,6 +315,9 @@ export function createDiscoveryWatcher({
     armed.clear();
     failed.clear();
     headless.clear(); // deletes missed while stopped would otherwise hide a reused pid's exit
+    unknownSeen.clear();
+    unknownThisList.clear();
+    unknownRows = null;
     for (const cls of Object.keys(pending)) {
       clearTimer(pending[cls]);
       pending[cls] = null;
