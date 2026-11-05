@@ -99,6 +99,58 @@ test('a waiting Codex row has no file signal for its end: the list is reused for
   assert.equal(cli.runs, 3);
 });
 
+test('live F1: a busy Codex row whose approval was not on screen yet is looked at again ~1 s later, a bounded number of times', async () => {
+  const rechecks = [];
+  const { clock, cli, om } = setup({ recheck: () => rechecks.push(clock.now()) });
+  const busy = (extra = {}) => [{ session_id: 'c1', harness: 'codex', status: 'busy', ...extra }];
+  let rows = busy({ approval_unseen: 'call_1' }); // the hook's sidecar listed before the menu was drawn
+  cli.list = async () => ((cli.runs += 1), rows);
+  await om.localHost();
+  const t0 = clock.now();
+  clock.advance(999);
+  clock.run();
+  assert.deepEqual(rechecks, [], 'not before ~1 s');
+  clock.advance(1);
+  clock.run();
+  assert.deepEqual(rechecks, [t0 + 1000], 'one follow-up look');
+  // The default recheck is a fast signal: here the test's callback stands in; list as it would.
+  for (let i = 0; i < 5; i += 1) {
+    await om.localHost({ force: true });
+    clock.advance(1000);
+    clock.run();
+  }
+  assert.equal(rechecks.length, 3, 'still not on screen (answered in the TUI, or a slow draw): 3 tries per request, then the age bounds');
+  // Another request on the same row gets its own tries; once seen waiting, the same request is not chased again.
+  rows = busy({ approval_unseen: 'call_2' });
+  await om.localHost({ force: true });
+  rows = [{ session_id: 'c1', harness: 'codex', status: 'waiting', approval_id: 'call_2' }];
+  clock.advance(1000);
+  clock.run();
+  assert.equal(rechecks.length, 4);
+  await om.localHost({ force: true });
+  rows = busy({ approval_unseen: 'call_2' }); // approved: the command runs, the trigger stays until it ends
+  await om.localHost({ force: true });
+  clock.advance(5000);
+  clock.run();
+  assert.equal(rechecks.length, 4, 'seen once: no follow-up while its command runs');
+});
+
+test('live F1: no pending approval → no follow-up timer (idle cost unchanged); without a recheck callback a follow-up is a fast signal', async () => {
+  const { clock, cli, om } = setup();
+  await om.localHost();
+  clock.advance(5000);
+  clock.run();
+  await om.localHost();
+  assert.equal(cli.runs, 1, 'nothing pending: no list');
+  cli.list = async () => ((cli.runs += 1), [{ session_id: 'c1', harness: 'codex', status: 'busy', approval_unseen: 'call_1' }]);
+  await om.localHost({ force: true });
+  assert.equal(cli.runs, 2);
+  clock.advance(1000);
+  clock.run();
+  await om.localHost();
+  assert.equal(cli.runs, 3, 'the follow-up made the list due');
+});
+
 test('a signal right after a run is served until its gap, then lists once', async () => {
   const { clock, cli, om } = setup();
   await om.localHost();

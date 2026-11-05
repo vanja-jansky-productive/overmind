@@ -120,6 +120,7 @@ pid, session_id (uuid), name, cwd, status ("busy"|"idle"|"waiting"|"unknown"), u
 tty, backend ("iterm"|"tmux"|"unknown"), handle (iTerm session id | tmux pane id like "%87"),
 tab, tmux_session (string|null), name_source, waiting_for (string|null),
 approval_id (string, a waiting Codex row's approval request; absent otherwise),
+approval_unseen (string, a busy Codex row's announced approval whose menu was not on screen yet; absent otherwise),
 title (first prompt, may be long), gen_title (string|null),
 display_title (string — THE title to draw, see docs/architecture.md → Session titles),
 context ({ used, window, pct, model } | null — context-window usage, see docs/architecture.md)
@@ -453,7 +454,10 @@ dirty and due, or when the last list is `safetySeconds` (30) old: what has no fi
 tab names, branches, a SIGKILLed process, any Codex or pi exit — only Claude's clean exit deletes a
 watched file — and a Codex session before its first prompt) shows within 30 s. A list with a `waiting` Codex row is reused for the TTL (`ttlMs`, 2 s) only: that state is
 read off the screen, and answering the menu in the TUI writes nothing until the command ends — so a
-TUI answer reads `busy` on the web ~3.5 s later (the 3 s refresh plus one list), not within the TTL. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
+TUI answer reads `busy` on the web ~3.5 s later (the 3 s refresh plus one list), not within the TTL. A busy
+Codex row with `approval_unseen` (the hook's sidecar listed before Codex drew the menu, ~1 s later)
+gets a follow-up look: `recheck` (a fast signal and a snapshot poke) 1 s after the list, ≤ 3 per
+request, none once that request was seen `waiting`; with no such row nothing is scheduled. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
 started before a change cannot clear `dirty` (a generation counter). `force` (mutations,
 spawnNamer, stacks, queue, slack) chains a new run behind such a one, and so does any validated
 caller once that change is due (a poked rebuild, a peer's `?local=1`): a list slower than the gap

@@ -278,7 +278,11 @@ every poll for as long as a trigger holds — the whole menu time, and the run o
 escalated command until its `item_completed`. Leaving the menu in the TUI writes no file, so the
 web server reuses a list holding a waiting Codex row for its TTL (2 s), not the watcher's 30 s
 safety interval; an approval answered in the TUI reads `busy` on the web ~3.5 s later (the 3 s
-refresh plus one list, measured on Codex 0.166). `waiting_for` is `<label>: \`<command, first line,
+refresh plus one list, measured on Codex 0.166). The hook fires ~1 s before Codex draws the menu,
+so the list its sidecar starts usually finds no menu yet: such a busy row carries
+`approval_unseen` (the request it looked for), and the web server looks again 1 s later — at most
+3 times per request, never again once that request was seen `waiting` — so the row reads `waiting`
+~1–2 s after the menu shows instead of at the next unrelated list. `waiting_for` is `<label>: \`<command, first line,
 ≤ 80 chars>\`` (`Bash` → `exec approval`, else `<tool> approval`); the menu text is the web card's.
 Only exec approvals are read (an `apply_patch` screen is not the exec menu: `busy`). Sidecars of
 threads no live row has (and temp files a killed hook left) are deleted after an hour, by any
@@ -344,6 +348,7 @@ by — with no config, `local`):
 | `status` | string | `busy` \| `idle` \| `waiting` \| `unknown` — `idle` = the main prompt is free, subagents may still run (`background`) |
 | `waiting_for` | string \| null | what a `waiting` session is blocked on |
 | `approval_id` | string (absent when none) | a `waiting` Codex row's approval request: its escalated call's `call_id`, else `hook-<sidecar stamp>`. The same command asked again is another id (the web card's id mixes it in) |
+| `approval_unseen` | string (absent when none) | a `busy` Codex row whose approval trigger (hook sidecar or pending escalated call) fired but whose screen showed no menu when looked at: that request's id (what `approval_id` would be). The menu may not be drawn yet — a caller may look again shortly |
 | `updated_at` | number \| null | last status change, ms since epoch |
 | `background` | object \| null | what runs beside the main thread: `{ agents: [{ id, description, type, model, background, started_at, last_activity_at, activity }], shells }` (`background: false` = a foreground agent; `activity` = its last tool call, like `Bash: run the tests`); `null` = none or unknown |
 | `prompted_at` | number \| null | last human prompt (transcript `origin.kind: "human"`), ms since epoch; `null` when unknown (none yet, Codex / pi). The web list sorts by it |

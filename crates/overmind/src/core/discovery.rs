@@ -65,6 +65,12 @@ pub struct Session {
     /// stamp — another request for the same command gets another one. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
+    /// A `busy` Codex row whose approval trigger (the hook's sidecar, or a pending escalated
+    /// call) fired but whose screen did not show the menu when looked at: that request's id
+    /// (what `approval_id` would be). The hook fires ~1 s before Codex draws the menu, so a
+    /// caller may look again shortly. Absent otherwise (also when no backend could look).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_unseen: Option<String>,
     pub title: Option<String>,
     /// The LLM-generated title — what the work *is*, not where it lives. Filled
     /// in from `~/.claude/overmind-names.json` and the dashboard's background
@@ -128,6 +134,7 @@ impl Default for Session {
             name_source: None,
             waiting_for: None,
             approval_id: None,
+            approval_unseen: None,
             title: None,
             gen_title: None,
             display_title: None,
@@ -395,6 +402,7 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
             name_source: reg.name_source,
             waiting_for: reg.waiting_for,
             approval_id: None,
+            approval_unseen: None,
             session_id: reg.session_id,
             name: reg.name,
             cwd: reg.cwd,
@@ -546,10 +554,17 @@ fn apply_approval(
         (Backend::Iterm, true) => Look::Costly,
         _ => Look::None,
     };
-    if let Some(w) = truth(trig, look, || peek(s)) {
+    let mut looked = false;
+    let seen = truth(trig, look, || {
+        looked = true;
+        peek(s)
+    });
+    if let Some(w) = seen {
         s.status = "waiting".into();
         s.waiting_for = Some(w);
         s.approval_id = trig.request.clone();
+    } else if looked {
+        s.approval_unseen = Some(trig.request.clone().unwrap_or_default());
     }
 }
 
@@ -1218,9 +1233,19 @@ mod tests {
         });
         assert_eq!((s.status.as_str(), s.waiting_for), ("busy", None));
         assert_eq!(s.approval_id, None);
-        // iTerm without the hook: no osascript, busy.
+        // Looked and no menu (not drawn yet, or answered): the request is named, so the web
+        // can look again shortly (the hook fires ~1 s before Codex draws the menu).
+        assert_eq!(s.approval_unseen.as_deref(), Some("call_1"));
+        let mut s = row(Backend::Tmux);
+        apply_approval(&mut s, &trig, |_| Ok(menu.into()));
+        assert_eq!(
+            s.approval_unseen, None,
+            "seen: waiting, nothing to look again for"
+        );
+        // iTerm without the hook: no osascript, busy — and no look to repeat.
         let mut s = row(Backend::Iterm);
         apply_approval(&mut s, &trig, |_| panic!("no peek"));
         assert_eq!(s.status, "busy");
+        assert_eq!(s.approval_unseen, None);
     }
 }

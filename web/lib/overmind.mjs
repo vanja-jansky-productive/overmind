@@ -32,6 +32,12 @@ export function placeholderId(s) {
  * Every `localHost()` call counts as "someone asked": it starts the watcher, and `idleAfterMs`
  * with no call stops it again (an idle server watches nothing).
  *
+ * A busy Codex row with `approval_unseen` (its hook or rollout announced an approval, the screen
+ * showed no menu yet: the hook fires ~1 s before Codex draws it, and nothing signals the draw) is
+ * looked at again: `recheck()` (default: a fast signal) `recheckMs` after the list, at most
+ * `recheckTries` times per request and never again once that request was seen `waiting`. With no
+ * such row nothing is scheduled.
+ *
  * A run that started before the last change (`markDirty`/`invalidate`) is never joined by `force`,
  * nor by any validated caller once that change is due: they chain a new run behind it, so a list
  * that takes longer than the gap cannot serve the change it was asked for.
@@ -44,6 +50,9 @@ export function createOvermind({
   safetyMs = 30_000,
   gaps = { fast: 1000, slow: 5000 },
   idleAfterMs = 90_000,
+  recheck = null,
+  recheckMs = 1000,
+  recheckTries = 3,
   now = Date.now,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -64,6 +73,10 @@ export function createOvermind({
   let warm = false;
   let lastAsked = 0;
   let idleTimer = null;
+  // `<session>\0<request>` -> follow-up looks made (Infinity once seen waiting), for the rows that
+  // still carry that request; one timer for them all.
+  const unseenTries = new Map();
+  let recheckTimer = null;
 
   async function discover() {
     const fetchedAt = now();
@@ -115,6 +128,33 @@ export function createOvermind({
     return Math.max(dueAt, now());
   }
 
+  /** After a list: schedule a follow-up look for an approval announced but not on screen yet. */
+  function scheduleRecheck(sessions) {
+    const keep = new Map();
+    let due = false;
+    for (const s of sessions) {
+      if (s?.harness !== 'codex') continue;
+      const req = s.status === 'waiting' ? s.approval_id : s.status === 'busy' ? s.approval_unseen : undefined;
+      if (typeof req !== 'string') continue;
+      const key = `${s.session_id}\0${req}`;
+      let tries = s.status === 'waiting' ? Infinity : (unseenTries.get(key) ?? 0);
+      if (tries < recheckTries) {
+        tries += 1;
+        due = true;
+      }
+      keep.set(key, tries);
+    }
+    unseenTries.clear();
+    for (const [k, v] of keep) unseenTries.set(k, v);
+    if (!due || recheckTimer || !validated()) return;
+    recheckTimer = setTimer(() => {
+      recheckTimer = null;
+      if (recheck) recheck();
+      else signal('fast');
+    }, recheckMs);
+    recheckTimer?.unref?.();
+  }
+
   function run() {
     watcher?.rearm?.(); // a root created since, or a watcher that errored
     const g = gen;
@@ -129,6 +169,7 @@ export function createOvermind({
         lastListAt = startedAt;
         if (g === gen) dirty = false;
         if (g >= staleGen) stale = false;
+        if (value.ok) scheduleRecheck(value.sessions);
         return value;
       })
       .finally(() => {
@@ -197,7 +238,9 @@ export function createOvermind({
 
   function stop() {
     clearTimer(idleTimer);
-    idleTimer = null;
+    clearTimer(recheckTimer);
+    idleTimer = recheckTimer = null;
+    unseenTries.clear();
     warm = false;
     watcher?.stop();
   }

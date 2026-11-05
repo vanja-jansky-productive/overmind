@@ -77,10 +77,13 @@ const discoveryWatcher = config.discovery.watch
   ? createDiscoveryWatcher({
       roots: discoveryRoots({ env: process.env }),
       live: () => overmind.peek()?.sessions ?? null,
-      onChange: (cls) => (overmindAccess ? overmindAccess.discoveryChanged(cls) : overmind.signal(cls)),
+      onChange: (cls) => discoveryChanged(cls),
       log,
     })
   : null;
+function discoveryChanged(cls) {
+  return overmindAccess ? overmindAccess.discoveryChanged(cls) : overmind.signal(cls);
+}
 const overmind = createOvermind({
   cli,
   self: config.self,
@@ -88,6 +91,8 @@ const overmind = createOvermind({
   watcher: discoveryWatcher,
   safetyMs: config.discovery.safetyMs,
   gaps: { fast: config.discovery.fastGapMs, slow: config.discovery.slowGapMs },
+  // A Codex approval announced before its menu was drawn: look again, as a fast change would.
+  recheck: () => discoveryChanged('fast'),
 });
 const backend = createBackend({ run, tmux: config.tmux });
 const autoNamer = createAutoNamer({
