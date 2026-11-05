@@ -922,11 +922,11 @@ test('answer types the keys for the pending question, only when it is safe to', 
 
 // --- discovery on change (lib/watch.mjs → lib/overmind.mjs) ---------------------------------
 
-function armedOvermind(rows = [{ session_id: 'aaaaaaaa-0000-0000-0000-000000000001', status: 'idle', updated_at: 1 }]) {
+function armedOvermind(rows = [{ session_id: 'aaaaaaaa-0000-0000-0000-000000000001', status: 'idle', updated_at: 1 }], { mode = 'watch' } = {}) {
   let t = 5_000_000;
   const clock = { now: () => t, advance: (ms) => (t += ms) };
   let running = false;
-  const watcher = { start: () => (running = true), stop: () => (running = false), rearm() {}, status: () => ({ mode: running ? 'watch' : 'idle', events: 0, roots: [] }) };
+  const watcher = { start: () => (running = true), stop: () => (running = false), rearm() {}, status: () => ({ mode: running ? mode : 'idle', events: 0, roots: [] }) };
   const runs = [];
   const cli = { list: async () => (runs.push(clock.now()), rows) };
   const overmind = createOvermind({ cli, self: 'solo', watcher, now: clock.now, setTimer: () => null, clearTimer() {} });
@@ -955,6 +955,23 @@ test('?local=1 with an armed watcher: a quiet host lists once; a registry signal
   assert.equal(h.body.discovery.lastListAt, runs[1]);
   assert.equal(h.body.discovery.safetyMs, 30_000);
   assert.deepEqual(h.body.discovery.gaps, { fast: 1000, slow: 5000 });
+});
+
+test('review-38 S3: a watcher signal pokes a rebuild in watch mode only — degraded, the tick lists anyway', async (t) => {
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  for (const [mode, extra] of [['watch', 1], ['degraded', 0]]) {
+    const { clock, runs, overmind } = armedOvermind(undefined, { mode });
+    const api = createApi({ config, overmind, backend: {}, transcripts: {}, spawner: {}, overmindRefreshMs: 60_000 });
+    t.after(() => api.stop());
+    await api({ method: 'GET', headers: {} }, new URL('http://x/api/overmind'));
+    await settle();
+    const before = runs.length;
+    clock.advance(10_000); // past the gap: the change is due at once
+    api.discoveryChanged('slow');
+    await settle();
+    assert.equal(runs.length - before, extra, `${mode}: ${extra} extra list(s) per signal`);
+  }
 });
 
 test('/api/health.discovery without a watcher says ttl', async () => {

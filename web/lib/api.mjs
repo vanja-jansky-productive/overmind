@@ -2399,10 +2399,13 @@ export function createApi({
   }
 
   handleApi.refreshOvermind = refreshOvermind;
-  /** A discovery watcher signal (lib/watch.mjs): mark the local list dirty, rebuild when it is due. */
+  /**
+   * A discovery watcher signal (lib/watch.mjs): mark the local list dirty, rebuild when it is due.
+   * Degraded, every tick lists anyway (`force: !watched()`): a poke would only add a list.
+   */
   handleApi.discoveryChanged = (cls) => {
     const at = overmind.signal?.(cls);
-    if (at != null) snapshot?.poke(at);
+    if (at != null && watched()) snapshot?.poke(at);
   };
   /** A fresh merged overmind, built once — what the grouper feeds `overmind group`. Doesn't warm the snapshot. */
   handleApi.buildOvermind = () => buildOvermind({ force: true });
