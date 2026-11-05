@@ -165,9 +165,20 @@ fn harness_list_says_why_codex_is_unavailable() {
     };
     let s = common::stdout(&run());
     assert!(s.contains("not logged in — run `codex login`"), "{s}");
+    assert!(!s.contains("unverified"), "{s}");
+    // credentials in the keyring: usable, but the same "unverified" the doctor shows
+    std::fs::write(
+        codex_home.join("config.toml"),
+        "cli_auth_credentials_store = \"keyring\"\n",
+    )
+    .unwrap();
+    let s = common::stdout(&run());
+    assert!(!s.contains("codex login"), "{s}");
+    assert!(s.contains("credentials in keyring, unverified"), "{s}");
     std::fs::write(codex_home.join("auth.json"), "{}").unwrap();
     let s = common::stdout(&run());
     assert!(!s.contains("codex login"), "{s}");
+    assert!(!s.contains("unverified"), "{s}");
 
     let out = env
         .cmd()

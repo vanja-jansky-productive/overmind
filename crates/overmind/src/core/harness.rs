@@ -582,29 +582,53 @@ fn glob_match(pat: &str, s: &str) -> bool {
     p[pi..].iter().all(|&c| c == '*')
 }
 
-/// stdout of `cmd`, or `None` when it fails or outlives `timeout` (then it is killed).
+/// stdout of `cmd`, or `None` when it fails or outlives `timeout`. It runs in its own process
+/// group, and on timeout the whole group is killed: a wrapper that ran the real launcher
+/// without `exec` takes that launcher with it. When it exits but something it left behind
+/// still holds stdout (a daemon), what was printed is returned after a short grace, without
+/// waiting for that process.
 pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> {
+    use std::os::unix::process::CommandExt;
+    use std::sync::{Arc, Mutex, mpsc};
     let mut child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
+        .process_group(0)
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stdout.read_to_string(&mut s);
-        s
-    });
-    let start = std::time::Instant::now();
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let (done, eof) = mpsc::channel();
+    {
+        let buf = Arc::clone(&buf);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            while let Ok(n @ 1..) = stdout.read(&mut chunk) {
+                buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+            let _ = done.send(());
+        });
+    }
+    let deadline = std::time::Instant::now() + timeout;
     loop {
+        let now = std::time::Instant::now();
         match child.try_wait() {
             Ok(Some(st)) => {
-                let out = reader.join().ok()?;
+                let grace = deadline
+                    .saturating_duration_since(now)
+                    .min(Duration::from_secs(1));
+                let _ = eof.recv_timeout(grace);
+                let out = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
                 return st.success().then_some(out);
             }
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if now < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                // the group's id is the child's pid (`process_group(0)`)
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                    .stderr(std::process::Stdio::null())
+                    .status();
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -706,7 +730,7 @@ pub fn codex_login(home: &Path) -> CodexLogin {
     let keyring = config
         .lines()
         .map(str::trim)
-        .take_while(|l| !l.starts_with('['))
+        .take_while(|l| !is_table_header(l))
         .filter_map(|l| l.split_once('='))
         .any(|(k, v)| {
             k.trim() == "cli_auth_credentials_store"
@@ -717,6 +741,21 @@ pub fn codex_login(home: &Path) -> CodexLogin {
     } else {
         CodexLogin::None
     }
+}
+
+/// `[table]` / `[[array.of.tables]]` (a trailing `# comment` allowed) — not a row of a
+/// multi-line array (`[1, 2],`), which also starts with `[`.
+fn is_table_header(l: &str) -> bool {
+    let l = l.split_once('#').map_or(l, |(h, _)| h).trim_end();
+    let inner = l
+        .strip_prefix("[[")
+        .and_then(|r| r.strip_suffix("]]"))
+        .or_else(|| l.strip_prefix('[').and_then(|r| r.strip_suffix(']')));
+    inner.is_some_and(|k| {
+        !k.trim().is_empty()
+            && k.chars()
+                .all(|c| c.is_alphanumeric() || " _-.\"'".contains(c))
+    })
 }
 
 /// A TOML string value on one line: `"x"` or `'x'`, a trailing `# comment` allowed.
@@ -1784,6 +1823,9 @@ mod tests {
             "cli_auth_credentials_store = 'keyring'\n",
             "cli_auth_credentials_store=\"auto\"   # keyring when there is one\n",
             "  cli_auth_credentials_store = 'auto' #x\n[profiles.a]\n",
+            // a nested array's rows start with `[` but are not a table
+            "grid = [\n  [1, 2],\n  [3, 4]\n]\ncli_auth_credentials_store = \"keyring\"\n",
+            "x = [[1], [2]]\ncli_auth_credentials_store = \"keyring\"\n",
         ] {
             assert_eq!(with(store), CodexLogin::Keyring, "{store}");
         }
@@ -1792,6 +1834,8 @@ mod tests {
             "cli_auth_credentials_store = \"keyring\" trailing\n",
             "cli_auth_credentials_store = \"keyring'\n",
             "[profiles.a]\ncli_auth_credentials_store = \"keyring\"\n",
+            "[[mcp]]\ncli_auth_credentials_store = \"keyring\"\n",
+            "[ \"quoted.table\" ] # c\ncli_auth_credentials_store = \"keyring\"\n",
         ] {
             assert_eq!(with(not), CodexLogin::None, "{not}");
         }
@@ -1800,6 +1844,75 @@ mod tests {
         assert_eq!(
             with("cli_auth_credentials_store = \"auto\"\n"),
             CodexLogin::File
+        );
+    }
+
+    // A launcher killed on timeout takes its whole process group with it: a `#!/bin/sh`
+    // wrapper that runs `codex …` without `exec` must not leave that Codex behind.
+    #[test]
+    fn a_timed_out_command_leaves_no_grandchild_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let start = std::time::Instant::now();
+        let out = run_with_timeout(
+            Command::new("sh").arg("-c").arg(format!(
+                "sleep 20 & echo $! > {}; cat; wait",
+                pidfile.display()
+            )),
+            Duration::from_secs(1),
+        );
+        assert_eq!(out, None);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
+        let pid = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .to_string();
+        std::thread::sleep(Duration::from_millis(200));
+        let alive = Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        if alive {
+            let _ = Command::new("kill").args(["-9", &pid]).status();
+        }
+        assert!(!alive, "grandchild {pid} survived the timeout");
+    }
+
+    // A launcher that exits but leaves a background process holding its stdout: the output is
+    // returned without waiting for that process.
+    #[test]
+    fn a_leftover_holding_stdout_does_not_outlast_the_timeout() {
+        let start = std::time::Instant::now();
+        let out = run_with_timeout(
+            Command::new("sh").arg("-c").arg("echo v1.0; sleep 20 &"),
+            Duration::from_secs(2),
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(out.as_deref().map(str::trim), Some("v1.0"));
+        // plain cases still work
+        assert_eq!(
+            run_with_timeout(
+                Command::new("sh").arg("-c").arg("echo ok"),
+                Duration::from_secs(5)
+            ),
+            Some("ok\n".into())
+        );
+        assert_eq!(
+            run_with_timeout(
+                Command::new("sh").arg("-c").arg("echo no; exit 3"),
+                Duration::from_secs(5)
+            ),
+            None
         );
     }
 

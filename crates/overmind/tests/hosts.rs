@@ -375,6 +375,9 @@ fn probe_versions_find_the_interpreter_in_the_fallback_dirs_and_time_out() {
     );
     let codex = exe("tools/codex", "#!/usr/bin/env om-fake-node\n");
     let pi = exe("tools/pi", "#!/bin/sh\nexec sleep 60\n");
+    // Claude goes the same way: OVERMIND_CMD honoured, and installed but failing `--version`
+    // (an npm Claude with no `node` on a non-interactive ssh PATH) is there, not missing
+    let claude = exe("tools/claude-wrapper", "#!/bin/sh\nexit 127\n");
     env.write_config(&serde_json::json!({
         "version": 1,
         "harnesses": {
@@ -389,6 +392,7 @@ fn probe_versions_find_the_interpreter_in_the_fallback_dirs_and_time_out() {
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env("CODEX_HOME", home.join(".codex"))
+        .env("OVERMIND_CMD", format!("{} --model opus", claude.display()))
         .env("OVERMIND_FIXTURE", fixture(env.dir.path(), "[]"))
         .timeout(std::time::Duration::from_secs(30))
         .output()
@@ -397,6 +401,7 @@ fn probe_versions_find_the_interpreter_in_the_fallback_dirs_and_time_out() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["codex"], "codex-cli 7.7.7", "{v}");
     assert_eq!(v["pi"], "?", "{v}");
+    assert_eq!(v["claude"], "?", "{v}");
     assert!(start.elapsed() < std::time::Duration::from_secs(20));
 }
 

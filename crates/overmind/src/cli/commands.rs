@@ -161,6 +161,16 @@ pub fn harness_list(json: bool, with_models: bool) -> Result<()> {
         if let Some(p) = &r.problem {
             let p = if r.installed { p.yellow() } else { p.red() };
             println!("{:<7} {p}", "");
+        } else if r.id == Harness::Codex.id()
+            && r.installed
+            && harness::codex_login(&harness::codex_home()) == harness::CodexLogin::Keyring
+        {
+            // the doctor's caveat, so both say how sure they are
+            println!(
+                "{:<7} {}",
+                "",
+                "credentials in keyring, unverified".dimmed()
+            );
         }
     }
     Ok(())

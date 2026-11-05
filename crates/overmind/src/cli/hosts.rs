@@ -134,11 +134,16 @@ pub struct Probe {
     /// `uname -sm`, e.g. `Darwin arm64`.
     pub platform: String,
     pub tmux: Option<String>,
+    /// `--version` of the launcher Claude sessions start with (`OVERMIND_CMD` / config
+    /// `claude`, else `claude`); `"?"` when it is there but the probe fails; `null` when there is
+    /// none.
     pub claude: Option<String>,
     /// `codex --version` of the launcher `harness list` uses; `null` when there is none.
     pub codex: Option<String>,
-    /// Codex's home (`$CODEX_HOME`, default `~/.codex`) exists: it has run here.
-    pub codex_home: bool,
+    /// Codex's home (`$CODEX_HOME`, default `~/.codex`) exists: it has run here. `None` from
+    /// an overmind that predates harness reporting (no `codexHome` key): it says nothing about
+    /// Codex or pi, so a missing Claude there doesn't mean nothing can run.
+    pub codex_home: Option<bool>,
     /// Codex has a login there ([`crate::core::harness::codex_login`]).
     pub codex_login: bool,
     /// …only as far as its config keeps credentials in the OS keyring, which overmind can't
@@ -208,10 +213,20 @@ pub fn gather_probe() -> Probe {
     if !loaded.exists {
         problems.clear();
     }
-    let claude = tools::claude().and_then(|c| first_line(&c, &["--version"]));
     let node = tools::find_binary("node")
         .and_then(|n| first_line(&n.display().to_string(), &["--version"]));
-    let version_of = |h: Harness| harness::binary(&h.command()).map(|b| launcher_version(&b));
+    let version_of = |h: Harness| {
+        let command = h.command();
+        harness::binary(&command)
+            // Claude's own installer can put it in ~/.claude/local only
+            .or_else(|| {
+                (h == Harness::Claude && command == "claude")
+                    .then(tools::claude)
+                    .flatten()
+                    .map(PathBuf::from)
+            })
+            .map(|b| launcher_version(&b))
+    };
     let codex_home = harness::codex_home();
     let codex_login = harness::codex_login(&codex_home);
     let rows = crate::core::discovery::discover();
@@ -225,9 +240,9 @@ pub fn gather_probe() -> Probe {
         user: std::env::var("USER").unwrap_or_default(),
         platform: uname(),
         tmux: crate::core::tmux::version(),
-        claude,
+        claude: version_of(Harness::Claude),
         codex: version_of(Harness::Codex),
-        codex_home: codex_home.is_dir(),
+        codex_home: Some(codex_home.is_dir()),
         codex_login: codex_login.logged_in(),
         codex_keyring: codex_login == harness::CodexLogin::Keyring,
         pi: version_of(Harness::Pi),
@@ -328,13 +343,20 @@ fn probe_lines(p: &Probe, compare: Option<&str>) -> (Vec<(Mark, String)>, usize)
     }
     // Doctor fails only when nothing can run here: a Codex that isn't logged in is a note on a
     // host that has Claude or pi, and a failure on a Codex-only one.
-    let codex_usable = p.codex.is_some() && p.codex_home && p.codex_login;
+    // An overmind from before harness reporting says nothing about Codex or pi.
+    let reported = p.codex_home.is_some();
+    let codex_home = p.codex_home == Some(true);
+    let codex_usable = p.codex.is_some() && codex_home && p.codex_login;
     let usable = p.claude.is_some() || codex_usable || p.pi.is_some();
     match &p.claude {
         Some(c) => l.ok(&format!(
             "claude {c} — {} live session(s)",
             p.claude_sessions
         )),
+        // What it said then, uncounted: it may run Codex or pi.
+        None if !reported => {
+            l.bad("claude: missing (overmind there predates harness reporting — update it)")
+        }
         // A Codex- or pi-only host is a supported setup.
         None if usable => l.info(&format!(
             "{} claude: missing (fine: this host runs another harness)",
@@ -346,7 +368,7 @@ fn probe_lines(p: &Probe, compare: Option<&str>) -> (Vec<(Mark, String)>, usize)
         }
     }
     let codex_problem = |v: &str| {
-        let why = if p.codex_home {
+        let why = if codex_home {
             "not logged in"
         } else {
             "never run here (no $CODEX_HOME, default ~/.codex)"
@@ -371,6 +393,7 @@ fn probe_lines(p: &Probe, compare: Option<&str>) -> (Vec<(Mark, String)>, usize)
             l.bad(&codex_problem(v));
             failures += 1;
         }
+        None if !reported => {}
         None => l.info(&format!(
             "{} codex: missing (optional — brew install codex, or npm i -g @openai/codex; or set harnesses.codex.command)",
             "·".dimmed()
@@ -909,6 +932,7 @@ mod tests {
         Probe {
             overmind_version: "1.0.0".into(),
             tmux: Some("tmux 3.5".into()),
+            codex_home: Some(false),
             ..Probe::default()
         }
     }
@@ -921,7 +945,7 @@ mod tests {
     fn a_codex_only_host_is_fine_claude_missing_is_info() {
         let p = Probe {
             codex: Some("codex-cli 0.166.0".into()),
-            codex_home: true,
+            codex_home: Some(true),
             codex_login: true,
             codex_sessions: 2,
             ..tmux_host()
@@ -993,7 +1017,7 @@ mod tests {
             "{lines:?}"
         );
         let p = Probe {
-            codex_home: true,
+            codex_home: Some(true),
             ..claude
         };
         let (lines, failures) = probe_lines(&p, None);
@@ -1012,7 +1036,7 @@ mod tests {
         for home in [true, false] {
             let p = Probe {
                 codex: Some("codex-cli 0.166.0".into()),
-                codex_home: home,
+                codex_home: Some(home),
                 ..tmux_host()
             };
             let (lines, failures) = probe_lines(&p, None);
@@ -1029,7 +1053,7 @@ mod tests {
     fn a_keyring_login_counts_but_says_it_is_unverified() {
         let p = Probe {
             codex: Some("codex-cli 0.166.0".into()),
-            codex_home: true,
+            codex_home: Some(true),
             codex_login: true,
             codex_keyring: true,
             ..tmux_host()
@@ -1042,6 +1066,38 @@ mod tests {
                 Mark::Ok,
                 "codex 0.166.0 — 0 live session(s) (credentials in keyring, unverified)"
             ),
+            "{lines:?}"
+        );
+    }
+
+    // A peer from before harness reporting has no codex/codexHome/pi keys: its missing Claude
+    // keeps the old uncounted ✘, with a hint to update it — never a new failure.
+    #[test]
+    fn an_old_peer_without_claude_is_not_a_new_failure() {
+        let p: Probe = serde_json::from_str(
+            r#"{"overmindVersion":"1.0.0","tmux":"tmux 3.4","claudeSessions":0}"#,
+        )
+        .unwrap();
+        let (lines, failures) = probe_lines(&p, Some("1.0.0"));
+        assert_eq!(failures, 0, "{lines:?}");
+        assert!(
+            has(
+                &lines,
+                Mark::Bad,
+                "claude: missing (overmind there predates harness reporting — update it)"
+            ),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|(_, l)| l.contains("codex")), "{lines:?}");
+        // a peer that reports and has nothing still fails
+        let p: Probe = serde_json::from_str(
+            r#"{"overmindVersion":"1.0.0","tmux":"tmux 3.4","codex":null,"codexHome":false,"pi":null}"#,
+        )
+        .unwrap();
+        let (lines, failures) = probe_lines(&p, Some("1.0.0"));
+        assert_eq!(failures, 1, "{lines:?}");
+        assert!(
+            has(&lines, Mark::Bad, "no other harness can run here"),
             "{lines:?}"
         );
     }
