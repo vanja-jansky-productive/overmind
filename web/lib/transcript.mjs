@@ -1,7 +1,7 @@
 // Claude Code transcript reader: turns ~/.claude/projects/<cwd>/<session>.jsonl into a
 // chat-like message list (user prompts + assistant text), dropping tool calls, tool
 // results, thinking, hooks and bookkeeping entries.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -312,16 +312,203 @@ export function parsePiTranscript(text) {
 
 const PARSERS = { claude: parseTranscript, codex: parseCodexTranscript, pi: parsePiTranscript };
 
+// ------------------------------------------------------------------ deltas (#37)
+
+/** An unanswered question with more messages than this after it counts as settled (bandwidth only: see build()). */
+export const QUESTION_CAP = 20;
+/** The anchored span is re-anchored (a new generation) once it holds this many times its tail size. */
+export const REANCHOR_FACTOR = 1.5;
+/** Raw bytes before the cached size, compared on the next read: a mismatch = truncated and regrown, or rewritten. */
+const PROBE_BYTES = 8 * 1024;
+const CURSOR_RE = /^([0-9a-f]{8}):(\d+):(\d+):([0-9a-f]{16}):(\d+)$/;
+
+/**
+ * The index of the first message a later transcript line could still change (`all.length` when
+ * none): what a client may keep once it has it. Claude: the last bubble while it can still be
+ * glued (`parseTranscript`'s streaming), an unanswered question (its tool_result adds `answers`)
+ * unless more than QUESTION_CAP messages followed it, and the queued suffix. Codex: the last
+ * reply (`final` flips on a tool call). pi: nothing.
+ */
+export function stableIndex(harness, all) {
+  if (harness === 'pi') return all.length;
+  const last = all.length - 1;
+  if (harness === 'codex') return last >= 0 && all[last].kind === 'assistant' ? last : all.length;
+  let firstQueued = all.findIndex((m) => m.queued);
+  if (firstQueued < 0) firstQueued = all.length;
+  let stable = firstQueued > 0 && all[firstQueued - 1].kind === 'assistant' ? firstQueued - 1 : firstQueued;
+  for (let i = Math.max(0, firstQueued - 1 - QUESTION_CAP); i < stable; i++) {
+    const m = all[i];
+    if (m.kind === 'question' && !m.answers && !m.declined) {
+      stable = i;
+      break;
+    }
+  }
+  return stable;
+}
+
+const feed = (h, all, from, to) => {
+  for (let i = from; i < to; i++) h.update(JSON.stringify(all[i])).update('\n');
+};
+const digest16 = (h) => h.digest('hex').slice(0, 16);
+
+function newGen(old) {
+  for (;;) {
+    const gen = randomBytes(4).toString('hex');
+    if (gen !== old) return gen;
+  }
+}
+
+/**
+ * A parsed message list → its delta bookkeeping: `stable`, the hash of what is below it
+ * (`prefixHash`) and of the rest (`tailHash`). With `prev` (the same anchored span, read before)
+ * the generation is kept only when everything below the previous `stable` is unchanged — any
+ * mutation down there (a capped question answered late, a parser rule added later) mints a new
+ * one, so a client never keeps a message the server changed.
+ */
+export function snapshotEntry(messages, { harness = 'claude', gen = null, truncated = false, prev = null } = {}) {
+  const stable = stableIndex(harness, messages);
+  let h = createHash('sha1');
+  let i = 0;
+  let keep = !!prev && stable >= prev.stable && messages.length >= prev.stable;
+  if (keep) {
+    feed(h, messages, 0, prev.stable);
+    i = prev.stable;
+    keep = digest16(h.copy()) === prev.prefixHash;
+  }
+  if (!keep) {
+    h = createHash('sha1');
+    i = 0;
+  }
+  feed(h, messages, i, stable);
+  const tail = createHash('sha1');
+  feed(tail, messages, stable, messages.length);
+  return {
+    messages,
+    truncated,
+    gen: keep ? prev.gen : (gen ?? newGen(prev?.gen)),
+    stable,
+    prefixHash: digest16(h),
+    tailHash: digest16(tail),
+  };
+}
+
+function parseCursor(after) {
+  const m = typeof after === 'string' ? CURSOR_RE.exec(after) : null;
+  return m ? { gen: m[1], stable: Number(m[2]), total: Number(m[3]), tailHash: m[4], limit: Number(m[5]) } : null;
+}
+
+/**
+ * One answer to a poll carrying `after` (the cursor of the previous answer; '' or null = none):
+ * `full` (the last `limit` messages), "same" (`full: false`, `from === total`, no messages) or a
+ * delta (`full: false`, the messages from `from` on — the client keeps what it has before `from`).
+ * A cursor of another generation or limit, a gap longer than the window, or a window the client
+ * could not rebuild (the total shrank) is answered full.
+ */
+export function sliceDelta(entry, { limit, after }) {
+  const all = entry.messages;
+  const total = all.length;
+  const want = Math.max(0, total - limit);
+  const cursor = `${entry.gen}:${entry.stable}:${total}:${entry.tailHash}:${limit}`;
+  const c = parseCursor(after);
+  let full = true;
+  let from = want;
+  if (c && c.gen === entry.gen && c.limit === limit) {
+    if (c.stable === entry.stable && c.total === total && c.tailHash === entry.tailHash) {
+      full = false;
+      from = total;
+    } else {
+      // The client's numbers are not trusted past what it can hold and what is stable here.
+      const f = Math.min(c.stable, c.total, entry.stable, total);
+      // It holds [clientBase, c.total); keeping its messages below `f` must rebuild [want, total).
+      const clientBase = Math.max(0, c.total - limit);
+      if (total - f <= limit && (f <= want || clientBase <= want)) {
+        full = false;
+        from = f;
+      }
+    }
+  }
+  return { full, from, messages: all.slice(from), total, stable: entry.stable, cursor, truncated: entry.truncated || total > limit, all };
+}
+
 // ------------------------------------------------------------------ service
 
 /**
  * Cached transcript reader. `messages(session, limit)` returns the last `limit` chat
- * messages of a `overmind list --json` session object ({ session_id, cwd }).
+ * messages of a `overmind list --json` session object ({ session_id, cwd }); `delta(session,
+ * { limit, after })` answers a poll with only what changed since the cursor `after` (#37).
+ *
+ * A session's cache holds one anchored span `[startOffset, size)` of its file, parsed whole: a
+ * file that only grew is re-read from the same `startOffset`, so message indices stay put (a
+ * generation, `gen`, names that index space). Anything else — shrunk, replaced, rewritten in
+ * place, a grown tail for a larger limit, a span past REANCHOR_FACTOR × its tail size — reads a
+ * fresh tail under a new generation, and cursors of the old one are answered full.
  */
 export function createTranscriptReader({ home = claudeHome(), maxBytes = MAX_TAIL_BYTES, maxGrownBytes = MAX_GROWN_TAIL_BYTES } = {}) {
-  const cache = new Map(); // sessionId -> { file, size, mtimeMs, bytes, messages, truncated }
+  const cache = new Map(); // sessionId -> { file, ino, size, mtimeMs, startOffset, bytes, probe, messages, truncated, gen, stable, prefixHash, tailHash }
+  const loading = new Map(); // sessionId -> the in-flight load: overlapping polls wait, then re-check
+  const counters = { reads: 0, parses: 0 };
 
-  async function load(session, limit) {
+  /** Read `[startOf(size), size)` of the file as it is now. */
+  async function readFrom(file, startOf) {
+    const fh = await fs.open(file, 'r');
+    try {
+      const st = await fh.stat();
+      const start = Math.min(st.size, Math.max(0, startOf(st.size)));
+      const buf = Buffer.alloc(st.size - start);
+      let n = 0;
+      while (n < buf.length) {
+        const { bytesRead } = await fh.read(buf, n, buf.length - n, start + n);
+        if (!bytesRead) break;
+        n += bytesRead;
+      }
+      counters.reads += 1;
+      return { buf: buf.subarray(0, n), start, size: start + n, mtimeMs: st.mtimeMs, ino: st.ino };
+    } finally {
+      await fh.close();
+    }
+  }
+
+  function build(harness, file, read, { startOffset, bytes, prev }) {
+    const span = read.buf.subarray(startOffset - read.start);
+    counters.parses += 1;
+    const messages = PARSERS[harness](span.toString('utf8'));
+    const entry = snapshotEntry(messages, { harness, truncated: startOffset > 0, prev });
+    const probe = Buffer.from(span.subarray(Math.max(0, span.length - PROBE_BYTES)));
+    return { file, ino: read.ino, size: read.size, mtimeMs: read.mtimeMs, startOffset, bytes, probe, ...entry };
+  }
+
+  const enough = (d, limit) => !d.truncated || d.messages.length >= limit || d.bytes >= maxGrownBytes;
+
+  /** A fresh tail under a new generation, grown (doubling) until it holds `limit` messages. */
+  async function fromScratch(harness, file, limit, cached) {
+    // A tail of `bytes` can hold only a few messages when tool results are huge: grow it until
+    // it holds `limit` of them, reaches the file start, or hits the cap.
+    let bytes = Math.max(maxBytes, cached?.bytes ?? 0);
+    for (;;) {
+      const read = await readFrom(file, (size) => size - bytes);
+      let skip = 0;
+      if (read.start > 0) {
+        const nl = read.buf.indexOf(0x0a);
+        skip = nl === -1 ? read.buf.length : nl + 1; // drop the leading partial line
+      }
+      const fresh = build(harness, file, read, { startOffset: read.start + skip, bytes, prev: null });
+      if (fresh.gen === cached?.gen) fresh.gen = newGen(cached.gen);
+      if (enough(fresh, limit)) return fresh;
+      bytes = Math.min(bytes * 2, maxGrownBytes);
+    }
+  }
+
+  /** The cached span re-read from its anchor; null when it cannot continue the generation. */
+  async function anchored(harness, file, cached) {
+    const read = await readFrom(file, () => cached.startOffset);
+    if (read.ino !== cached.ino || read.size < cached.size) return null;
+    const end = cached.size - read.start;
+    if (!read.buf.subarray(end - cached.probe.length, end).equals(cached.probe)) return null;
+    if (read.size - cached.startOffset > REANCHOR_FACTOR * cached.bytes) return null;
+    return build(harness, file, read, { startOffset: cached.startOffset, bytes: cached.bytes, prev: cached });
+  }
+
+  async function doLoad(session, limit) {
     const id = session.session_id;
     const harness = PARSERS[session.harness] ? session.harness : 'claude';
     const cached = cache.get(id);
@@ -340,20 +527,29 @@ export function createTranscriptReader({ home = claudeHome(), maxBytes = MAX_TAI
       cache.delete(id);
       return null;
     }
-    const enough = (d) => !d.truncated || d.messages.length >= limit || d.bytes >= maxGrownBytes;
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs && enough(cached)) return cached;
-    // A tail of `bytes` can hold only a few messages when tool results are huge: grow it until
-    // it holds `limit` of them, reaches the file start, or hits the cap.
-    let bytes = Math.max(maxBytes, cached?.bytes ?? 0);
-    let fresh;
-    for (;;) {
-      const tail = await readTail(file, bytes);
-      fresh = { file, size: tail.size, mtimeMs: tail.mtimeMs, bytes, truncated: tail.truncated, messages: PARSERS[harness](tail.text) };
-      if (enough(fresh)) break;
-      bytes = Math.min(bytes * 2, maxGrownBytes);
+    let next = null;
+    const same = cached && cached.file === file && cached.ino === stat.ino;
+    const rewritten = !same || stat.size < cached.size || stat.mtimeMs < cached.mtimeMs || (stat.size === cached.size && stat.mtimeMs !== cached.mtimeMs);
+    if (!rewritten && enough(cached, limit)) {
+      if (stat.size === cached.size) return cached;
+      next = await anchored(harness, file, cached);
     }
-    cache.set(id, fresh);
-    return fresh;
+    next ??= await fromScratch(harness, file, limit, cached);
+    cache.set(id, next);
+    return next;
+  }
+
+  /** One load per session at a time: a poll that overlaps another waits for it, then re-checks (usually: no read). */
+  async function load(session, limit) {
+    const id = session.session_id;
+    while (loading.has(id)) await loading.get(id).catch(() => {});
+    const p = doLoad(session, limit);
+    loading.set(id, p);
+    try {
+      return await p;
+    } finally {
+      if (loading.get(id) === p) loading.delete(id);
+    }
   }
 
   return {
@@ -364,5 +560,13 @@ export function createTranscriptReader({ home = claudeHome(), maxBytes = MAX_TAI
       const slice = limit > 0 ? data.messages.slice(-limit) : data.messages;
       return { messages: slice, total, truncated: data.truncated || slice.length < total, file: data.file, updatedAt: data.mtimeMs };
     },
+    /** `messages` for a poll that carries a cursor: see sliceDelta. `all` is the cached list (not for the wire). */
+    async delta(session, { limit = 60, after = null } = {}) {
+      const data = await load(session, limit);
+      if (!data) return null;
+      return { ...sliceDelta(data, { limit, after }), file: data.file, updatedAt: data.mtimeMs };
+    },
+    /** Reads and parses so far (tests: "an unchanged poll reads nothing"). */
+    stats: () => ({ ...counters }),
   };
 }

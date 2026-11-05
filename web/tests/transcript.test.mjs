@@ -218,3 +218,264 @@ test('the reader grows the tail when huge tool results leave too few messages fo
   const capped = createTranscriptReader({ home, maxBytes: 1000, maxGrownBytes: 4000 });
   assert.equal((await capped.messages(session, 60)).truncated, true);
 });
+
+// ------------------------------------------------------------------ deltas (#37)
+
+import { QUESTION_CAP, sliceDelta, snapshotEntry, stableIndex } from '../lib/transcript.mjs';
+import { appendFileSync, renameSync, truncateSync, utimesSync, statSync } from 'node:fs';
+
+const said = (text, extra = {}) => ({ role: 'assistant', kind: 'assistant', text, final: true, ...extra });
+const typed = (text, extra = {}) => ({ role: 'user', kind: 'user', text, ...extra });
+const asking = (id, extra = {}) => ({ role: 'assistant', kind: 'question', id, questions: [], text: '?', ...extra });
+
+test('stableIndex: the first message a later line could still change', () => {
+  const cases = [
+    ['empty', 'claude', [], 0],
+    ['last assistant bubble can still grow', 'claude', [typed('a'), said('b')], 1],
+    ['a user line settles everything', 'claude', [typed('a'), said('b'), typed('c')], 3],
+    ['an open question stays volatile', 'claude', [typed('a'), asking('q1'), typed('c')], 1],
+    ['an answered question is settled', 'claude', [typed('a'), asking('q1', { answers: ['x'] }), typed('c')], 3],
+    ['a declined question is settled', 'claude', [asking('q1', { declined: true }), typed('c')], 2],
+    [`an open question with more than ${QUESTION_CAP} after it counts as settled`, 'claude', [asking('q1'), ...Array.from({ length: QUESTION_CAP + 1 }, (_, i) => typed(`u${i}`))], QUESTION_CAP + 2],
+    [`…exactly ${QUESTION_CAP} after it is still volatile`, 'claude', [asking('q1'), ...Array.from({ length: QUESTION_CAP }, (_, i) => typed(`u${i}`))], 0],
+    ['the queued suffix, and the bubble before it', 'claude', [typed('a'), said('b'), typed('q', { queued: true })], 1],
+    ['the queued suffix after a user line', 'claude', [typed('a'), typed('q', { queued: true }), typed('r', { queued: true })], 1],
+    ['codex: the last assistant message (final may flip)', 'codex', [typed('a'), said('b')], 1],
+    ['codex: a user turn settles it', 'codex', [typed('a'), said('b'), typed('c')], 3],
+    ['pi: append-only', 'pi', [typed('a'), said('b')], 2],
+  ];
+  for (const [name, harness, list, want] of cases) assert.equal(stableIndex(harness, list), want, name);
+});
+
+test('sliceDelta: full without a cursor, same for an equal cursor, a delta from the older stable', () => {
+  const list = [typed('a'), said('b'), typed('c'), said('d')];
+  const e1 = snapshotEntry(list, { gen: 'aaaaaaaa' });
+  const first = sliceDelta(e1, { limit: 60, after: '' });
+  assert.deepEqual([first.full, first.from, first.messages.length, first.total, first.stable], [true, 0, 4, 4, 3]);
+  const legacy = sliceDelta(e1, { limit: 60, after: null });
+  assert.equal(legacy.full, true);
+  const same = sliceDelta(e1, { limit: 60, after: first.cursor });
+  assert.deepEqual([same.full, same.from, same.messages], [false, 4, []]);
+  const e2 = snapshotEntry([...list.slice(0, 3), said('d, longer'), typed('e')], { gen: 'aaaaaaaa' });
+  const d = sliceDelta(e2, { limit: 60, after: first.cursor });
+  assert.deepEqual([d.full, d.from, d.messages.map((m) => m.text)], [false, 3, ['d, longer', 'e']]);
+  for (const bad of ['garbage', 'bbbbbbbb:3:4:0123456789abcdef:60', first.cursor.replace(/:60$/, ':200'), `${first.cursor}:x`]) {
+    assert.equal(sliceDelta(e2, { limit: 60, after: bad }).full, true, bad);
+  }
+  // A cursor claiming a higher stable than it could hold is clamped to its own total, never trusted.
+  const greedy = first.cursor.replace(/^(\w+):3:/, '$1:9:');
+  const g = sliceDelta(e2, { limit: 60, after: greedy });
+  assert.deepEqual([g.full, g.from], [false, 4]);
+});
+
+test('sliceDelta: a gap longer than the window, or a window that would have to reach back, is full', () => {
+  const many = (n) => Array.from({ length: n }, (_, i) => typed(`m${i}`));
+  const e1 = snapshotEntry(many(10), { gen: 'aaaaaaaa' });
+  const c = sliceDelta(e1, { limit: 5, after: '' });
+  assert.deepEqual([c.from, c.messages.length, c.truncated], [5, 5, true]);
+  const e2 = snapshotEntry(many(16), { gen: 'aaaaaaaa' });
+  const gap = sliceDelta(e2, { limit: 5, after: c.cursor });
+  assert.deepEqual([gap.full, gap.from, gap.messages.length], [true, 11, 5]);
+  // Queue removal: total shrinks below the client's window → it could not rebuild it.
+  const q = snapshotEntry([...many(10), typed('x', { queued: true }), typed('y', { queued: true })], { gen: 'aaaaaaaa' });
+  const qc = sliceDelta(q, { limit: 5, after: '' });
+  const removed = snapshotEntry([...many(10), typed('y', { queued: true })], { gen: 'aaaaaaaa' });
+  const r = sliceDelta(removed, { limit: 5, after: qc.cursor });
+  assert.equal(r.full, true);
+  assert.deepEqual(r.messages.map((m) => m.text), ['m6', 'm7', 'm8', 'm9', 'y']);
+});
+
+/** A Claude transcript in a temp HOME, written line by line. */
+function claudeFixture(id = 'd1') {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'overmind-delta-'));
+  const file = transcriptPath('/w', id, home);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, '');
+  const add = (...lines) => appendFileSync(file, lines.map((l) => `${l}\n`).join(''));
+  return { home, file, add, session: { session_id: id, cwd: '/w' } };
+}
+const toolResult = (id = 't') => user([{ type: 'tool_result', tool_use_id: id, content: 'out' }]);
+const askLine = (id, msg = `msg_${id}`) =>
+  asst([{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions: [{ question: 'Pick?', header: 'P', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }] } }], { id: msg, stop: 'tool_use' });
+const answerLine = (id) =>
+  line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] }, toolUseResult: { questions: [{ question: 'Pick?' }], answers: { 'Pick?': 'A' } } });
+
+/** What a client holds after merging `body` onto `held` (the UI's merge rule, mirrored). */
+function merge(held, body, limit) {
+  if (!held || body.full) return { list: body.messages.slice(), total: body.total };
+  const base = held.total - held.list.length;
+  const keep = held.list.slice(0, Math.max(0, body.from - base));
+  return { list: keep.concat(body.messages).slice(-limit), total: body.total };
+}
+
+test('reader deltas: every poll merges to what a full fetch of the same cache returns', async () => {
+  const f = claudeFixture();
+  const r = createTranscriptReader({ home: f.home });
+  const limit = 6;
+  let held = null;
+  let cursor = '';
+  const kinds = [];
+  const poll = async () => {
+    const body = await r.delta(f.session, { limit, after: cursor });
+    held = merge(held, body, limit);
+    cursor = body.cursor;
+    const full = await r.messages(f.session, limit);
+    assert.deepEqual(held.list, full.messages, `after ${kinds.length} polls`);
+    kinds.push(body.full ? 'full' : body.messages.length ? 'delta' : 'same');
+    return body;
+  };
+  f.add(user('first'), asst([{ type: 'text', text: 'one' }], { id: 'm1' }));
+  await poll();
+  f.add(toolResult(), toolResult());
+  const quiet = await poll();
+  assert.deepEqual([quiet.full, quiet.messages], [false, []], 'tool-result lines change no message');
+  f.add(user('second'));
+  const u = await poll();
+  assert.deepEqual([u.from, u.messages.map((m) => m.text)], [1, ['one', 'second']], 'the settled reply is re-sent once');
+  for (const part of ['a', 'b', 'c']) {
+    f.add(asst([{ type: 'text', text: part }], { id: 'm2', stop: 'tool_use' }));
+    const s = await poll();
+    assert.equal(s.messages.at(-1).text, ['a', 'b', 'c'].slice(0, ['a', 'b', 'c'].indexOf(part) + 1).join('\n\n'));
+    assert.equal(s.stable, 3);
+  }
+  f.add(askLine('q1'));
+  await poll();
+  for (let i = 0; i < 3; i++) f.add(user(`more ${i}`));
+  await poll();
+  f.add(answerLine('q1'));
+  const answered = await poll();
+  assert.equal(answered.full, false, 'within the cap the question is still in the delta');
+  assert.deepEqual(answered.messages[0].answers, ['A']);
+  for (let i = 0; i < 10; i++) f.add(user(`burst ${i}`), asst([{ type: 'text', text: `r${i}` }], { id: `b${i}` }));
+  const gap = await poll();
+  assert.equal(gap.full, true, 'more new messages than the window');
+  f.add(user('x'));
+  const same = await poll();
+  const reads = r.stats().reads;
+  const again = await r.delta(f.session, { limit, after: same.cursor });
+  assert.deepEqual([again.full, again.messages, r.stats().reads], [false, [], reads], 'unchanged: no read');
+  assert.ok(kinds.includes('same') && kinds.includes('delta'));
+});
+
+test('reader deltas: a question answered 25 messages later (below stable) re-anchors → full', async () => {
+  const f = claudeFixture();
+  const r = createTranscriptReader({ home: f.home });
+  f.add(user('go'), askLine('q9'));
+  for (let i = 0; i < 25; i++) f.add(user(`while waiting ${i}`));
+  const before = await r.delta(f.session, { limit: 60, after: '' });
+  assert.equal(before.stable, 27, 'the question past the cap counts as settled');
+  f.add(answerLine('q9'));
+  const after = await r.delta(f.session, { limit: 60, after: before.cursor });
+  assert.equal(after.full, true, 'the prefix hash caught the mutation');
+  assert.notEqual(after.cursor.split(':')[0], before.cursor.split(':')[0], 'a new generation');
+  assert.deepEqual(after.messages.find((m) => m.id === 'q9').answers, ['A']);
+});
+
+test('reader deltas: truncate, replace, same-size rewrite and truncate-then-regrow each start a new generation', async () => {
+  const f = claudeFixture();
+  const r = createTranscriptReader({ home: f.home });
+  f.add(user('one'), user('two'), user('three'));
+  const gen = (b) => b.cursor.split(':')[0];
+  let prev = await r.delta(f.session, { limit: 60, after: '' });
+  const expectFull = async (what) => {
+    const b = await r.delta(f.session, { limit: 60, after: prev.cursor });
+    assert.equal(b.full, true, what);
+    assert.notEqual(gen(b), gen(prev), what);
+    prev = b;
+    return b;
+  };
+  truncateSync(f.file, 0);
+  writeFileSync(f.file, `${user('one')}\n`);
+  assert.deepEqual((await expectFull('shrunk')).messages.map((m) => m.text), ['one']);
+
+  const tmp = `${f.file}.new`;
+  writeFileSync(tmp, `${user('one')}\n${user('replaced')}\n`);
+  renameSync(tmp, f.file);
+  assert.deepEqual((await expectFull('new inode')).messages.map((m) => m.text), ['one', 'replaced']);
+
+  const size = statSync(f.file).size;
+  writeFileSync(f.file, `${user('one')}\n${user('REPLACED')}\n`);
+  assert.equal(statSync(f.file).size, size);
+  const t = new Date(Date.now() + 5000);
+  utimesSync(f.file, t, t);
+  assert.deepEqual((await expectFull('same size, new mtime')).messages.map((m) => m.text), ['one', 'REPLACED']);
+
+  // Truncated to a shorter prefix and regrown past the old size before the next poll.
+  writeFileSync(f.file, `${user('one')}\n${user('a different, longer second prompt')}\n`);
+  const t2 = new Date(Date.now() + 10000);
+  utimesSync(f.file, t2, t2);
+  assert.deepEqual((await expectFull('probe mismatch')).messages.map((m) => m.text), ['one', 'a different, longer second prompt']);
+});
+
+test('reader deltas: a grown tail (limit 500) bumps the generation once; the re-anchor threshold too', async () => {
+  const f = claudeFixture();
+  const blob = user([{ type: 'tool_result', tool_use_id: 't', content: 'x'.repeat(400) }]);
+  for (let i = 0; i < 6; i++) f.add(user(`p${i}`), blob);
+  const r = createTranscriptReader({ home: f.home, maxBytes: 1000, maxGrownBytes: 1 << 20 });
+  const small = await r.delta(f.session, { limit: 2, after: '' });
+  assert.equal(small.truncated, true);
+  const big = await r.delta(f.session, { limit: 500, after: '' });
+  assert.notEqual(big.cursor.split(':')[0], small.cursor.split(':')[0]);
+  assert.equal(big.total, 6);
+  const again = await r.delta(f.session, { limit: 500, after: big.cursor });
+  assert.deepEqual([again.full, again.messages], [false, []], 'enough now: no second bump');
+
+  const g = createTranscriptReader({ home: f.home, maxBytes: 1000, maxGrownBytes: 1000 });
+  let b = await g.delta(f.session, { limit: 60, after: '' });
+  const startGen = b.cursor.split(':')[0];
+  f.add(user('small'));
+  b = await g.delta(f.session, { limit: 60, after: b.cursor });
+  assert.deepEqual([b.full, b.messages.map((m) => m.text)], [false, ['small']], 'within 1.5 × maxBytes: anchored');
+  f.add(blob, blob);
+  b = await g.delta(f.session, { limit: 60, after: b.cursor });
+  assert.equal(b.full, true, 'past 1.5 × maxBytes: re-anchored');
+  assert.notEqual(b.cursor.split(':')[0], startGen);
+});
+
+test('reader deltas: the anchored span keeps indices while the file grows past maxBytes', async () => {
+  const f = claudeFixture();
+  for (let i = 0; i < 10; i++) f.add(user(`p${i} ${'y'.repeat(80)}`));
+  const r = createTranscriptReader({ home: f.home, maxBytes: 600, maxGrownBytes: 600 });
+  const a = await r.delta(f.session, { limit: 60, after: '' });
+  f.add(user('next'));
+  const b = await r.delta(f.session, { limit: 60, after: a.cursor });
+  assert.deepEqual([b.full, b.from, b.total], [false, a.total, a.total + 1], 'today a re-slice would have shifted every index');
+});
+
+test('reader deltas: concurrent polls after an append coalesce into one read', async () => {
+  const f = claudeFixture();
+  f.add(user('one'));
+  const r = createTranscriptReader({ home: f.home });
+  const first = await r.delta(f.session, { limit: 60, after: '' });
+  f.add(user('two'));
+  const reads = r.stats().reads;
+  const [x, y] = await Promise.all([r.delta(f.session, { limit: 60, after: first.cursor }), r.delta(f.session, { limit: 60, after: first.cursor })]);
+  assert.equal(r.stats().reads - reads, 1);
+  assert.deepEqual(x.messages, y.messages);
+  assert.equal(x.cursor, y.cursor);
+  assert.deepEqual(x.messages.map((m) => m.text), ['two']);
+});
+
+test('reader deltas: Codex (last reply volatile) and pi (append-only) through the same reader', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'overmind-delta-'));
+  const j = (o) => JSON.stringify(o);
+  const cx = path.join(dir, 'rollout.jsonl');
+  const cmsg = (role, type, text) => j({ type: 'response_item', payload: { type: 'message', role, content: [{ type, text }] } });
+  writeFileSync(cx, `${cmsg('user', 'input_text', 'fix it')}\n${cmsg('assistant', 'output_text', 'Looking.')}\n`);
+  const r = createTranscriptReader({ home: dir });
+  const cs = { session_id: 'c1', cwd: '/w', harness: 'codex', transcript: cx };
+  const c1 = await r.delta(cs, { limit: 60, after: '' });
+  assert.equal(c1.stable, 1);
+  appendFileSync(cx, `${j({ type: 'response_item', payload: { type: 'function_call', name: 'exec' } })}\n`);
+  const c2 = await r.delta(cs, { limit: 60, after: c1.cursor });
+  assert.deepEqual([c2.full, c2.from, c2.messages[0].final], [false, 1, false], 'the flipped final is re-sent');
+
+  const pi = path.join(dir, 'pi.jsonl');
+  const pmsg = (role, text) => j({ type: 'message', message: { role, content: [{ type: 'text', text }] } });
+  writeFileSync(pi, `${pmsg('user', 'hi')}\n`);
+  const ps = { session_id: 'p1', cwd: '/w', harness: 'pi', transcript: pi };
+  const p1 = await r.delta(ps, { limit: 60, after: '' });
+  appendFileSync(pi, `${pmsg('assistant', 'yo')}\n`);
+  const p2 = await r.delta(ps, { limit: 60, after: p1.cursor });
+  assert.deepEqual([p2.full, p2.from, p2.messages.map((m) => m.text)], [false, 1, ['yo']]);
+});
