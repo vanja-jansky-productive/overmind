@@ -332,8 +332,8 @@ export function createApi({
     return { status: 200, body: withEditors({ ...(await buildOvermind()), snapshotAt: Date.now() }) };
   }
 
-  async function resolveLocalSession(id) {
-    const host = await overmind.localHost();
+  async function resolveLocalSession(id, { force = false } = {}) {
+    const host = await overmind.localHost({ force });
     if (!host.ok) throw new HttpError(`session discovery failed: ${host.error}`, 503);
     const session = findSession(host.sessions, id);
     if (!session) throw new HttpError(`unknown session: ${id}`, 404);
@@ -527,8 +527,10 @@ export function createApi({
    * terminal shows it untouched — anything else is a 409 and nothing is typed.
    */
   async function answerQuestion(id, body) {
-    const session = await resolveLocalSession(id);
     const toolUseId = typeof body.toolUseId === 'string' ? body.toolUseId : '';
+    // A screen answer checks the row's `approval_id` against the screen: from a fresh list, or a
+    // cached row of an earlier request with the same text would let a stale card pick this one.
+    const session = await resolveLocalSession(id, { force: toolUseId.startsWith('screen:') });
     if (!toolUseId) throw new HttpError('toolUseId is required', 400);
     if (toolUseId.startsWith('screen:')) return answerScreenQuestion(session, toolUseId, body);
     const result = await transcripts.messages(session, 500);
@@ -554,9 +556,10 @@ export function createApi({
   /**
    * The same for a prompt read off the screen: one tab at a time, each its own `screen:` id.
    * The keys move a cursor relative to where it is, so a single pick (every Codex approval) reads
-   * the screen again before its Enter: the same prompt, the cursor on the chosen option — else
-   * no Enter and a 409 (someone pressed a key in the terminal, or another approval took its
-   * place: Enter would pick what the user did not).
+   * the screen again before each key after the first (its peek is the check) and before its
+   * Enter: the same prompt, the cursor where the keys so far put it — else nothing more and a
+   * 409 (someone pressed a key in the terminal, or another approval took its place: Enter would
+   * pick what the user did not, and its cursor is left at most one ↓ off).
    */
   async function answerScreenQuestion(session, toolUseId, body) {
     if (session.status !== 'waiting') throw new HttpError('the session is not waiting on a question', 409);
@@ -570,7 +573,8 @@ export function createApi({
     const pick = finalPick(prompt.questions, check.answers);
     const steps = answerSteps(prompt.questions, check.answers);
     for (const [i, step] of steps.entries()) {
-      if (pick != null && i === steps.length - 1) await cursorOn(read, toolUseId, pick);
+      // Down × pick, then Enter: before step i the cursor is on option i.
+      if (pick != null && (i > 0 || i === steps.length - 1)) await cursorOn(read, toolUseId, i);
       if (step.text) await backend.type(session, step.text);
       else await backend.keys(session, step.key);
       await sleep(answerKeyGapMs);

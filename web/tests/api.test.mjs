@@ -909,7 +909,7 @@ test('a waiting Codex row: its approval menu is a card, answered by its menu ind
   assert.deepEqual(typed(), ['Down', 'Down', 'Enter']);
 });
 
-test('review-codex S3: the same command asked again is a new card — the earlier card cannot answer it', async (t) => {
+test('review-codex S3/N1: the same command asked again is a new card — the earlier card cannot answer it, even before the list cache saw it', async (t) => {
   const id = '01a1a876-0000-7000-8000-000000000003';
   const rows = [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', approval_id: 'call_a', backend: 'tmux', handle: '%9', updated_at: 9 }];
   const host = fakeHost('solo', rows);
@@ -927,12 +927,13 @@ test('review-codex S3: the same command asked again is a new card — the earlie
 
   const first = await card();
   assert.equal((await card()).id, first.id, 'stable while the same request waits');
-  rows[0].approval_id = 'call_b'; // approved in the TUI; the same command asked again
-  overmind.invalidate();
-  const second = await card();
-  assert.notEqual(second.id, first.id, 'a fresh card: its form starts over');
+  // Approved in the TUI and the same command asked again, within the list cache's TTL: the
+  // answer lists afresh, so the stale card answers nothing.
+  rows[0].approval_id = 'call_b';
   assert.equal(await call({ toolUseId: first.id, answers: [{ options: [0] }] }), 409, 'the stale card answers nothing');
   assert.deepEqual(host.calls.filter((c) => c[0] === 'keys'), []);
+  const second = await card();
+  assert.notEqual(second.id, first.id, 'a fresh card: its form starts over');
 });
 
 test('review-codex S1: the screen is read again before Enter — a moved cursor or another approval gets no Enter', async (t) => {
@@ -970,7 +971,7 @@ test('review-codex S1: the screen is read again before Enter — a moved cursor 
   host.backend.peek = async () => screen;
   onKey = (key) => key === 'Down' && (screen = other);
   assert.equal(await call({ toolUseId: m.id, answers: [{ options: [2] }] }), 409);
-  assert.ok(!keys().includes('Enter'), 'never an Enter on a menu the user did not see');
+  assert.deepEqual(keys(), ['Down'], 'review-codex N2: the screen is read before each key — one stray ↓ at most, never an Enter');
 
   // The redraw lags a key: it waits for the cursor, then picks.
   screen = menu;
