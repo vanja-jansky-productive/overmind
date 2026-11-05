@@ -27,6 +27,7 @@ export function createSnapshot({
   let timer = null;
   let pokeTimer = null;
   let pokeAt = Infinity;
+  let laterAt = -Infinity; // the latest poke after the pending one (a list in between moved it on)
   let stopped = false;
 
   function schedule() {
@@ -85,12 +86,17 @@ export function createSnapshot({
 
   /**
    * A change is due at `at` (ms): build then, if someone is watching. Pokes coalesce — one
-   * pending build, at the earliest time asked. A build in flight when it fires may predate the
-   * change, so the poked one is chained behind it.
+   * pending build, at the earliest time asked; the latest later one is kept and armed after it
+   * when that build ran before it was due (a list in between moved its `dueAt` on). A build in
+   * flight when it fires may predate the change, so the poked one is chained behind it.
    */
   function poke(at) {
     if (stopped || !snapshot || now() - lastAsked > idleAfterMs) return;
-    if (pokeTimer && pokeAt <= at) return;
+    if (pokeTimer && pokeAt <= at) {
+      laterAt = Math.max(laterAt, at);
+      return;
+    }
+    if (pokeTimer) laterAt = Math.max(laterAt, pokeAt);
     clearTimer(pokeTimer);
     pokeAt = at;
     arm();
@@ -103,7 +109,14 @@ export function createSnapshot({
       if (now() < pokeAt) return arm();
       pokeTimer = null;
       pokeAt = Infinity;
-      refresh({ fresh: true }).catch(() => {});
+      const firedAt = now();
+      const later = laterAt;
+      laterAt = -Infinity;
+      refresh({ fresh: true })
+        .catch(() => {})
+        .then(() => {
+          if (later > firedAt) poke(later); // not due when this build ran: it may serve the dirty list
+        });
     }, Math.max(0, pokeAt - now()));
     pokeTimer?.unref?.();
   }
@@ -113,6 +126,7 @@ export function createSnapshot({
     clearTimer(timer);
     clearTimer(pokeTimer);
     timer = pokeTimer = null;
+    laterAt = -Infinity;
   }
 
   return { get, peek, refresh, poke, stop };

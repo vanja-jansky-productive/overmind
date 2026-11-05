@@ -190,3 +190,46 @@ test('review-38 N1: a poke timer that fires before its time (monotonic vs wall c
   await new Promise((r) => setImmediate(r));
   assert.equal(builds, 2);
 });
+
+test('review-38 R3: a later poke while one is pending is not dropped — it builds at its own time after the earlier one', async () => {
+  const clock = fakeClock();
+  let builds = 0;
+  const timers = [];
+  const snap = createSnapshot({
+    build: async () => ({ n: ++builds }),
+    now: clock.now,
+    setTimer: (fn, ms) => {
+      const t = { fn, ms, cleared: false };
+      timers.push(t);
+      return t;
+    },
+    clearTimer: (t) => t && (t.cleared = true),
+    refreshMs: 3000,
+  });
+  await snap.get();
+  const pokes = () => timers.filter((t) => !t.cleared && t.ms !== 3000);
+  const fire = async (t) => {
+    t.cleared = true;
+    t.fn();
+    await new Promise((r) => setImmediate(r));
+  };
+  snap.poke(clock.now() + 300); // signal A
+  // A forced list ran in between (send / peek); signal B is due a slow gap after that run's start.
+  snap.poke(clock.now() + 1100);
+  assert.deepEqual(pokes().map((t) => t.ms), [300], 'one pending timer, the earliest');
+  clock.advance(300);
+  await fire(pokes()[0]);
+  assert.equal(builds, 2, 'A');
+  assert.deepEqual(pokes().map((t) => t.ms), [800], 'B is re-armed for its own time, not left to the next tick');
+  clock.advance(800);
+  await fire(pokes()[0]);
+  assert.equal(builds, 3, 'B');
+  assert.deepEqual(pokes(), [], 'and nothing after');
+  // A later poke that is already due when the earlier one builds is covered by that build.
+  snap.poke(clock.now() + 500);
+  snap.poke(clock.now() + 600);
+  clock.advance(700);
+  await fire(pokes()[0]);
+  assert.equal(builds, 4);
+  assert.deepEqual(pokes(), [], 'no second build');
+});
