@@ -12,6 +12,14 @@ const H = '/Users/demo'
 const M = 60_000, HR = 3_600_000, D = 86_400_000
 // GUIDE_FREEZE=1 pins the clock: every poll answers a byte-identical body (scripts/perf/idle-cpu.mjs).
 const FROZEN = process.env.GUIDE_FREEZE === '1' ? Date.now() : 0
+// Chat deltas (#37): frozen, a poll with `after` gets one full answer and then "same" (the server's
+// shape: full / from / cursor / screen), so idle-cpu.mjs measures the delta path. Unfrozen: the old
+// shape (no cursor) — the UI merges whole lists.
+const chatDelta = (after, total, body) => {
+  if (!FROZEN || after === null) return body
+  const cursor = `f0f0f0f0:${total}:${total}:0000000000000000:60`
+  return after === cursor ? { ...body, messages: [], full: false, from: total, stable: total, cursor, screen: null } : { ...body, full: true, from: 0, stable: total, cursor, screen: null }
+}
 const now = () => FROZEN || Date.now()
 const iso = (ms) => new Date(ms).toISOString()
 
@@ -684,7 +692,7 @@ function route(method, p, q, b) {
   let s
   if ((s = rest.match(/^sessions\/([^/]+)\/(.*)$/))) {
     const id = decodeURIComponent(s[1]); const what = s[2]; const sess = find(host, id)
-    if (what === 'messages') { const msgs = chat(id); return { host, id, status: sess?.status ?? 'idle', backend: 'tmux', name: sess?.display_title, limit: 60, messages: msgs, total: msgs.length, truncated: false, queue: id === SID(1) ? { items: [{ id: 'q-1', text: 'Then add a KWD case (3 decimals) to the regression test.', createdAt: now() - 40_000 }], paused: false, held: false } : null, updatedAt: sess?.updated_at, capturedAt: now() } }
+    if (what === 'messages') { const msgs = chat(id); return chatDelta(q.get('after'), msgs.length, { host, id, status: sess?.status ?? 'idle', backend: 'tmux', name: sess?.display_title, limit: 60, messages: msgs, total: msgs.length, truncated: false, queue: id === SID(1) ? { items: [{ id: 'q-1', text: 'Then add a KWD case (3 decimals) to the regression test.', createdAt: now() - 40_000 }], paused: false, held: false } : null, updatedAt: sess?.updated_at, capturedAt: now() }) }
     if (what === 'peek') return { host, id, backend: 'tmux', lines: 200, text: PEEK, capturedAt: now() }
     if (what === 'brief') return brief(host, id)
     if (what === 'diffs') return diffs(host, id)

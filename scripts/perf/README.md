@@ -8,17 +8,18 @@ were taken; rerun it before and after a change that touches polling or rendering
 ```sh
 cd scripts/perf && npm install && npx playwright-core install webkit   # once
 npm --prefix ../../web/ui run build                                   # the dist it measures
-node idle-cpu.mjs [--dist ../../web/ui/dist] [--runs 3] [--idle 60] [--only list|session|mobile] [--json]
+node idle-cpu.mjs [--dist ../../web/ui/dist] [--runs 3] [--idle 60] [--only list|session|mobile] [--port 7798] [--json]
 ```
 
 - Scenarios: `list` (desktop shell, 1440×900), `session` (desktop shell with a session open),
   `mobile` (the list at 390×844). Each run is a fresh browser: load, wait for the ready text,
   settle 2 s, then idle for `--idle` seconds.
-- Output: one JSON line per run (`idleCpuS`, `idleCorePct`, `idleRequests`, `readyMs`, `loadCpuS`)
+- Output: one JSON line per run (`idleCpuS`, `idleCorePct`, `idleRequests`, `idleChatBytes` — the
+  `/messages` bodies while idle, `readyMs`, `loadCpuS`)
   and the median per scenario. Runs spread ±50 %, so compare medians of 3+ runs, before and after
   on the same machine.
 - CPU is the summed time of every process with `ms-playwright/webkit` in its command line, so run
-  nothing else on Playwright's WebKit meanwhile. The mock listens on 127.0.0.1:7798.
+  nothing else on Playwright's WebKit meanwhile. The mock listens on 127.0.0.1:7798 (`--port`).
 - To compare against another commit, build that commit's `web/ui` in a separate worktree and pass
   its `dist` with `--dist`.
 
@@ -70,3 +71,29 @@ node scripts/perf/server-cpu.mjs --scenario exec --watch 1 --seconds 130 --json
 - `exec`: `idle` plus a headless `codex exec` rollout streaming a line every 200 ms. It is never a
   row, so it should cost what `idle` costs.
 - Run modes interleaved (0, 1, 0, 1): the fleet's busy rows change under you.
+
+## Chat transfer (`chat-transfer.mjs`, #37)
+
+`chat-transfer.mjs` measures what an open session's chat costs on the wire: a temp `HOME` with one
+fake Claude session (a fake `overmind` printing its row) and a real-sized synthetic transcript
+(300 turns with tool calls and results, ~3.4 MB; the last 60 messages ≈ 35 KB of JSON), `web/server.mjs`
+on 127.0.0.1 under `/usr/bin/time -l`, and `…/messages?limit=60` polled every 3 s like the chat
+pane. No npm dependencies.
+
+```sh
+node scripts/perf/chat-transfer.mjs --mode full  --scenario idle --json   # no cursor: today's UI / an older server
+node scripts/perf/chat-transfer.mjs --mode delta --scenario busy --json   # after=<cursor> (#37)
+node scripts/perf/chat-transfer.mjs --mode delta --scenario busy --via-peer --verify --json
+node scripts/perf/chat-transfer.mjs --server ../main/web/server.mjs --mode full --json   # another checkout's server
+```
+
+- `--scenario idle`: nothing writes. `busy`: a tool call + result every 1 s, a reply streamed in
+  three blocks every 10 s, a user prompt every 30 s.
+- The first poll (the open, one full answer) is reported apart as `open`; the rest is the steady
+  state: requests, body bytes (total, per minute, median, max), approx. header bytes per minute,
+  answers by kind (`legacy` without a cursor, `full`, `delta`, `same`) and the session server's CPU
+  (node + children) over the run.
+- `--via-peer` starts a second server (`laptop`, port + 1) and polls through its proxy;
+  `--verify` also fetches the full window after each poll (not counted, but it adds server CPU)
+  and counts polls where the merged list differs (`mismatches`, should be 0).
+- Ports: `--port` (default 7896) and the next one; never 7878/7999. The temp dir is removed after.

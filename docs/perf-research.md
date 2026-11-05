@@ -17,7 +17,8 @@ real session data (9 sessions, one host).
   desktop. It's worth it only for the phone over Tailscale, and it needs chunk tuning.
 - **Push (SSE) instead of polling** barely helps client CPU once renders are fixed. Its value is
   latency, server CPU (the server re-runs `overmind list` every 3 s while anyone watches) and
-  bandwidth (each chat poll re-downloads the whole conversation: ~750 KB/min per open session).
+  bandwidth (each chat poll re-downloads the whole conversation: ~750 KB/min per open session —
+  since #37 a poll sends only what changed: ~7 KB/min idle, ~23 KB/min busy, see Chat deltas).
 
 ## What runs today
 
@@ -247,6 +248,62 @@ reads a scrubbed config.
   costs nothing extra in either version.
 
 Reproduce: `node scripts/perf/server-cpu.mjs --scenario fleet|burst|idle|latency|codex|exec --watch 0|1 [--seconds 300] [--list-delay 0.5]`
+(scripts/perf/README.md).
+
+## Chat deltas (#37)
+
+Every chat poll (3 s) used to re-download the conversation's last 60 messages, changed or not. A
+poll now sends the last answer's `cursor` as `after` and gets only what changed: a ~340 B "same"
+answer, or the messages from the first one that could still change (the streaming reply, an open
+question, the queued prompts), or a full answer when the server cannot bridge the gap (a new
+generation of its cache: transcript rewritten, a larger limit, a restart). The server still parses
+the transcript whole on a change, but from a fixed anchor, so indices hold while the file grows
+(web/ARCHITECTURE.md → Chat deltas).
+
+Measured with `scripts/perf/chat-transfer.mjs`: a temp HOME with one Claude session whose synthetic
+transcript is 300 turns with tool calls and results (3.46 MB; the 60-message window is 35 KB of
+JSON), `web/server.mjs` under `/usr/bin/time -l`, `…/messages?limit=60` polled every 3 s for 60 s
+after the open (20 polls). `before` is `main` at `53fa03a`, `after` the branch. Body bytes only;
+response + request headers add ~7.5 KB/min in every row (the HTTP floor #40's push removes).
+
+| Scenario | server / client | body bytes / min | median body | max body | answers (20 polls) | server CPU s / 60 s |
+| --- | --- | --- | --- | --- | --- | --- |
+| idle, nothing writes | before (no cursor) | 700,575 | 35,048 | 35,048 | 20 full | 0.13 |
+| idle | after, old UI (no `after`) | 702,369 | 35,136 | 35,136 | 20 full | 0.16 |
+| idle | after, new UI | **6,836** | 342 | 342 | 20 same | 0.14 |
+| idle, through a peer proxy | after, new UI | 6,816 | 341 | 341 | 20 same | 0.14 |
+| busy¹ | before | 735,760 / 736,174 | 36,925 | 38,971 | 20 full | 0.68 / 0.62 |
+| busy | after, old UI | 737,533 | 37,013 | 39,059 | 20 full | 0.69 |
+| busy | after, new UI | **22,269 / 23,187** | 342 | 3,216 | 8–9 delta, 11–12 same | 0.65 / 0.62 |
+| busy, through a peer proxy | after, new UI (`--verify`) | 22,272 | 342 | 3,216 | 8 delta, 12 same | 0.82² |
+
+¹ busy: a tool call + a 2 KB result every 1 s, a reply streamed in three blocks every 10 s, a user
+prompt every 30 s (the transcript grows ~150 KB in the minute).
+² `--verify` fetches the full window after each poll as well (it doubles the parse work it causes);
+it found the merged list equal to the full answer on every poll with the same server state
+(17/17 direct, 18/18 through the peer; the others raced the writer and were skipped).
+
+- **Idle: 700 KB/min → 6.8 KB/min** of chat body per open session (−99 %), each poll one ~340 B
+  "same" (status, queue, cursor and the empty list). The plan's < 6 KB/min assumed ~300 B; the
+  remaining bytes are the fields every answer keeps (host, id, name, limit, timestamps).
+- **Busy: 736 KB/min → 22–23 KB/min (3 %)**; a changed poll costs 0.3–3.2 KB (the growing reply,
+  or the settled reply re-sent once with the new prompt). Tool-call / tool-result lines change no
+  message and answer "same".
+- **An older client** (no `after`) gets today's body plus four fields (+88 B); an older server
+  gets `after=` and ignores it (the new UI then merges whole lists, as before).
+- **Server CPU unchanged**: busy 0.62–0.69 s / 60 s in every mode, before and after. The anchored
+  re-parse costs what today's 6 MB re-slice did, and the prefix / tail hashes (a `JSON.stringify`
+  per message per file change) are within noise. So no incremental (line-by-line) parser: the
+  optional fifth commit of the plan is not written.
+- **`server-cpu.mjs --scenario burst`** (120 s, `--list-delay 0.5`; it polls no chat): 26 lists and
+  0.66 s CPU before and after — the list path is untouched.
+- **UI, `idle-cpu.mjs --only session`** (3 runs each, the frozen mock now answers a cursor): 49 idle
+  requests per 60 s before and after; `/messages` bodies 58,640 → 9,680 B per 60 s (the mock's chat
+  is small). Idle CPU medians 1.51 → 1.52 s, but these runs shared the machine with another
+  session's WebKit harness (the CPU sums every Playwright WebKit process), so they say "no
+  regression visible", not a number to compare with the #36 table.
+
+Reproduce: `node scripts/perf/chat-transfer.mjs --mode full|delta --scenario idle|busy [--via-peer] [--verify] [--server <checkout>/web/server.mjs]`
 (scripts/perf/README.md).
 
 ## Caveats
