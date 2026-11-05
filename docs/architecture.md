@@ -209,6 +209,8 @@ That is the source of truth; `overmind` enriches each entry:
    the registry status as it is.
 
 Headless runs (`claude -p`, SDK and CI entrypoints) register too and are filtered out.
+A host that never ran Claude has no registry: that is no Claude rows, and Codex and pi are still
+looked for ([Other harnesses](#other-harnesses)); a registry that exists but can't be read is an error.
 
 ### Other harnesses
 

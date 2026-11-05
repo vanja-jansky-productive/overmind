@@ -19,6 +19,58 @@ fn list_json_is_valid_array() {
     assert!(v.is_array());
 }
 
+// A host that never ran Claude (no `~/.claude/sessions`) still looks for Codex and pi
+// sessions: `list` must not stop at the missing registry. Codex's discovery pass is seen by
+// its side effect — an old sidecar of a thread no row has is pruned.
+#[test]
+fn list_on_a_host_without_claude_still_runs_codex_discovery() {
+    let env = common::Env::new();
+    let home = env.path("home");
+    let codex = env.path("codex");
+    let hooks = env.path("hooks");
+    for d in [&home, &codex.join("sessions"), &hooks] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let stale = hooks.join("gone.json.123.0000abcd.tmp");
+    std::fs::write(&stale, "{}").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+        .unwrap();
+
+    let out = env
+        .cmd()
+        .args(["--local", "list", "--json"])
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex)
+        .env("PI_CODING_AGENT_DIR", env.path("no-pi"))
+        .env("OVERMIND_CODEX_HOOKS_DIR", &hooks)
+        .env("OVERMIND_TMUX", "false")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("discovery failed") && !stderr.contains("cannot read"),
+        "{stderr}"
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    // no Claude rows can exist without a registry (a Codex process of this machine may)
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["harness"] != "claude"),
+        "{rows}"
+    );
+    assert!(
+        !stale.exists(),
+        "codex discovery never ran: its stale sidecar is still there"
+    );
+}
+
 // Bare `overmind` opens the TUI on a terminal, but a piped stdout (this test, a
 // script, an agent) must get the one-shot list and *exit* — not the watch loop.
 // Enforced with a timeout so a regression fails the suite instead of hanging it.

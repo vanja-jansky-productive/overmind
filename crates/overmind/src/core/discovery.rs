@@ -3,7 +3,7 @@
 //! Each entry is enriched with the process tty and the backend it runs in.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -303,11 +303,21 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
     if let Some(rows) = fixture() {
         return Ok(rows);
     }
-    let dir = claude_home().join("sessions");
     let panes = tmux_panes();
-    let mut out = Vec::new();
+    // A host that never ran Claude has no registry: Codex and pi are still looked for.
+    let mut out = registry_sessions(&claude_home().join("sessions"), &panes)?;
+    crate::core::context::apply_native_1m(out.iter_mut().filter_map(|s| s.context.as_mut()));
+    out.extend(discover_harnesses(&panes));
+    crate::core::jobs::attach_subjects(out.iter_mut().filter_map(|s| s.origin.as_mut()));
+    out.sort_by_key(|s| std::cmp::Reverse(s.updated_at.unwrap_or(0)));
+    Ok(out)
+}
 
-    let entries = match std::fs::read_dir(&dir) {
+/// Claude's live sessions from its registry (`~/.claude/sessions/*.json`). A registry that
+/// doesn't exist yet is none; one that can't be read is an error.
+fn registry_sessions(dir: &Path, panes: &HashMap<String, Pane>) -> Result<Vec<Session>, String> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
@@ -335,7 +345,7 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
         }
         // ps returns non-zero for a dead pid, so this doubles as a liveness check.
         let Some(tty) = tty_of(pid) else { continue };
-        let (backend, handle) = backend_of(pid, Some(tty.as_str()), &panes);
+        let (backend, handle) = backend_of(pid, Some(tty.as_str()), panes);
         // tmux tab (window name) is free from the panes query; iTerm tab titles are
         // filled lazily by enrich_iterm_tabs (one AppleScript call) only for display.
         let pane = if backend == Backend::Tmux {
@@ -423,10 +433,6 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
             done: None,
         });
     }
-    crate::core::context::apply_native_1m(out.iter_mut().filter_map(|s| s.context.as_mut()));
-    out.extend(discover_harnesses(&panes));
-    crate::core::jobs::attach_subjects(out.iter_mut().filter_map(|s| s.origin.as_mut()));
-    out.sort_by_key(|s| std::cmp::Reverse(s.updated_at.unwrap_or(0)));
     Ok(out)
 }
 
@@ -968,6 +974,17 @@ fn claude_prompts(cwd: &str, session_id: &str, n: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_claude_registry_is_no_sessions_an_unreadable_one_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let panes = HashMap::new();
+        let none = registry_sessions(&dir.path().join("sessions"), &panes).unwrap();
+        assert!(none.is_empty());
+        std::fs::write(dir.path().join("sessions"), "not a dir").unwrap();
+        let err = registry_sessions(&dir.path().join("sessions"), &panes).unwrap_err();
+        assert!(err.starts_with("cannot read "), "{err}");
+    }
 
     // `ask_claude` shells out to `claude -p`, and that child registers itself as a
     // live `interactive` session in `$TMPDIR`. Titling the overmind would otherwise
