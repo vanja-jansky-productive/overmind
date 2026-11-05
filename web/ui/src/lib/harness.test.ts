@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { HarnessInfo } from '@/api/types'
 
+import { pickModel } from './models'
 import { overmindDefaultLabel, harnessLabel, modelKey, offeredHarnesses, pickHarness, sessionHarness, withOvermindDefault } from './harness'
 
 const claudeModels = [
@@ -63,5 +64,29 @@ describe('overmind defaults in the picker', () => {
     const got = offeredHarnesses(rows, models)
     expect(got[0].models[0].label).toBe('Default · Opus 5.5 · high')
     expect(got[1].models[0].label).toBe('Default · xhigh')
+  })
+})
+
+describe('Codex models (the host lists the newest of each family)', () => {
+  const codex: HarnessInfo = {
+    id: 'codex',
+    label: 'Codex',
+    command: 'codex',
+    installed: true,
+    models: [
+      { id: '', label: 'Default (gpt-6.1-sol)' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+      { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    ],
+  }
+  it('offers them as listed, in order', () => {
+    const got = offeredHarnesses([codex], claudeModels).find((h) => h.id === 'codex')
+    expect(got?.models).toEqual(codex.models)
+  })
+  it('a remembered older version the list no longer offers falls back to Default', () => {
+    expect(pickModel(codex.models, 'gpt-5.6-sol')).toBe('')
+    expect(pickModel(codex.models, 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
   })
 })
