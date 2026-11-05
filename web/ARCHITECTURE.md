@@ -584,7 +584,7 @@ progress notes, and the overmind's Start directories — `spawnDirs`, saved to e
 then session details): same routes (hash routing `#/`, `#/s/<host>/<id>`), same polling (overmind 5s, messages 3s, peek 2s,
 paused while hidden) and the same `overmind.*` localStorage keys (`overmind.snapshot`, `overmind.filter`,
 `overmind.detailMode`, `overmind.termFont`, `overmind.termLines`, `overmind.chatFont`, `overmind.chatHideNotes`,
-`overmind.spawnHost`, `overmind.spawnDirLabel.<host>`, `overmind.spawnModel`; the old vanilla UI's keys, so its preferences carried over). Built with
+`overmind.spawnHost`, `overmind.spawnDirLabel.<host>`, `overmind.spawnModel`, `overmind.spawnEffort.<harness>`; the old vanilla UI's keys, so its preferences carried over). Built with
 React 19 + Tailwind v4 + shadcn/ui; markdown is parsed to an AST and rendered as React elements
 (no `innerHTML`, only `http(s)` links). A 404 whose error starts with `unknown session` means the
 session is gone; any other 404 from `messages` means there is no transcript yet. Structure and conventions: [ui/README.md](./ui/README.md). Dev: `npm --prefix ui run dev`

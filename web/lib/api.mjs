@@ -491,6 +491,7 @@ export function createApi({
     if (action === 'branch') {
       if (!brancher) throw new HttpError('branching is not available on this server', 501);
       const session = await resolveLocalSession(id);
+      await checkEffort(body?.harness || session.harness || 'claude', typeof body?.model === 'string' ? body.model : '', body?.effort);
       let result;
       try {
         result = await brancher.branch(session, body);
@@ -677,6 +678,7 @@ export function createApi({
     const roots = spawnRoots(config); // hidden spawn dirs are allowed too
     const check = validateSpawnRequest(body, { spawnDirs: config.spawnDirs.map((d) => d.path) });
     if (!check.ok) throw new HttpError(check.error, 400);
+    await checkEffort(check.harness, check.model, check.effort);
     const link = spawnSlackRequest(body?.slack, check.prompt);
     try {
       check.dir = await resolveAllowedDir(check.dir, roots);
@@ -1810,6 +1812,25 @@ export function createApi({
     return { status: 200, body: { host: config.self, harnesses: withDefaults(rows), ghIdentities: config.ghIdentities ?? [] } };
   }
 
+  /**
+   * A picked effort must be one the picked model takes, as the CLI checks it: the model's own
+   * levels (Codex: per model; '' = Default, the model it starts), else the harness's. Read from
+   * this host's harness rows (cached, as GET harnesses). No check when the rows list no levels
+   * (a CLI from before per-spawn effort), nor for a shape error (validateSpawnRequest's).
+   */
+  async function checkEffort(harness, model, effort) {
+    if (typeof effort !== 'string' || !/^[a-z]{1,20}$/.test(effort)) return;
+    if (!harnessCache || Date.now() - harnessCache.at >= HARNESSES_TTL_MS) await localHarnesses(new URL('http://local/'));
+    const row = harnessCache?.rows.find((r) => r.id === (harness || 'claude'));
+    if (!Array.isArray(row?.efforts) || !row.efforts.length) return;
+    const own = (row.models ?? []).find((m) => m?.id === (model || ''))?.efforts;
+    const levels = Array.isArray(own) && own.length ? own : row.efforts;
+    if (levels.includes(effort)) return;
+    const name = row.label || row.id;
+    const who = model ? `${name} model ${model}` : `${name}'s default model`;
+    throw new HttpError(`effort "${effort}" is not one ${who} takes — pick one of: ${levels.join(', ')}`, 400);
+  }
+
   // The defaults come from the live config (a PUT changes them at once), the rest from the cache.
   function withDefaults(rows) {
     return rows.map((r) => {
@@ -1842,6 +1863,8 @@ export function createApi({
       throw new HttpError(String(err?.message ?? err), err?.timedOut ? 504 : 502);
     }
     config.harnessDefaults = { ...(config.harnessDefaults ?? {}), [harness]: { model, effort } };
+    // Default's levels are the default model's: the next GET re-reads them for the new one.
+    harnessCache = null;
     return { status: 200, body: { host: config.self, harness, model, effort } };
   }
 
@@ -1981,6 +2004,7 @@ export function createApi({
       // Validate before anything is fetched; the real dir is the worktree.
       check = validateSpawnRequest({ ...body, dir: '/' }, { spawnDirs: [] });
       if (!check.ok) throw new HttpError(check.error, 400);
+      await checkEffort(check.harness, check.model, check.effort);
     }
     let worktree;
     try {
@@ -2063,6 +2087,7 @@ export function createApi({
     const roots = spawnRoots(config); // hidden spawn dirs are allowed too
     const check = validateSpawnRequest(body, { spawnDirs: config.spawnDirs.map((d) => d.path) });
     if (!check.ok) throw new HttpError(check.error, 400);
+    await checkEffort(check.harness, check.model, check.effort);
     let task;
     try {
       task = await cli.taskShow(id);
@@ -2315,6 +2340,7 @@ export function createApi({
     const remote = spawnHost !== config.self;
     if (remote && !config.peers[spawnHost]) throw new HttpError(`unknown host: ${spawnHost} (not a peer with a web url)`, 400);
     if (remote && !requested) throw new HttpError(`dir is required for a sibling on ${spawnHost}`, 400);
+    if (!remote) await checkEffort(check.harness, check.model, check.effort); // a peer checks its own
 
     let stack;
     let created = false;

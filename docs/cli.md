@@ -161,7 +161,13 @@ default one — or the command fails, naming the levels; a bot whose effort its 
 fails its run with that message. The web's New session drawer and Branch dialog show an Effort chip
 row under Model with exactly those levels (Default first: no flag, so the default above or the
 harness's own); the drawer remembers the pick per harness, and a remembered level the picked model
-doesn't take reads Default until a model that takes it is picked again.
+doesn't take reads Default until a model that takes it is picked again. `stack spawn --on <host>`
+checks the level's shape here and passes `--effort` on; that host's `spawn` checks it against its
+own models. Known limits: a peer web server from before per-spawn effort ignores `effort`, so its
+sibling starts at the default effort with no error; Claude gets the Effort row on every host, so a
+Claude too old for `--effort` exits at start; Codex Default's levels follow
+`harnesses.codex.model` / `config.toml`'s `model`, not a `-m` or `--profile` in
+`harnesses.codex.command`.
 
 ### GitHub identities
 

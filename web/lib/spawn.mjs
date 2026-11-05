@@ -141,7 +141,7 @@ export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
     else harness = body.harness;
   }
   // Reasoning effort, typed as a flag: a lowercase level ('' / absent = the default). Which levels a
-  // model takes is the picker's business (`overmind harness list`); the CLI checks it too.
+  // model takes: the route checks it against the host's harness rows (api.mjs checkEffort).
   const effort = validEffort(body?.effort, errors);
   // A GitHub identity the session acts as (`ghIdentities`); '' / absent = the user's own.
   let ghIdentity = null;
