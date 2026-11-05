@@ -141,6 +141,20 @@ test('a Codex-only host (no ~/.claude/sessions, $CODEX_HOME/sessions there) is w
   assert.equal(w.status().mode, 'watch');
 });
 
+test('a Codex-only host before Codex\'s first run: degraded, then watch once $CODEX_HOME/sessions appears (armed by its parent watch, no list needed)', () => {
+  const { fs, clock, changes, w } = setup({ missing: ['sessions', 'codex', 'pi'] });
+  w.start();
+  assert.equal(w.status().mode, 'degraded');
+  const codex = dir('codex');
+  fs.dirs.add(codex); // Codex's first session writes its rollout
+  fs.fire(path.dirname(codex), 'sessions');
+  assert.ok(fs.open().some((x) => x.dir === codex), 'armed without waiting for a list');
+  assert.equal(w.status().roots.find((r) => r.id === 'codex').armed, true);
+  assert.equal(w.status().mode, 'watch');
+  clock.flush();
+  assert.deepEqual(changes, ['fast']);
+});
+
 test('registry: <pid>.json changes are fast, coalesced per window; keys, tmp files and headless runs are ignored', () => {
   const { fs, clock, changes, w } = setup();
   w.start();

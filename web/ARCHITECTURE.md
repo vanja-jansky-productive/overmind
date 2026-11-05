@@ -467,7 +467,9 @@ first caller and stops after 90 s without one. No watcher (`web.discovery.watch:
 `OVERMIND_WEB_WATCH=0`), a watch error or no session root at all (none of `~/.claude/sessions`,
 `$CODEX_HOME/sessions`, pi's `sessions` — any one is enough, so a host that never ran Claude is watched)
 → `degraded`/`ttl`: every tick
-lists and the 2 s TTL applies, as before. The kill-switch keeps the old cadence and cache; one difference is intended: a forced list (a mutation) asked while a list that started before the mutation is still running now chains a new one instead of returning the older list. `/api/health.discovery` reports the
+lists and the 2 s TTL applies, as before. The trade-off on a Codex-only host (watched, not degraded): a
+Codex started in a terminal shows on its first rollout write or the 30 s safety list, and an exit
+(Ctrl-C, a closed tab) only on the safety list — before, every tick listed and both showed within ~2 s. The kill-switch keeps the old cadence and cache; one difference is intended: a forced list (a mutation) asked while a list that started before the mutation is still running now chains a new one instead of returning the older list. `/api/health.discovery` reports the
 mode, `listRuns` and `lastListAt` (and, with a watcher, its age bound, gaps, events and roots).
 
 **Static**: every non-`/api/` GET/HEAD is served from the UI dir with a weak ETag
