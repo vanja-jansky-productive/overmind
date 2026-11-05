@@ -1027,7 +1027,7 @@ pub fn spawn(a: SpawnArgs) -> Result<()> {
     let launcher = crate::core::gh_identity::wrap_current(
         &opts
             .harness
-            .with_defaults(&opts.harness.command(), model.as_deref()),
+            .with_defaults(&opts.harness.command(), model.as_deref(), opts.effort()),
         opts.harness,
     )?;
     if hosts::dry_run() {

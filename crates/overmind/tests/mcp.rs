@@ -86,6 +86,21 @@ fn handshake_and_tool_list() {
     ] {
         assert!(!names.contains(&n), "{n} needs a terminal: {names:?}");
     }
+    // spawn's tool takes the picked reasoning effort, like the CLI flag
+    for n in [
+        "spawn",
+        "handoff",
+        "stack_spawn",
+        "pr_spawn",
+        "task_spawn",
+        "schedule_add",
+    ] {
+        let t = tools.iter().find(|t| t["name"] == n).unwrap();
+        assert_eq!(
+            t["inputSchema"]["properties"]["effort"]["type"], "string",
+            "{n} has no effort parameter"
+        );
+    }
     let send = tools.iter().find(|t| t["name"] == "send").unwrap();
     assert_eq!(send["inputSchema"]["required"], json!(["target", "text"]));
     assert_eq!(send["annotations"]["readOnlyHint"], false);

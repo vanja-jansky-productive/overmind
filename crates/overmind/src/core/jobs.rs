@@ -14,6 +14,7 @@
 //!     "promptFile": "~/notes/triage.md",
 //!     "command": "claude --dangerously-skip-permissions",
 //!     "model": "opus",
+//!     "effort": "high",
 //!     "keep": "24h"
 //!   }
 //! }
@@ -22,8 +23,8 @@
 //! `schedule` is a 5-field cron expression in local time (`*`, lists, ranges, `*/n`, names
 //! `mon`/`jan`, and `@hourly` / `@daily` / `@weekly`). `prompt` (inline) or `promptFile` (read
 //! at run time) is the first prompt. `command` replaces the launcher (config `claude`) for the
-//! job's sessions *and* everything they spawn — it travels as `OVERMIND_CMD`. `harness` and
-//! `model` as for `overmind spawn`. `ghIdentity` names a GitHub identity (`ghIdentities`) the
+//! job's sessions *and* everything they spawn — it travels as `OVERMIND_CMD`. `harness`,
+//! `model` and `effort` as for `overmind spawn` (an effort the model does not take fails the run). `ghIdentity` names a GitHub identity (`ghIdentities`) the
 //! job's sessions act as on GitHub — see [`crate::core::gh_identity`]. `enabled: false` pauses
 //! the job. `pull: true` brings `dir`'s git checkout up to date before each run (fetch, then a
 //! fast-forward only, as `overmind repos sync`); when it can't (local changes, diverged, offline)
@@ -408,6 +409,8 @@ pub struct Job {
     pub prompt: PromptSrc,
     pub harness: Harness,
     pub model: Option<String>,
+    /// Reasoning effort (`effort`, a level the harness takes for `model`); None = the default.
+    pub effort: Option<String>,
     /// Launcher for the job's sessions and their descendants (`OVERMIND_CMD`).
     pub command: Option<String>,
     /// The GitHub identity its sessions act as (`ghIdentity`, see [`crate::core::gh_identity`]).
@@ -562,6 +565,12 @@ fn job_from_value(name: &str, v: &Value) -> std::result::Result<Job, String> {
         Some(Value::Bool(b)) => *b,
         Some(other) => return Err(format!("pull must be true or false, not {other}")),
     };
+    let effort = text("effort")?;
+    if let Some(e) = &effort
+        && !crate::core::harness::is_level(e)
+    {
+        return Err(format!("effort `{e}` is not a level (low, high, …)"));
+    }
     let gh_identity = text("ghIdentity")?;
     if let Some(g) = &gh_identity
         && !crate::core::gh_identity::valid_name(g)
@@ -582,6 +591,7 @@ fn job_from_value(name: &str, v: &Value) -> std::result::Result<Job, String> {
         prompt,
         harness,
         model: text("model")?,
+        effort,
         command: text("command")?,
         gh_identity,
         enabled,
@@ -1129,9 +1139,11 @@ mod tests {
                 "dir": "~/Code/project",
                 "promptFile": "~/notes/triage.md",
                 "command": "claude --dangerously-skip-permissions",
-                "model": "opus"
+                "model": "opus",
+                "effort": "high"
             },
             "paused": { "schedule": "@hourly", "dir": "/tmp", "prompt": "hi", "enabled": false, "keep": "never" },
+            "badeffort": { "schedule": "@daily", "dir": "/tmp", "effort": "Very High" },
             "bad cron": { "schedule": "0 7 * *", "dir": "/tmp" },
             "nodir": { "schedule": "@daily" },
             "both": { "schedule": "@daily", "dir": "/tmp", "prompt": "a", "promptFile": "b" },
@@ -1140,13 +1152,20 @@ mod tests {
             "bots",
         );
         assert_eq!(s.jobs.len(), 2, "{:?}", s.problems);
-        assert_eq!(s.problems.len(), 3);
+        assert_eq!(s.problems.len(), 4);
+        assert!(
+            s.problems.iter().any(|p| p.contains("effort `Very High`")),
+            "{:?}",
+            s.problems
+        );
         let t = s.get("triage").unwrap();
         assert_eq!(t.prompt, PromptSrc::File("~/notes/triage.md".into()));
         assert_eq!(t.keep, Some(259_200));
         assert!(t.enabled);
         assert_eq!(t.model.as_deref(), Some("opus"));
+        assert_eq!(t.effort.as_deref(), Some("high"));
         let p = s.get("paused").unwrap();
+        assert_eq!(p.effort, None);
         assert!(!p.enabled);
         assert_eq!(p.keep, None);
         assert_eq!(p.prompt, PromptSrc::Inline("hi".into()));

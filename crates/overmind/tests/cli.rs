@@ -111,10 +111,121 @@ fn harness_list_codex_default_reads_plain_default() {
         .expect("a codex row");
     assert_eq!(codex["installed"], true, "{codex}");
     assert_eq!(
-        codex["models"][0],
-        serde_json::json!({ "id": "", "label": "Default" })
+        (&codex["models"][0]["id"], &codex["models"][0]["label"]),
+        (&serde_json::json!(""), &serde_json::json!("Default"))
     );
     assert_eq!(codex["models"][1]["label"], "GPT-6.1 Sol");
+}
+
+// `--effort` is one the picked model takes (Codex: per model, from its cache) and lands in the
+// launcher as each harness takes it; `harness list --json` gives each Codex model its levels.
+#[test]
+fn spawn_effort_is_checked_against_the_model_and_typed_per_harness() {
+    let env = common::Env::new();
+    let codex_home = env.path("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../testdata/codex/models_cache.json"
+        ),
+        codex_home.join("models_cache.json"),
+    )
+    .unwrap();
+    std::fs::write(codex_home.join("config.toml"), "model = \"gpt-6-luna\"\n").unwrap();
+    let stub = env.path("codex-stub");
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    env.write_config(&serde_json::json!({
+        "version": 1,
+        "harnesses": { "codex": { "command": stub.to_str().unwrap() } }
+    }));
+    let dir = env.path("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    let spawn = |args: &[&str]| {
+        let mut argv = vec![
+            "-n",
+            "spawn",
+            "--backend",
+            "tmux",
+            "--dir",
+            dir.to_str().unwrap(),
+        ];
+        argv.extend_from_slice(args);
+        env.cmd()
+            .args(&argv)
+            .env("CODEX_HOME", &codex_home)
+            .env("HOME", env.path("home"))
+            .output()
+            .unwrap()
+    };
+
+    let out = spawn(&[
+        "--harness",
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--effort",
+        "ultra",
+        "hi",
+    ]);
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("--model 'gpt-6.1-sol' -c model_reasoning_effort=ultra"),
+        "{text}"
+    );
+
+    // Luna has no `ultra`; nor has the default model it starts (config.toml's)
+    for args in [
+        &[
+            "--harness",
+            "codex",
+            "--model",
+            "gpt-6-luna",
+            "--effort",
+            "ultra",
+        ][..],
+        &["--harness", "codex", "--effort", "ultra"][..],
+    ] {
+        let out = spawn(args);
+        assert!(!out.status.success(), "{args:?} should fail");
+        let err = common::stderr(&out);
+        assert!(err.contains("effort \"ultra\" is not one Codex"), "{err}");
+        assert!(err.contains("low, medium, high, xhigh, max"), "{err}");
+    }
+
+    let out = spawn(&["--effort", "max", "hi"]);
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("claude --effort max"));
+    let out = spawn(&["--effort", "ultra"]);
+    assert!(!out.status.success(), "Claude takes no `ultra`");
+
+    let out = env
+        .cmd()
+        .args(["--local", "harness", "list", "--json"])
+        .env("CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let codex = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "codex")
+        .unwrap();
+    let levels = |i: usize| codex["models"][i]["efforts"].clone();
+    let five = serde_json::json!(["low", "medium", "high", "xhigh", "max"]);
+    assert_eq!(codex["models"][0]["id"], "");
+    assert_eq!(levels(0), five, "Default starts config.toml's Luna");
+    assert_eq!(codex["models"][1]["id"], "gpt-6.1-sol");
+    assert_eq!(
+        levels(1),
+        serde_json::json!(["low", "medium", "high", "xhigh", "max", "ultra"])
+    );
+    assert_eq!(codex["models"][4]["id"], "gpt-6-luna");
+    assert_eq!(levels(4), five);
 }
 
 // `harness list` (text) says why Codex can't be used here, with the fix: a configured launcher

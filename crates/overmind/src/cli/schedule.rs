@@ -29,6 +29,7 @@ pub struct AddOpts {
     pub dir: Option<String>,
     pub name: Option<String>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub harness: Harness,
     pub json: bool,
 }
@@ -77,6 +78,17 @@ pub fn add(o: AddOpts) -> Result<()> {
     }
     let name = o.name.as_deref().map(clean_name).transpose()?;
     let model = o.model.as_deref().map(clean_model).transpose()?.flatten();
+    let effort = o
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(String::from);
+    if let Some(e) = &effort {
+        o.harness
+            .check_effort(model.as_deref(), e)
+            .map_err(Error::Other)?;
+    }
     let gh_identity = crate::core::gh_identity::current();
     if gh_identity.is_some() && o.harness != Harness::Claude {
         return Err(Error::Other(format!(
@@ -128,6 +140,7 @@ pub fn add(o: AddOpts) -> Result<()> {
             prompt,
             name,
             model,
+            effort,
             harness: o.harness,
             gh_identity,
             created_at: now_ms,
@@ -400,7 +413,7 @@ fn fire(e: &Entry, task: Option<&Task>) -> Result<Option<String>> {
     let model = e.model.as_deref().map(clean_model).transpose()?.flatten();
     let launcher = crate::core::gh_identity::wrap(
         &e.harness
-            .with_defaults(&e.harness.command(), model.as_deref()),
+            .with_defaults(&e.harness.command(), model.as_deref(), e.effort.as_deref()),
         e.harness,
         e.gh_identity.as_deref(),
     )?;

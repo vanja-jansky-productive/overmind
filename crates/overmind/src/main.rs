@@ -310,6 +310,10 @@ enum Commands {
         /// Model for the new session (`<harness> --model <id>`; default: the harness's own)
         #[arg(long, value_name = "ID")]
         model: Option<String>,
+        /// Reasoning effort, one the model takes (`overmind harness list`): `claude --effort`,
+        /// `codex -c model_reasoning_effort=`, `pi --thinking` (default: Settings → Models, else the harness's)
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
         /// Coding agent to run: claude (default), codex or pi
         #[arg(long, value_enum)]
         harness: Option<HarnessArg>,
@@ -396,6 +400,10 @@ enum Commands {
         /// Model for the new session (`<harness> --model <id>`; default: the harness's own)
         #[arg(long, value_name = "ID")]
         model: Option<String>,
+        /// Reasoning effort, one the model takes (`overmind harness list`): `claude --effort`,
+        /// `codex -c model_reasoning_effort=`, `pi --thinking` (default: Settings → Models, else the harness's)
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
         /// Coding agent to run: claude (default), codex or pi
         #[arg(long, value_enum)]
         harness: Option<HarnessArg>,
@@ -849,6 +857,10 @@ enum StackCmd {
         /// Model for the new session (`<harness> --model <id>`)
         #[arg(long, value_name = "ID")]
         model: Option<String>,
+        /// Reasoning effort, one the model takes (`overmind harness list`): `claude --effort`,
+        /// `codex -c model_reasoning_effort=`, `pi --thinking` (default: Settings → Models, else the harness's)
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
         /// Coding agent to run: claude (default), codex or pi
         #[arg(long, value_enum)]
         harness: Option<HarnessArg>,
@@ -1033,6 +1045,10 @@ enum PrCmd {
         /// Model for the new session (`<harness> --model <id>`)
         #[arg(long, value_name = "ID")]
         model: Option<String>,
+        /// Reasoning effort, one the model takes (`overmind harness list`): `claude --effort`,
+        /// `codex -c model_reasoning_effort=`, `pi --thinking` (default: Settings → Models, else the harness's)
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
         /// Coding agent to run: claude (default), codex or pi
         #[arg(long, value_enum)]
         harness: Option<HarnessArg>,
@@ -1093,6 +1109,10 @@ enum TaskCmd {
         /// Model for the new session (`<harness> --model <id>`)
         #[arg(long, value_name = "ID")]
         model: Option<String>,
+        /// Reasoning effort, one the model takes (`overmind harness list`): `claude --effort`,
+        /// `codex -c model_reasoning_effort=`, `pi --thinking` (default: Settings → Models, else the harness's)
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
         /// Coding agent to run: claude (default), codex or pi
         #[arg(long, value_enum)]
         harness: Option<HarnessArg>,
@@ -1148,6 +1168,10 @@ struct ScheduleSpawnArgs {
     /// Model for the new session (`<harness> --model <id>`)
     #[arg(long, value_name = "ID")]
     model: Option<String>,
+    /// Reasoning effort, one the model takes (`overmind harness list`): `claude --effort`,
+    /// `codex -c model_reasoning_effort=`, `pi --thinking` (default: Settings → Models, else the harness's)
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
     /// Coding agent to run: claude (default), codex or pi
     #[arg(long, value_enum)]
     harness: Option<HarnessArg>,
@@ -1326,6 +1350,7 @@ impl ScheduleSpawnArgs {
             dir: self.dir,
             name: self.name,
             model: self.model,
+            effort: self.effort,
             harness: self.harness.map(Into::into).unwrap_or_default(),
             json: json || self.json,
         }
@@ -1644,6 +1669,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
             backend,
             name,
             model,
+            effort,
             harness,
             tmux_session,
             window,
@@ -1660,6 +1686,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 backend: backend.map(Into::into),
                 name,
                 model,
+                effort,
                 harness: harness.map(Into::into).unwrap_or_default(),
                 tmux_session,
                 window,
@@ -1701,6 +1728,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 prompt,
                 name,
                 model,
+                effort,
                 harness,
                 dir,
                 backend,
@@ -1722,6 +1750,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                     backend: backend.map(Into::into),
                     name,
                     model,
+                    effort,
                     harness: harness.map(Into::into).unwrap_or_default(),
                     tmux_session,
                     window,
@@ -1763,6 +1792,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
             backend,
             name,
             model,
+            effort,
             harness,
             tmux_session,
             tab,
@@ -1775,6 +1805,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 backend: backend.map(Into::into),
                 name,
                 model,
+                effort,
                 harness: harness.map(Into::into).unwrap_or_default(),
                 tmux_session,
                 // A handoff means "over there, out of my way" — a window unless told otherwise.
@@ -1911,6 +1942,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 backend,
                 name,
                 model,
+                effort,
                 harness,
                 tmux_session,
                 window,
@@ -1922,6 +1954,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                     backend: backend.map(Into::into),
                     name,
                     model,
+                    effort,
                     harness: harness.map(Into::into).unwrap_or_default(),
                     tmux_session,
                     window,
@@ -1964,6 +1997,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 backend,
                 name,
                 model,
+                effort,
                 harness,
                 tmux_session,
                 window,
@@ -1975,6 +2009,7 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                     backend: backend.map(Into::into),
                     name,
                     model,
+                    effort,
                     harness: harness.map(Into::into).unwrap_or_default(),
                     tmux_session,
                     window,

@@ -140,6 +140,25 @@ impl Harness {
         }
     }
 
+    /// The levels a spawn of `model` (None = the default it starts) may pick, lowest first.
+    /// Codex: that model's `supported_reasoning_levels` from its cache — the default being
+    /// `harnesses.codex.model`, else `config.toml`'s `model` — and the union when the cache
+    /// does not know the model. Claude and pi: the same levels for every model.
+    pub fn efforts_for(self, model: Option<&str>) -> Vec<String> {
+        if self == Harness::Codex {
+            let own = codex_model_efforts(&codex_home(), model, self.default_model().as_deref());
+            if !own.is_empty() {
+                return own;
+            }
+        }
+        self.efforts()
+    }
+
+    /// A picked effort is one `model` takes: else an error naming the levels it does take.
+    pub fn check_effort(self, model: Option<&str>, effort: &str) -> Result<(), String> {
+        check_effort_in(&self.efforts_for(model), self, model, effort)
+    }
+
     /// The configured default model (`harnesses.<id>.model`), when it is a safe id.
     pub fn default_model(self) -> Option<String> {
         crate::core::config::get()
@@ -155,17 +174,30 @@ impl Harness {
             .filter(|e| is_level(e))
     }
 
-    /// The launcher a spawn types: `--model` (the picked one, else the default) and the default
-    /// effort appended. A launcher that already sets one (a job's own command, a wrapper with
-    /// flags) keeps its own: the default is not added on top.
-    pub fn with_defaults(self, launcher: &str, model: Option<&str>) -> String {
-        self.with(launcher, model, self.default_model(), self.default_effort())
+    /// The launcher a spawn types: `--model` and the effort (the picked ones, else the
+    /// defaults) appended. A launcher that already sets one (a job's own command, a wrapper with
+    /// flags) keeps its own: the default is not added on top; a picked one still is (the
+    /// harness's last flag wins).
+    pub fn with_defaults(
+        self,
+        launcher: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> String {
+        self.with(
+            launcher,
+            model,
+            effort,
+            self.default_model(),
+            self.default_effort(),
+        )
     }
 
     fn with(
         self,
         launcher: &str,
         model: Option<&str>,
+        effort: Option<&str>,
         def_model: Option<String>,
         def_effort: Option<String>,
     ) -> String {
@@ -186,9 +218,15 @@ impl Harness {
             out.push_str(" --model ");
             out.push_str(&crate::core::tools::shq(&m));
         }
-        let sets_effort =
-            has(&["--effort", "--thinking"]) || launcher.contains("model_reasoning_effort");
-        if let Some(e) = def_effort.filter(|_| !sets_effort) {
+        let effort = effort
+            .filter(|e| !e.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                let sets_effort =
+                    has(&["--effort", "--thinking"]) || launcher.contains("model_reasoning_effort");
+                def_effort.filter(|_| !sets_effort)
+            });
+        if let Some(e) = effort {
             out.push(' ');
             out.push_str(&self.effort_args(&e));
         }
@@ -221,12 +259,17 @@ impl std::fmt::Display for Harness {
 pub struct ModelOption {
     pub id: String,
     pub label: String,
+    /// The reasoning-effort levels this model takes, lowest first, when the harness says per
+    /// model (Codex's `supported_reasoning_levels`); empty = the harness's `efforts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
 }
 
 fn opt(id: &str, label: &str) -> ModelOption {
     ModelOption {
         id: id.into(),
         label: label.into(),
+        efforts: Vec::new(),
     }
 }
 
@@ -329,14 +372,99 @@ pub fn pi_home() -> PathBuf {
 }
 
 /// Codex's picker: Default, then the newest listed model of each family in its own cache
-/// (`models_cache.json`). Default reads plain "Default", like Claude's: `config.toml`'s
-/// `model` is what it starts, but the chip does not name it.
-pub fn codex_models(home: &Path) -> Vec<ModelOption> {
-    let cache: Value = std::fs::read_to_string(home.join("models_cache.json"))
+/// (`models_cache.json`), each with the effort levels it takes. Default reads plain "Default",
+/// like Claude's: `config.toml`'s `model` is what it starts, but the chip does not name it;
+/// its levels are those of the model it starts (`default`: overmind's `harnesses.codex.model`,
+/// else `config.toml`'s).
+pub fn codex_models(home: &Path, default: Option<&str>) -> Vec<ModelOption> {
+    let mut out = codex_models_from(&codex_cache(home));
+    if let Some(d) = out.first_mut() {
+        d.efforts = codex_model_efforts(home, None, default);
+    }
+    out
+}
+
+fn codex_cache(home: &Path) -> Value {
+    std::fs::read_to_string(home.join("models_cache.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(Value::Null);
-    codex_models_from(&cache)
+        .unwrap_or(Value::Null)
+}
+
+/// `config.toml`'s top-level `model = "…"` (a `[profiles.x]` one is not the default).
+fn codex_config_model(home: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
+    text.lines()
+        .map(str::trim)
+        .take_while(|l| !l.starts_with('['))
+        .find_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            let v = v
+                .split('#')
+                .next()?
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'');
+            (k.trim() == "model" && is_model_id(v)).then(|| v.to_string())
+        })
+}
+
+/// The effort levels Codex's cache lists for `model` (None = the default: `default`, else
+/// `config.toml`'s `model`), lowest first; empty when the cache does not know the model.
+pub fn codex_model_efforts(home: &Path, model: Option<&str>, default: Option<&str>) -> Vec<String> {
+    let Some(slug) = model
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .or_else(|| default.filter(|m| !m.is_empty()).map(str::to_string))
+        .or_else(|| codex_config_model(home))
+    else {
+        return Vec::new();
+    };
+    codex_cache(home)
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|m| m.get("slug").and_then(Value::as_str) == Some(slug.as_str()))
+        .map(codex_levels)
+        .unwrap_or_default()
+}
+
+/// One cache entry's `supported_reasoning_levels[].effort`, in its order.
+fn codex_levels(m: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in m
+        .get("supported_reasoning_levels")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l.get("effort").and_then(Value::as_str))
+        .filter(|e| is_level(e))
+    {
+        if !out.iter().any(|o| o == e) {
+            out.push(e.to_string());
+        }
+    }
+    out
+}
+
+/// `check_effort`'s rule on given levels: `effort` must be a level and one of `levels`.
+fn check_effort_in(
+    levels: &[String],
+    h: Harness,
+    model: Option<&str>,
+    effort: &str,
+) -> Result<(), String> {
+    if is_level(effort) && levels.iter().any(|l| l == effort) {
+        return Ok(());
+    }
+    let who = match model.filter(|m| !m.is_empty()) {
+        Some(m) => format!("{} model {m}", h.label()),
+        None => format!("{}'s default model", h.label()),
+    };
+    Err(format!(
+        "effort \"{effort}\" is not one {who} takes — pick one of: {}",
+        levels.join(", ")
+    ))
 }
 
 /// The picker from Codex's model cache: Default, then of the `visibility: "list"` models the
@@ -367,7 +495,9 @@ pub fn codex_models_from(cache: &Value) -> Vec<ModelOption> {
             Some((prefix, v, suffix)) => (format!("{prefix}:{suffix}"), version_key(v)),
             None => (id.to_lowercase(), (0, 0)),
         };
-        let candidate = (family, version, prio, opt(id, &label));
+        let mut option = opt(id, &label);
+        option.efforts = codex_levels(m);
+        let candidate = (family, version, prio, option);
         match newest.iter_mut().find(|n| n.0 == candidate.0) {
             Some(n)
                 if (candidate.1, std::cmp::Reverse(candidate.2))
@@ -434,30 +564,16 @@ pub fn is_level(e: &str) -> bool {
 /// Codex's effort levels: every `supported_reasoning_levels[].effort` of its model cache, in
 /// first-seen order (models list them lowest first).
 pub fn codex_efforts(home: &Path) -> Vec<String> {
-    let cache: Value = std::fs::read_to_string(home.join("models_cache.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(Value::Null);
     let mut out: Vec<String> = Vec::new();
-    for m in cache
+    for m in codex_cache(home)
         .get("models")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
-        for l in m
-            .get("supported_reasoning_levels")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(e) = l
-                .get("effort")
-                .and_then(Value::as_str)
-                .filter(|e| is_level(e))
-                && !out.iter().any(|o| o == e)
-            {
-                out.push(e.to_string());
+        for e in codex_levels(m) {
+            if !out.contains(&e) {
+                out.push(e);
             }
         }
     }
@@ -666,7 +782,7 @@ pub fn info(h: Harness, with_models: bool) -> HarnessInfo {
     let models = match (with_models && installed, h) {
         (false, _) => Vec::new(),
         (true, Harness::Claude) => claude_models(),
-        (true, Harness::Codex) => codex_models(&codex_home()),
+        (true, Harness::Codex) => codex_models(&codex_home(), h.default_model().as_deref()),
         (true, Harness::Pi) => pi_models(&pi_home(), &command),
     };
     let problem = problem(
@@ -1631,35 +1747,48 @@ mod tests {
         let s = |o: &str| Some(o.to_string());
         // picked model, no defaults: as before
         assert_eq!(
-            Claude.with("claude", Some("claude-haiku-5-5"), None, None),
+            Claude.with("claude", Some("claude-haiku-5-5"), None, None, None),
             "claude --model 'claude-haiku-5-5'"
         );
-        assert_eq!(Claude.with("cc", None, None, None), "cc");
+        assert_eq!(Claude.with("cc", None, None, None, None), "cc");
         // defaults fill in; a picked model wins over the default one
         assert_eq!(
-            Claude.with("claude", None, s("claude-opus-5-5"), s("high")),
+            Claude.with("claude", None, None, s("claude-opus-5-5"), s("high")),
             "claude --model 'claude-opus-5-5' --effort high"
         );
         assert_eq!(
-            Claude.with("claude", Some("x"), s("claude-opus-5-5"), None),
+            Claude.with("claude", Some("x"), None, s("claude-opus-5-5"), None),
             "claude --model 'x'"
         );
         assert_eq!(
-            Codex.with("codex", None, None, s("xhigh")),
+            Codex.with("codex", None, None, None, s("xhigh")),
             "codex -c model_reasoning_effort=xhigh"
         );
         assert_eq!(
-            Pi.with("pi", None, s("anthropic/claude-opus-5-5"), s("medium")),
+            Pi.with(
+                "pi",
+                None,
+                None,
+                s("anthropic/claude-opus-5-5"),
+                s("medium")
+            ),
             "pi --model 'anthropic/claude-opus-5-5' --thinking medium"
         );
         // a launcher that already sets them keeps its own
         assert_eq!(
-            Claude.with("claude --model opus --effort low", None, s("y"), s("high")),
+            Claude.with(
+                "claude --model opus --effort low",
+                None,
+                None,
+                s("y"),
+                s("high")
+            ),
             "claude --model opus --effort low"
         );
         assert_eq!(
             Codex.with(
                 "codex -m gpt-6 -c model_reasoning_effort=low",
+                None,
                 None,
                 s("y"),
                 s("high")
@@ -1667,14 +1796,131 @@ mod tests {
             "codex -m gpt-6 -c model_reasoning_effort=low"
         );
         assert_eq!(
-            Pi.with("pi --thinking=low", None, None, s("high")),
+            Pi.with("pi --thinking=low", None, None, None, s("high")),
             "pi --thinking=low"
         );
         // a picked model is still added to a launcher with its own --model (the CLI's last one wins)
         assert_eq!(
-            Claude.with("claude --model opus", Some("x"), None, None),
+            Claude.with("claude --model opus", Some("x"), None, None, None),
             "claude --model opus --model 'x'"
         );
+        // a picked effort wins over the default one, and is added to a launcher with its own
+        assert_eq!(
+            Claude.with("claude", None, Some("max"), None, s("high")),
+            "claude --effort max"
+        );
+        assert_eq!(
+            Codex.with("codex", Some("gpt-6-luna"), Some("low"), None, s("xhigh")),
+            "codex --model 'gpt-6-luna' -c model_reasoning_effort=low"
+        );
+        assert_eq!(
+            Codex.with(
+                "codex -c model_reasoning_effort=high",
+                None,
+                Some("low"),
+                None,
+                None
+            ),
+            "codex -c model_reasoning_effort=high -c model_reasoning_effort=low"
+        );
+        assert_eq!(
+            Pi.with("pi", None, Some("off"), None, None),
+            "pi --thinking off"
+        );
+        // an empty pick is no pick
+        assert_eq!(
+            Claude.with("claude", None, Some(""), None, s("high")),
+            "claude --effort high"
+        );
+    }
+
+    /// The fixture cache (the real one's ten models) in a temp CODEX_HOME.
+    fn codex_home_with_fixture(config: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../testdata/codex/models_cache.json"
+            ),
+            dir.path().join("models_cache.json"),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("config.toml"), config).unwrap();
+        dir
+    }
+
+    #[test]
+    fn codex_models_carry_the_effort_levels_each_takes() {
+        let lv = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let six = lv(&["low", "medium", "high", "xhigh", "max", "ultra"]);
+        let five = lv(&["low", "medium", "high", "xhigh", "max"]);
+        let dir = codex_home_with_fixture(
+            "model = \"gpt-6-luna\"\n[profiles.x]\nmodel = \"gpt-6.1-sol\"\n",
+        );
+        let models = super::codex_models(dir.path(), None);
+        let efforts: Vec<(&str, &Vec<String>)> =
+            models.iter().map(|m| (m.id.as_str(), &m.efforts)).collect();
+        assert_eq!(
+            efforts,
+            vec![
+                // Default starts config.toml's top-level model: Luna, which has no `ultra`
+                ("", &five),
+                ("gpt-6.1-sol", &six),
+                ("gpt-6.1-terra", &six),
+                ("gpt-6-astra", &six),
+                ("gpt-6-luna", &five),
+            ]
+        );
+        // overmind's own default (Settings → Models) is what Default starts when set
+        assert_eq!(
+            super::codex_models(dir.path(), Some("gpt-6.1-sol"))[0].efforts,
+            six
+        );
+        // per model, then the default, then nothing known (a custom slug, no cache)
+        let e = |m: Option<&str>, d: Option<&str>| super::codex_model_efforts(dir.path(), m, d);
+        assert_eq!(e(Some("gpt-6-luna"), Some("gpt-6.1-sol")), five);
+        assert_eq!(
+            e(Some("gpt-reserve"), None),
+            five,
+            "a hidden model typed by hand"
+        );
+        assert_eq!(e(None, None), five);
+        assert_eq!(e(Some(""), Some("gpt-6-astra")), six);
+        assert!(e(Some("my-own-model"), None).is_empty());
+        assert!(
+            super::codex_model_efforts(&dir.path().join("missing"), Some("gpt-6-luna"), None)
+                .is_empty()
+        );
+        // no config.toml model, no overmind default: nothing to look up
+        let bare = codex_home_with_fixture("# no model\n");
+        assert!(super::codex_model_efforts(bare.path(), None, None).is_empty());
+        assert!(super::codex_models(bare.path(), None)[0].efforts.is_empty());
+        // the JSON keeps `efforts` off entries without them (Claude's, pi's)
+        assert_eq!(
+            serde_json::to_value(super::opt("opus", "Opus 5.5")).unwrap(),
+            serde_json::json!({ "id": "opus", "label": "Opus 5.5" })
+        );
+    }
+
+    #[test]
+    fn a_picked_effort_must_be_one_the_model_takes() {
+        let five: Vec<String> = ["low", "medium", "high", "xhigh", "max"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let c = |m: Option<&str>, e: &str| super::check_effort_in(&five, Harness::Codex, m, e);
+        assert_eq!(c(Some("gpt-6-luna"), "max"), Ok(()));
+        assert_eq!(
+            c(Some("gpt-6-luna"), "ultra"),
+            Err("effort \"ultra\" is not one Codex model gpt-6-luna takes — pick one of: low, medium, high, xhigh, max".into())
+        );
+        assert!(
+            c(None, "ultra")
+                .unwrap_err()
+                .contains("Codex's default model")
+        );
+        assert!(c(None, "HIGH").is_err(), "not a level");
+        assert!(c(None, "").is_err());
     }
 
     #[test]
@@ -1999,7 +2245,7 @@ mod tests {
         // a configured model does not rename the chip: Default reads "Default", as Claude's
         std::fs::write(dir.path().join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
         assert_eq!(
-            ids(&super::codex_models(dir.path())),
+            ids(&super::codex_models(dir.path(), None)),
             vec![
                 ("", "Default"),
                 ("gpt-6.1-sol", "GPT-6.1 Sol"),
@@ -2009,7 +2255,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            ids(&super::codex_models(&dir.path().join("missing"))),
+            ids(&super::codex_models(&dir.path().join("missing"), None)),
             vec![("", "Default")]
         );
     }

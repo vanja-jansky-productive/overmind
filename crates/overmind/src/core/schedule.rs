@@ -88,6 +88,9 @@ pub struct Entry {
     pub prompt: String,
     pub name: Option<String>,
     pub model: Option<String>,
+    /// Reasoning effort (`overmind schedule add --effort`); absent = the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     pub harness: Harness,
     pub gh_identity: Option<String>,
     pub created_at: i64,

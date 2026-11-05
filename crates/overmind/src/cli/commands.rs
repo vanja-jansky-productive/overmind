@@ -664,6 +664,9 @@ pub struct SpawnOpts {
     pub name: Option<String>,
     /// Model for the new session (`<harness> --model <id>`); None = the harness's default.
     pub model: Option<String>,
+    /// Reasoning effort (`--effort`, `-c model_reasoning_effort=`, `--thinking`); None = the
+    /// default (`harnesses.<id>.effort`, else the harness's own). Checked against `model`.
+    pub effort: Option<String>,
     /// Which coding agent to launch (default Claude).
     pub harness: Harness,
     pub tmux_session: Option<String>,
@@ -693,7 +696,37 @@ impl SpawnOpts {
         }
         let backend = self.backend.unwrap_or_else(default_backend);
         let name = self.name.as_deref().map(clean_name).transpose()?;
+        self.check_effort()?;
         Ok((dir, backend, name))
+    }
+
+    /// The picked effort, when there is one: one the picked model (else the default) takes.
+    pub(crate) fn check_effort(&self) -> Result<()> {
+        let Some(e) = self
+            .effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+        else {
+            return Ok(());
+        };
+        let model = self
+            .model
+            .as_deref()
+            .map(clean_model)
+            .transpose()?
+            .flatten();
+        self.harness
+            .check_effort(model.as_deref(), e)
+            .map_err(Error::Other)
+    }
+
+    /// The picked effort, trimmed; None when none was picked.
+    pub(crate) fn effort(&self) -> Option<&str> {
+        self.effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
     }
 }
 
@@ -741,7 +774,7 @@ pub fn spawn(prompt: Option<String>, from: Option<String>, opts: SpawnOpts) -> R
     let launcher = crate::core::gh_identity::wrap_current(
         &opts
             .harness
-            .with_defaults(&opts.harness.command(), model.as_deref()),
+            .with_defaults(&opts.harness.command(), model.as_deref(), opts.effort()),
         opts.harness,
     )?;
     if crate::core::hosts::dry_run() {
@@ -787,7 +820,9 @@ fn spawn_linked(
     link: &crate::cli::slack::SpawnLink,
 ) -> Result<()> {
     let launcher = crate::core::gh_identity::wrap_current(
-        &opts.harness.with_defaults(&opts.harness.command(), model),
+        &opts
+            .harness
+            .with_defaults(&opts.harness.command(), model, opts.effort()),
         opts.harness,
     )?;
     if crate::core::hosts::dry_run() {
@@ -855,7 +890,7 @@ fn spawn_from(source: &str, extra: Option<String>, mut opts: SpawnOpts) -> Resul
     let launcher = crate::core::gh_identity::wrap_current(
         &opts
             .harness
-            .with_defaults(&opts.harness.command(), model.as_deref()),
+            .with_defaults(&opts.harness.command(), model.as_deref(), opts.effort()),
         opts.harness,
     )?;
     if crate::core::hosts::dry_run() {
@@ -1033,7 +1068,7 @@ pub fn handoff(
         let launcher = crate::core::gh_identity::wrap_current(
             &opts
                 .harness
-                .with_defaults(&opts.harness.command(), model.as_deref()),
+                .with_defaults(&opts.harness.command(), model.as_deref(), opts.effort()),
             opts.harness,
         )?;
         let path_s = path.display().to_string();
@@ -1061,7 +1096,7 @@ pub fn handoff(
     let launcher = crate::core::gh_identity::wrap_current(
         &opts
             .harness
-            .with_defaults(&opts.harness.command(), model.as_deref()),
+            .with_defaults(&opts.harness.command(), model.as_deref(), opts.effort()),
         opts.harness,
     )?;
     let desc = backend::spawn(

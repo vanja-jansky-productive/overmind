@@ -259,6 +259,7 @@ pub fn status(r: &str, want: Option<&str>, json: bool) -> Result<()> {
 /// `overmind task spawn <ref> [prompt]`: a new session whose first prompt is the task's context
 /// line + `prompt`.
 pub fn spawn(r: &str, prompt: Option<String>, opts: crate::cli::commands::SpawnOpts) -> Result<()> {
+    opts.check_effort()?;
     let id = parse_ref(r)?;
     let (t, _, _, _) = tasks::lookup(&settings(), &id, false)?;
     let line = tasks::context_line(&t);

@@ -294,6 +294,7 @@ pub fn spawn(
     prompt: Option<String>,
     mut opts: crate::cli::commands::SpawnOpts,
 ) -> Result<()> {
+    opts.check_effort()?;
     let wt = checkout(r, false)?;
     let extra = prompt.as_deref().map(str::trim).filter(|p| !p.is_empty());
     let first = match extra {

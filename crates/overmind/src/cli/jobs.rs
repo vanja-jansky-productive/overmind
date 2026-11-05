@@ -103,6 +103,7 @@ fn job_json(j: &Job, st: &jobs::JobState, rows: &[Session], runs: usize) -> Valu
         "dir": j.dir,
         "harness": j.harness.id(),
         "model": j.model,
+        "effort": j.effort,
         "command": j.command,
         "keep": j.keep,
         "pull": j.pull,
@@ -241,11 +242,15 @@ pub fn show(name: &str, json_out: bool) -> Result<()> {
     }
     let launcher = j.command.clone().unwrap_or_else(|| j.harness.command());
     println!(
-        "  launcher  {}{}",
+        "  launcher  {}{}{}",
         launcher,
         j.model
             .as_deref()
             .map(|m| format!(" --model {m}"))
+            .unwrap_or_default(),
+        j.effort
+            .as_deref()
+            .map(|e| format!(" {}", j.harness.effort_args(e)))
             .unwrap_or_default()
     );
     if let Some(g) = &j.gh_identity {
@@ -426,6 +431,11 @@ fn start(j: &Job, trigger: &str, slot: Option<i64>, branch: Option<&Branch>) -> 
         Ok(m) => m.flatten(),
         Err(e) => return fail(run, e.to_string()),
     };
+    if let Some(e) = &j.effort
+        && let Err(why) = j.harness.check_effort(model.as_deref(), e)
+    {
+        return fail(run, why);
+    }
     // `pull: true`: before the prompt is read — a promptFile in `dir` is read fresh.
     let pull_note = if j.pull && !crate::core::hosts::dry_run() {
         let p = jobs::pull_dir(Path::new(&dir));
@@ -478,6 +488,7 @@ fn start(j: &Job, trigger: &str, slot: Option<i64>, branch: Option<&Branch>) -> 
             .unwrap_or_else(|| j.harness.command())
             .as_str(),
         model.as_deref(),
+        j.effort.as_deref(),
     );
     let launcher =
         match crate::core::gh_identity::wrap(&launcher, j.harness, j.gh_identity.as_deref()) {
