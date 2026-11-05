@@ -827,6 +827,34 @@ Cancel. Web API: `GET /api/hosts/:host/schedule`, `POST /api/hosts/:host/schedul
 (+ time), dir, prompt?, name?, model?, harness?, ghIdentity? }` → `{ host, entry }`,
 `POST /api/hosts/:host/schedule/:id/cancel`.
 
+## Lessons
+
+What sessions learn about doing their work, kept per host and brought back into new sessions —
+the design, ranking and file formats are in [lessons.md](lessons.md).
+
+| command | does |
+| --- | --- |
+| `overmind lesson learn --rule <r> --consequence <c> [--title] [--kind] [--scope global\|repo] [--repo o/n] [--tier 0\|1\|2] [--quote] [--session] [--confidence] [--json]` | record a lesson, active at once (confidence 0.7). Scope default: `repo` inside a GitHub checkout (its `origin`), else `global`; tier default 1. The evidence links back to the session (`--session`, default `$CLAUDE_CODE_SESSION_ID`) |
+| `overmind lesson [list] [--all] [--repo o/n] [--json]` (`lessons`, `ls`) | active lessons (`--all`: retired ones too; `--repo`: the ones that hold there) |
+| `overmind lesson show <id> [--json]` | one lesson with its evidence (`claude --resume <session>` per quote); counts as a use. `<id>` may be just its number |
+| `overmind lesson search <query> [--all] [--json]` | full text over every tier |
+| `overmind lesson recall [--task <text>] [-C DIR] [--limit 5] [--json]` | what a session in `DIR` would get, with scores and why (`tier0`, `repo`, `match`) |
+| `overmind lesson confirm <id> [--quote]` | it held again: occurrences + 1, confidence + 0.05 (up to 0.95) |
+| `overmind lesson retire <id> --reason <r>` | it misled: never injected or proposed again (kept) |
+| `overmind lesson edit <id> [--kind] [--title] [--rule] [--consequence] [--scope] [--repo] [--tier] [--confidence]` | change fields |
+| `overmind lesson proposals [--json]` | lessons mined from finished sessions, waiting for you |
+| `overmind lesson accept <pid> [same flags as edit]` | make a proposal a lesson (confidence 0.5) |
+| `overmind lesson reject <pid> [--reason]` | drop it; it is remembered and never proposed again |
+| `overmind lesson mine <session-id \| transcript.jsonl> [-C DIR] [--model] [--again] [--json]` | mine a transcript now (from where its last mine stopped; `--again`: from the start). Sessions with fewer than 3 new prompts are skipped. Runs `claude -p` (`lessons.mineModel`, default `sonnet`) |
+| `overmind lesson import <file.jsonl>… [--repo o/n]… [--json]` | adopt agent-memory (schema 1) lessons: active, `global` or scoped to a repo you work in (under `repos.roots`, named by your lessons, or `--repo`), at confidence 0.3, never tier 0, never twice by id |
+| `overmind lesson export [-o DIR]` | your own lessons (not imported ones) as schema-1 JSONL on stdout, or `DIR/<persona>.jsonl`; secret-looking text is left out, home paths become `~` |
+| `overmind lesson hook [--print-config]` | the Claude Code hook: `SessionStart` injects up to 5 lessons, `UserPromptSubmit` up to 3 more on the first prompt, `SessionEnd` starts the miner in the background. Reads the hook JSON on stdin; prints nothing on any error; does nothing for headless `claude -p` or with `OVERMIND_LESSONS=off`. `--print-config` prints the `settings.json` snippet |
+
+`--json` of `list`, `show`, `learn` is the lesson record (schema-1 field names, snake_case, plus
+`origin` and `adopted_from`). State: `${XDG_STATE_HOME:-~/.local/state}/overmind/lessons.json`
+(`OVERMIND_LESSONS_FILE`). Config `lessons` (optional): `handle` (id prefix, default `$USER`),
+`persona` (default `claude`), `mineModel`, `mine` (`false`: the `SessionEnd` hook does not mine).
+
 ## Web
 
 | command | does |

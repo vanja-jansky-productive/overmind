@@ -8,6 +8,7 @@ pub mod group;
 pub mod hosts;
 pub mod init;
 pub mod jobs;
+pub mod lessons;
 pub mod mcp;
 pub mod prs;
 pub mod render;

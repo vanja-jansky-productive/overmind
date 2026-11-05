@@ -5,9 +5,9 @@ use colored::Colorize;
 
 use overmind::cli::{
     brief as brief_cmd, codex as codex_cmd, commands, config_cmd, group, hosts as host_cmds, init,
-    jobs as jobs_cmd, mcp, prs as prs_cmd, repos as repos_cmd, restore, schedule as schedule_cmd,
-    skill, slack as slack_cmd, stack as stack_cmds, tasks as tasks_cmd, tmux as tmux_cmds,
-    usage as usage_cmd, web,
+    jobs as jobs_cmd, lessons as lessons_cmd, mcp, prs as prs_cmd, repos as repos_cmd, restore,
+    schedule as schedule_cmd, skill, slack as slack_cmd, stack as stack_cmds, tasks as tasks_cmd,
+    tmux as tmux_cmds, usage as usage_cmd, web,
 };
 use overmind::core::config;
 use overmind::core::discovery::Backend;
@@ -594,6 +594,14 @@ enum Commands {
         /// Machine-readable output
         #[arg(long)]
         json: bool,
+    },
+
+    /// Lessons sessions learned about doing their work: learn, recall, review mined proposals,
+    /// import/export agent-memory JSONL; `lesson hook` brings them into sessions (docs/lessons.md)
+    #[command(visible_alias = "lessons")]
+    Lesson {
+        #[command(subcommand)]
+        cmd: Option<lessons_cmd::LessonCmd>,
     },
 
     /// The web UI: serve it, or install it as a login service
@@ -1362,7 +1370,10 @@ fn placement(c: &Commands) -> Placement {
         | Commands::Mcp { .. }
         | Commands::Done { .. }
         | Commands::Probe
-        | Commands::CodexHook => Placement::Here,
+        | Commands::CodexHook
+        | Commands::Lesson {
+            cmd: Some(lessons_cmd::LessonCmd::Hook { .. } | lessons_cmd::LessonCmd::Mine { .. }),
+        } => Placement::Here,
         _ => Placement::Dispatch(Scope::SelfHost),
     }
 }
@@ -2046,6 +2057,13 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
                 print,
             })?,
         },
+        Commands::Lesson { cmd } => {
+            lessons_cmd::run(cmd.unwrap_or(lessons_cmd::LessonCmd::List {
+                all: false,
+                repo: None,
+                json: false,
+            }))?
+        }
         Commands::Web { action } => match action {
             WebCmd::Serve { port, bind, dir } => web::serve(web::ServeOpts { port, bind, dir })?,
             WebCmd::Build { dir, install } => web::build(web::BuildOpts { dir, install })?,
