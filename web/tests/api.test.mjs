@@ -1148,6 +1148,29 @@ test('messages: no `after` is today\'s shape (+ full/from/stable/cursor), the sc
   assert.equal(gone.body.screen, null, 'the card drops the moment the prompt leaves the terminal');
 });
 
+test('messages: an open question left behind the window (a killed run, resumed) does not hide the screen prompt', async (t) => {
+  const id = 'cccccccc-0000-0000-0000-000000000038';
+  const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%4', updated_at: 4 }]);
+  // The orphan: an AskUserQuestion that never got a result, then 70 messages of the resumed run.
+  const orphan = { role: 'assistant', kind: 'question', id: 'toolu_orphan', questions: [{ question: 'Old?', header: 'Old', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }], text: 'Old?' };
+  const after = Array.from({ length: 70 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', kind: i % 2 ? 'assistant' : 'user', text: `m${i}` }));
+  host.transcripts = fakeTranscripts([orphan, ...after]);
+  host.backend.peek = async () => '←  ☐ A  ✔ Submit  →\n\nFirst?\n\n❯ 1. Yes\n  2. No\n  3. Type something.\n\nEnter to select · Esc to cancel';
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, warmOvermind: false });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  const url = (q) => `${base}/api/hosts/solo/sessions/${id}/messages?limit=60${q}`;
+
+  const delta = await get(url('&after='));
+  assert.equal(delta.body.screen?.kind, 'question', 'the orphan is 70 messages back, outside the window');
+  assert.equal(delta.body.screen.questions[0].question, 'First?');
+  const legacy = await get(url(''));
+  assert.equal(legacy.body.messages.at(-1).kind, 'question', 'legacy shape: the prompt last, as today');
+  assert.match(legacy.body.messages.at(-1).id, /^screen:/);
+});
+
 test('messages: a real reader behind the route — an idle poll is "same", an append is a small delta', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-delta-route-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

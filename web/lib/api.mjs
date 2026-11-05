@@ -366,8 +366,9 @@ export function createApi({
       const session = await resolveLocalSession(id);
       const result = await transcripts.delta(session, { limit, after });
       if (!result) throw new HttpError('transcript not found for this session', 404);
-      // Over the whole cached list, never a limit-500 read (that would grow the tail every poll).
-      const onScreen = await screenQuestion(session, result.all);
+      // Over the window (an open question further back is an orphan of a killed run), the full
+      // window even when the answer is a delta: from the cached list, never another read.
+      const onScreen = await screenQuestion(session, result.all.slice(-limit));
       if (after === null && onScreen) result.messages.push(onScreen);
       return {
         status: 200,
