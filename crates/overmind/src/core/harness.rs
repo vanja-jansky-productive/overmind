@@ -624,9 +624,10 @@ pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> 
             }
             Ok(None) if now < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
-                // the group's id is the child's pid (`process_group(0)`)
-                let _ = Command::new("kill")
-                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                // the group's id is the child's pid (`process_group(0)`); the shell's `kill`
+                // builtin, so no `kill` binary on $PATH is needed
+                let _ = Command::new("/bin/sh")
+                    .args(["-c", "kill -KILL -- -$0", &child.id().to_string()])
                     .stderr(std::process::Stdio::null())
                     .status();
                 let _ = child.kill();

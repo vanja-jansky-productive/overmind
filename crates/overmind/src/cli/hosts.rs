@@ -191,6 +191,13 @@ fn launcher_version(bin: &Path) -> String {
     .unwrap_or_else(|| "?".into())
 }
 
+/// Claude's own installer can put it in `~/.claude/local` only, reached through a shell
+/// alias: looked for there when the launch command's first word is a bare `claude`
+/// (`claude --model opus` too).
+fn claude_local_fallback(h: Harness, command: &str) -> bool {
+    h == Harness::Claude && command.split_whitespace().next() == Some("claude")
+}
+
 fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
     let o = Command::new(cmd).args(args).output().ok()?;
     if !o.status.success() {
@@ -218,9 +225,8 @@ pub fn gather_probe() -> Probe {
     let version_of = |h: Harness| {
         let command = h.command();
         harness::binary(&command)
-            // Claude's own installer can put it in ~/.claude/local only
             .or_else(|| {
-                (h == Harness::Claude && command == "claude")
+                claude_local_fallback(h, &command)
                     .then(tools::claude)
                     .flatten()
                     .map(PathBuf::from)
@@ -939,6 +945,18 @@ mod tests {
 
     fn has(lines: &[(Mark, String)], mark: Mark, text: &str) -> bool {
         lines.iter().any(|(m, l)| *m == mark && l.contains(text))
+    }
+
+    #[test]
+    fn the_claude_local_fallback_goes_by_the_first_word() {
+        assert!(claude_local_fallback(Harness::Claude, "claude"));
+        assert!(claude_local_fallback(
+            Harness::Claude,
+            "claude --model opus"
+        ));
+        assert!(!claude_local_fallback(Harness::Claude, "~/bin/claude-wrap"));
+        assert!(!claude_local_fallback(Harness::Claude, "/opt/claude --x"));
+        assert!(!claude_local_fallback(Harness::Codex, "claude"));
     }
 
     #[test]
