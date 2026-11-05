@@ -6,15 +6,14 @@
 // Starts scripts/guide/mock.mjs (GUIDE_FREEZE=1: every poll answers a byte-identical body, so this
 // measures the "nothing changed" idle case) on GUIDE_PORT `--port` (7798), serving `--dist`. Per run: a fresh
 // WebKit, load the scenario, wait for its ready text, settle 2 s, then sit idle for `--idle` s.
-// CPU = the summed CPU time of every process whose command line has `ms-playwright/webkit` in it
-// (WebContent / Networking / GPU are XPC services, not children of the browser), so run nothing
-// else on Playwright's WebKit meanwhile. Prints one line per run and the median per scenario.
-import { execFileSync, spawn } from 'node:child_process'
+// CPU = the summed CPU time of the `ms-playwright/webkit` processes this run's browser started
+// (WebContent / Networking / GPU are XPC services, not children of the browser, so they are told
+// apart by pid: lib.mjs webkitCpu). Another WebKit started during our launch would still be counted,
+// and its load slows ours: run nothing else heavy meanwhile. Prints one line per run and the median per scenario.
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { webkit } from 'playwright-core'
-
-const ROOT = path.resolve(import.meta.dirname, '../..')
+import { ROOT, median, startMock, webkitCpu } from './lib.mjs'
 
 // Session ids and ready texts are the demo data of scripts/guide/mock.mjs: change them together.
 const SCENARIOS = {
@@ -43,35 +42,9 @@ const idleS = Number(opts.idle)
 const names = opts.only?.length ? opts.only : Object.keys(SCENARIOS)
 for (const n of names) if (!SCENARIOS[n]) throw new Error(`unknown scenario ${n} (${Object.keys(SCENARIOS).join(', ')})`)
 
-/** Summed CPU seconds of Playwright's WebKit processes. */
-function webkitCpu() {
-  const rows = execFileSync('ps', ['-axo', 'time=,command=']).toString().trim().split('\n')
-  const secs = (t) => t.split(':').reduce((a, x) => a * 60 + Number(x), 0)
-  return rows.filter((l) => l.includes('ms-playwright/webkit')).reduce((a, l) => a + secs(l.trim().split(/\s+/)[0]), 0)
-}
-
-const median = (xs) => {
-  const s = [...xs].sort((a, b) => a - b)
-  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2
-}
-
-async function startMock() {
-  const mock = spawn(process.execPath, [path.join(ROOT, 'scripts/guide/mock.mjs')], {
-    env: { ...process.env, GUIDE_FREEZE: '1', GUIDE_PORT: String(PORT), OVERMIND_WEB_UI: path.resolve(opts.dist) },
-    stdio: ['ignore', 'ignore', 'inherit'],
-  })
-  for (let i = 0; i < 100; i++) {
-    try {
-      if ((await fetch(`${BASE}api/health`)).ok) return mock
-    } catch {}
-    await new Promise((r) => setTimeout(r, 100))
-  }
-  mock.kill()
-  throw new Error(`mock did not answer on :${PORT}`)
-}
-
 async function measure(name) {
   const sc = SCENARIOS[name]
+  const wk = webkitCpu()
   const server = await webkit.launchServer({ headless: true })
   const browser = await webkit.connect(server.wsEndpoint())
   try {
@@ -82,18 +55,19 @@ async function measure(name) {
     page.on('response', (res) => {
       if (res.url().includes('/messages')) res.body().then((b) => (chatBytes += b.length), () => {})
     })
-    const c0 = webkitCpu()
+    const c0 = wk.cpu()
     const t0 = Date.now()
     await page.goto(BASE + sc.hash)
     await page.waitForFunction((t) => document.body?.innerText?.includes(t), sc.ready, { timeout: 30_000, polling: 25 })
     const readyMs = Date.now() - t0
-    const loadCpuS = webkitCpu() - c0
+    const loadCpuS = wk.cpu() - c0
+    wk.freeze()
     await page.waitForTimeout(2000)
     const r0 = requests
     const b0 = chatBytes
-    const c1 = webkitCpu()
+    const c1 = wk.cpu()
     await page.waitForTimeout(idleS * 1000)
-    const idleCpuS = webkitCpu() - c1
+    const idleCpuS = wk.cpu() - c1
     return { scenario: name, readyMs, loadCpuS: +loadCpuS.toFixed(2), idleCpuS: +idleCpuS.toFixed(2), idleCorePct: +((100 * idleCpuS) / idleS).toFixed(2), idleRequests: requests - r0, idleChatBytes: chatBytes - b0 }
   } finally {
     await browser.close()
@@ -101,7 +75,7 @@ async function measure(name) {
   }
 }
 
-const mock = await startMock()
+const mock = await startMock(opts.dist, PORT)
 const results = {}
 try {
   for (const name of names) {
