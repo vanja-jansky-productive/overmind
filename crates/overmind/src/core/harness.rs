@@ -328,8 +328,8 @@ pub fn pi_home() -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".pi/agent"))
 }
 
-/// Codex's picker: the listed models of its own cache (`models_cache.json`, in its
-/// priority order), after the default — labelled with `model` from `config.toml`.
+/// Codex's picker: the default (labelled with `model` from `config.toml`), then the newest
+/// listed model of each family in its own cache (`models_cache.json`).
 pub fn codex_models(home: &Path) -> Vec<ModelOption> {
     let default = std::fs::read_to_string(home.join("config.toml"))
         .ok()
@@ -339,30 +339,90 @@ pub fn codex_models(home: &Path) -> Vec<ModelOption> {
                 (k.trim() == "model").then(|| v.trim().trim_matches('"').to_string())
             })
         });
-    let mut out = vec![opt("", &default_label(default.as_deref()))];
     let cache: Value = std::fs::read_to_string(home.join("models_cache.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(Value::Null);
-    let mut models: Vec<(i64, ModelOption)> = cache
+    codex_models_from(&cache, default.as_deref())
+}
+
+/// The picker from Codex's model cache: Default, then of the `visibility: "list"` models the
+/// newest version of each family (`gpt-6.1-sol` beats `gpt-6-sol`), in Codex's priority order.
+/// A slug without a `<prefix>-<version>` shape is a family of its own at version 0.
+pub fn codex_models_from(cache: &Value, default: Option<&str>) -> Vec<ModelOption> {
+    // family -> (version, priority, option); a tie on version goes to the lower priority
+    let mut newest: Vec<(String, (u32, u32), i64, ModelOption)> = Vec::new();
+    for m in cache
         .get("models")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter(|m| m.get("visibility").and_then(Value::as_str) == Some("list"))
-        .filter_map(|m| {
-            let id = m.get("slug")?.as_str()?;
-            let label = m.get("display_name").and_then(Value::as_str).unwrap_or(id);
-            let prio = m
-                .get("priority")
-                .and_then(Value::as_i64)
-                .unwrap_or(i64::MAX);
-            Some((prio, opt(id, label)))
-        })
-        .collect();
-    models.sort_by_key(|(p, _)| *p);
-    out.extend(models.into_iter().map(|(_, m)| m));
+    {
+        let Some(id) = m.get("slug").and_then(Value::as_str) else {
+            continue;
+        };
+        let label = m
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map_or_else(|| id.to_string(), codex_label);
+        let prio = m
+            .get("priority")
+            .and_then(Value::as_i64)
+            .unwrap_or(i64::MAX);
+        let (family, version) = match codex_model_version(id) {
+            Some((prefix, v, suffix)) => (format!("{prefix}:{suffix}"), version_key(v)),
+            None => (id.to_lowercase(), (0, 0)),
+        };
+        let candidate = (family, version, prio, opt(id, &label));
+        match newest.iter_mut().find(|n| n.0 == candidate.0) {
+            Some(n)
+                if (candidate.1, std::cmp::Reverse(candidate.2))
+                    > (n.1, std::cmp::Reverse(n.2)) =>
+            {
+                *n = candidate
+            }
+            Some(_) => {}
+            None => newest.push(candidate),
+        }
+    }
+    newest.sort_by_key(|n| n.2);
+    let mut out = vec![opt("", &default_label(default))];
+    out.extend(newest.into_iter().map(|n| n.3));
     out
+}
+
+/// `gpt-6.1-sol` -> ("gpt", (6, Some(1)), "sol"); `gpt-6-astra` -> ("gpt", (6, None), "astra");
+/// `gpt-5.2` -> ("gpt", (5, Some(2)), ""). None when the shape is not
+/// `<letters>-<major>[.<minor>][-<rest>]`.
+fn codex_model_version(slug: &str) -> Option<(String, Version, String)> {
+    let slug = slug.to_lowercase();
+    let (prefix, rest) = slug.split_once('-')?;
+    if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_lowercase()) {
+        return None;
+    }
+    let (ver, suffix) = rest.split_once('-').unwrap_or((rest, ""));
+    Some((prefix.to_string(), parse_version(ver)?, suffix.to_string()))
+}
+
+/// `6` -> (6, None), `6.1` -> (6, Some(1)); anything else None.
+fn parse_version(v: &str) -> Option<Version> {
+    match v.split_once('.') {
+        Some((a, b)) => Some((a.parse().ok()?, Some(b.parse().ok()?))),
+        None => Some((v.parse().ok()?, None)),
+    }
+}
+
+/// Codex's `display_name` shaped like Claude's chips: `GPT-6.1-Sol` -> `GPT-6.1 Sol`. Any
+/// other shape (`GPT-6.1 Terra`, `Codex Auto Review`) stays verbatim.
+fn codex_label(name: &str) -> String {
+    let spaced = name.strip_prefix("GPT-").and_then(|rest| {
+        let (ver, family) = rest.split_once('-')?;
+        parse_version(ver)?;
+        (!family.is_empty() && !family.contains(char::is_whitespace))
+            .then(|| format!("GPT-{ver} {family}"))
+    });
+    spaced.unwrap_or_else(|| name.to_string())
 }
 
 /// A model id safe to type into a shell (the `--model` rule: letters, digits, `._[]-/:`).
@@ -1477,6 +1537,158 @@ mod tests {
         .unwrap();
         assert_eq!(super::codex_efforts(&dir), vec!["low", "high", "medium"]);
         assert!(super::codex_efforts(&dir.join("missing")).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn ids(models: &[ModelOption]) -> Vec<(&str, &str)> {
+        models
+            .iter()
+            .map(|m| (m.id.as_str(), m.label.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn codex_models_are_the_newest_of_each_listed_family_in_codex_order() {
+        let m = |slug: &str, name: &str, vis: &str, prio: i64| serde_json::json!({"slug": slug, "display_name": name, "visibility": vis, "priority": prio});
+        // the real cache's ten models (client 0.166.0), hidden ones included
+        let cache = serde_json::json!({"models": [
+            m("gpt-6.1-sol", "GPT-6.1-Sol", "list", 1),
+            m("gpt-6.1-terra", "GPT-6.1 Terra", "list", 2),
+            m("gpt-6-astra", "GPT-6-Astra", "list", 3),
+            m("gpt-6-sol", "GPT-6-Sol", "list", 4),
+            m("gpt-reserve", "GPT-Reserve", "hide", 5),
+            m("gpt-6-luna", "GPT-6-Luna", "list", 6),
+            m("gpt-5.6-sol", "GPT-5.6-Sol", "list", 7),
+            m("gpt-5.6-terra", "GPT-5.6-Terra", "list", 8),
+            m("gpt-5.6-luna", "GPT-5.6-Luna", "list", 9),
+            m("codex-auto-review", "Codex Auto Review", "hide", 10),
+        ]});
+        assert_eq!(
+            ids(&super::codex_models_from(&cache, None)),
+            vec![
+                ("", "Default"),
+                ("gpt-6.1-sol", "GPT-6.1 Sol"),
+                ("gpt-6.1-terra", "GPT-6.1 Terra"),
+                ("gpt-6-astra", "GPT-6 Astra"),
+                ("gpt-6-luna", "GPT-6 Luna"),
+            ]
+        );
+        assert_eq!(
+            super::codex_models_from(&cache, Some("gpt-6.1-sol"))[0].label,
+            "Default (gpt-6.1-sol)"
+        );
+
+        // a slug without a version is its own family; a listed one is shown, never wins
+        // over a versioned sibling; a hidden newer model does not suppress a listed older one
+        let cache = serde_json::json!({"models": [
+            m("o3", "o3", "list", 5),
+            m("gpt-7-sol", "GPT-7-Sol", "hide", 1),
+            m("gpt-6-sol", "GPT-6-Sol", "list", 4),
+            {"slug": "gpt-5.2", "visibility": "list", "priority": 3},
+            m("gpt-6.2-sol-mini", "GPT-6.2-Sol-Mini", "list", 2),
+        ]});
+        assert_eq!(
+            ids(&super::codex_models_from(&cache, None)),
+            vec![
+                ("", "Default"),
+                ("gpt-6.2-sol-mini", "GPT-6.2 Sol-Mini"),
+                ("gpt-5.2", "gpt-5.2"),
+                ("gpt-6-sol", "GPT-6 Sol"),
+                ("o3", "o3"),
+            ]
+        );
+
+        // the same version twice in one family: Codex's lower priority wins
+        let cache = serde_json::json!({"models": [
+            m("gpt-6-sol", "B", "list", 7),
+            m("GPT-6.0-sol", "A", "list", 2),
+        ]});
+        assert_eq!(
+            ids(&super::codex_models_from(&cache, None)),
+            vec![("", "Default"), ("GPT-6.0-sol", "A")]
+        );
+
+        assert_eq!(
+            ids(&super::codex_models_from(&Value::Null, None)),
+            vec![("", "Default")]
+        );
+    }
+
+    #[test]
+    fn codex_slugs_parse_into_prefix_version_and_family() {
+        let v = |s: &str| super::codex_model_version(s);
+        assert_eq!(
+            v("gpt-6.1-sol"),
+            Some(("gpt".into(), (6, Some(1)), "sol".into()))
+        );
+        assert_eq!(
+            v("gpt-6-astra"),
+            Some(("gpt".into(), (6, None), "astra".into()))
+        );
+        assert_eq!(v("gpt-5.2"), Some(("gpt".into(), (5, Some(2)), "".into())));
+        assert_eq!(
+            v("gpt-6.2-sol-mini"),
+            Some(("gpt".into(), (6, Some(2)), "sol-mini".into()))
+        );
+        for bad in [
+            "gpt-reserve",
+            "codex-auto-review",
+            "o3",
+            "codex-mini-latest",
+            "gpt-6.x-sol",
+            "-6-sol",
+        ] {
+            assert_eq!(v(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn codex_labels_put_a_space_between_version_and_family() {
+        let l = super::codex_label;
+        assert_eq!(l("GPT-6.1-Sol"), "GPT-6.1 Sol");
+        assert_eq!(l("GPT-6-Astra"), "GPT-6 Astra");
+        assert_eq!(l("GPT-6.2-Sol-Mini"), "GPT-6.2 Sol-Mini");
+        for verbatim in [
+            "GPT-6.1 Terra",
+            "Codex Auto Review",
+            "GPT-Reserve",
+            "GPT-6.1",
+            "GPT-6.1-",
+            "gpt-6-sol",
+            "GPT-x-Sol",
+        ] {
+            assert_eq!(l(verbatim), verbatim);
+        }
+    }
+
+    #[test]
+    fn codex_models_read_the_cache_and_config_from_codex_home() {
+        let dir =
+            std::env::temp_dir().join(format!("overmind-codex-models-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../testdata/codex/models_cache.json"
+            ),
+            dir.join("models_cache.json"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
+        assert_eq!(
+            ids(&super::codex_models(&dir)),
+            vec![
+                ("", "Default (gpt-6.1-sol)"),
+                ("gpt-6.1-sol", "GPT-6.1 Sol"),
+                ("gpt-6.1-terra", "GPT-6.1 Terra"),
+                ("gpt-6-astra", "GPT-6 Astra"),
+                ("gpt-6-luna", "GPT-6 Luna"),
+            ]
+        );
+        assert_eq!(
+            ids(&super::codex_models(&dir.join("missing"))),
+            vec![("", "Default")]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -104,13 +104,18 @@ Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are c
 
 ```json
 [{ "id": "codex", "label": "Codex", "command": "codex", "installed": true,
-   "models": [{ "id": "", "label": "Default (gpt-6.1-sol)" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1-Sol" }],
+   "models": [{ "id": "", "label": "Default (gpt-6.1-sol)" }, { "id": "gpt-6.1-sol", "label": "GPT-6.1 Sol" }],
    "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultModel": null, "defaultEffort": "high" }]
 ```
 
 Models: Claude's are its aliases (`fable`, `opus`, `sonnet`, `haiku` — `claude --model sonnet` always
 starts the newest Sonnet), labelled with the newest version of each that Claude Code has recorded
-in `~/.claude.json` (`projects.*.lastModelUsage`), else the version overmind knows of; Codex's from its `models_cache.json` (listed ones, its order);
+in `~/.claude.json` (`projects.*.lastModelUsage`), else the version overmind knows of; Codex's from its `models_cache.json`: of the listed ones, the
+newest version of each family (slug `gpt-<version>-<family>`, so `gpt-6.1-sol` hides `gpt-6-sol`), in
+Codex's order, labelled `GPT-<version> <Family>` (an older version is still settable as the default by
+typing it into config `harnesses.codex.model`; Settings → Models keeps a configured value its list
+does not offer); a newer cache (a Codex update) shows after the web server's 10-minute harness cache
+expires and the page reloads, or after `overmind web serve` restarts;
 pi's from `pi --list-models` (ids `provider/model`), narrowed to the `enabledModels` patterns of
 pi's `settings.json` when set. `id: ""` is the harness's own default.
 Efforts: Claude `low…max`; Codex the levels its model cache lists; pi `off…max`.

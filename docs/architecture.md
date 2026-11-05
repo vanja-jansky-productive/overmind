@@ -228,6 +228,11 @@ not exist is skipped. Each process is matched to a transcript:
 - **pi**: `~/.pi/agent/sessions/--<cwd, / as ->--/*.jsonl`, first line `{ type: "session", id,
   cwd, timestamp }`; `/name` is a `session_info` entry (`name_source: "user"`).
 
+The Codex model picker (`codex_models`) is the newest `visibility: "list"` model of each family in
+`models_cache.json` — family = slug minus its version (`gpt-6.1-sol` and `gpt-6-sol` are both `sol`),
+newest by version, ties to Codex's lower `priority` — in Codex's priority order; a slug without a
+version is a family of its own.
+
 Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) wins; otherwise,
 later-started processes first, the newest transcript in the process's cwd created after it
 started (3 s slack), then the newest written to since it started. A `codex exec` / `codex review`
