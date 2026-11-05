@@ -475,12 +475,16 @@ export function noteRawUrl(host: string, path: string): string {
   return `${hostPath(host)}/notes/raw?path=${enc(path)}`
 }
 
-/** A short, human message for a failed session request (peek/messages/send…). */
+/**
+ * A short, human message for a failed session request (peek/messages/send/answer…). A 409 carries
+ * the server's reason when it gave one (an approval no longer on screen, the terminal touched,
+ * waiting on a prompt, no usable handle) — it says what to do; without one, the generic text.
+ */
 export function sessionErrorMessage(err: unknown): string {
   if (!(err instanceof ApiError)) return (err as Error)?.message || 'request failed'
   switch (err.status) {
     case 409:
-      return "This session's backend can't be controlled from here"
+      return err.message && !/^HTTP \d+$/.test(err.message) ? err.message : "This session's backend can't be controlled from here"
     case 404:
       return 'Session gone'
     case 502:
@@ -495,12 +499,8 @@ export function sessionErrorMessage(err: unknown): string {
   }
 }
 
-/**
- * A failed send, for the chat's inline error: a 409 carries the server's reason (waiting on a
- * prompt, no usable handle) when it gave one; anything else is sessionErrorMessage().
- */
+/** A failed send, for the chat's inline error: sessionErrorMessage() (a 409 with its server reason). */
 export function sendErrorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.status === 409 && err.message && !/^HTTP \d+$/.test(err.message)) return err.message
   return sessionErrorMessage(err)
 }
 
