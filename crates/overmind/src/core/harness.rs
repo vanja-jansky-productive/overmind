@@ -19,7 +19,7 @@
 //!
 //! A process is matched to a transcript by an id on its command line (`codex resume <id>`,
 //! `pi --session <id>`), else by cwd and start time: the newest transcript in its cwd that
-//! was created after it started (one an older candidate kept writing past is a closed
+//! was created after it started (one its own older thread kept writing past is a closed
 //! sibling's, not this process's `/new`; one another process ran, by the owners discovery
 //! records, is never taken), then the newest one written to since — never a `codex exec`
 //! / `codex review` rollout (`source: "exec"`, `originator: "codex_exec"`): one run in the
@@ -1323,19 +1323,30 @@ fn subdirs(p: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// How long an old transcript may still be written after a newer one appeared and the
-/// newer one still counts as the same process's `/new`.
+/// How long a process's own old transcript may still be written after a newer one
+/// appeared and the newer one still counts as that process's `/new`.
 const SUPERSEDE_SLACK_MS: i64 = 5_000;
 
-/// The process discovery last saw running a Codex / pi thread, and how far its transcript
-/// had grown then (`<state>/harness-owners.json`, kept across lists).
+/// The process discovery saw running a Codex / pi thread
+/// (`<state>/harness-owners.json`, kept across lists:
+/// `{ "<harness>": { "<session id>": { pid, startMs, closedMtimeMs?, contested? } } }`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Owner {
     pub pid: i64,
     #[serde(rename = "startMs")]
     pub start_ms: i64,
-    #[serde(rename = "mtimeMs")]
-    pub mtime_ms: i64,
+    /// The transcript's mtime when a list first saw this owner gone (a closed session);
+    /// `None` while it runs.
+    #[serde(
+        rename = "closedMtimeMs",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub closed_mtime_ms: Option<i64>,
+    /// When first matched, more than one process could have started this thread: `pid` is
+    /// only the one it was first shown with, never an owner. It is matched afresh every list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub contested: bool,
 }
 
 /// Session id → its [`Owner`].
@@ -1344,15 +1355,22 @@ pub type Owners = HashMap<String, Owner>;
 /// A process's start is `now - etime` (whole seconds): it wobbles between lists.
 const START_WOBBLE_MS: i64 = 3_000;
 
+/// Clock slack between a process's start and the first transcript it creates.
+const CREATE_SLACK_MS: i64 = 3_000;
+
 impl Owner {
     /// Whether `p` is the process this owner names (a reused pid starts at another time).
+    /// A contested entry names no one.
     pub fn is(&self, p: &Proc) -> bool {
-        self.pid == p.pid && (self.start_ms - p.start_ms).abs() <= START_WOBBLE_MS
+        !self.contested
+            && self.pid == p.pid
+            && (self.start_ms - p.start_ms).abs() <= START_WOBBLE_MS
     }
 }
 
-/// A transcript written this long after its gone owner was last seen with it was resumed
-/// by another process (Codex's `/resume`); before that, it is the gone owner's last write.
+/// A gone owner's transcript written this long past its size when its owner was first seen
+/// gone was resumed by another process (Codex's `/resume`); before that, it is the closed
+/// session's own last writes (the app-server daemon, not the TUI, writes the rollout).
 const ORPHAN_SLACK_MS: i64 = 10_000;
 
 /// [`assign_owned`] without a record of owners (the first list on a host).
@@ -1360,24 +1378,49 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
     assign_owned(procs, ts, &Owners::new())
 }
 
+/// Whether `owners` records a thread `p` runs (an id on its command line counts too).
+fn has_thread(p: &Proc, owners: &Owners) -> bool {
+    p.explicit_session().is_some() || owners.values().any(|o| o.is(p))
+}
+
+/// Whether a live process other than `p` that `owners` records no thread for could have
+/// started `t` (or resumed it: one created before `p` started) — as likely as `p` to run it.
+fn has_rival(p: &Proc, t: &TranscriptRef, procs: &[&Proc], owners: &Owners) -> bool {
+    let at = if t.created_ms >= p.start_ms - CREATE_SLACK_MS {
+        t.created_ms
+    } else {
+        t.mtime_ms
+    };
+    procs.iter().any(|q| {
+        q.pid != p.pid
+            && q.cwd.as_deref() == Some(t.cwd.as_str())
+            && q.start_ms - CREATE_SLACK_MS <= at
+            && !has_thread(q, owners)
+    })
+}
+
 /// Pair each process with its transcript (see the module docs). Later-started
 /// processes choose first, so two sessions in one cwd each get their own. A headless
 /// `codex exec` run is matched only by an id on the command line, never by cwd. By cwd, a
 /// transcript `owners` says another process runs is never taken: a live owner keeps it, and a
-/// gone owner's (a closed session) stays closed — unless written since that owner was last
-/// seen with it (resumed elsewhere). Without that record an idle sibling in the same cwd
-/// would read as having started it with `/new`.
+/// gone owner's (a closed session) stays closed — unless written since that owner was first
+/// seen gone (resumed elsewhere). Without that record an idle sibling in the same cwd would
+/// read as having started it with `/new`.
 pub fn assign_owned(
     procs: &[&Proc],
     ts: &[TranscriptRef],
     owners: &Owners,
 ) -> HashMap<i64, TranscriptRef> {
+    let live = |o: &Owner| procs.iter().any(|q| o.is(q));
     let foreign = |t: &TranscriptRef, p: &Proc| {
         owners.get(&t.session_id).is_some_and(|o| {
-            !o.is(p)
-                && (procs.iter().any(|q| o.is(q)) || t.mtime_ms <= o.mtime_ms + ORPHAN_SLACK_MS)
+            !o.contested
+                && !o.is(p)
+                && (live(o)
+                    || t.mtime_ms <= o.closed_mtime_ms.unwrap_or(t.mtime_ms) + ORPHAN_SLACK_MS)
         })
     };
+    let own = |t: &TranscriptRef, p: &Proc| owners.get(&t.session_id).is_some_and(|o| o.is(p));
     let mut out = HashMap::new();
     let mut taken: HashSet<&Path> = HashSet::new();
     for p in procs {
@@ -1408,20 +1451,21 @@ pub fn assign_owned(
                 .filter(|t| !foreign(t, p))
                 .filter(|t| {
                     if pass == 0 {
-                        t.created_ms >= p.start_ms - 3000
+                        t.created_ms >= p.start_ms - CREATE_SLACK_MS
                     } else {
                         t.mtime_ms >= p.start_ms
                     }
                 })
                 .collect();
-            // A newer transcript is this process's `/new` only if its older candidates went
-            // quiet when it appeared; one an older candidate kept writing past is another
+            // A newer transcript is this process's `/new` only if its own older thread went
+            // quiet when it appeared; one its own thread kept writing past is another
             // process's (one closed since, whose leftover would else take this row).
             let pick = cands
                 .iter()
                 .filter(|t| {
-                    !cands.iter().any(|o| {
-                        o.created_ms < t.created_ms
+                    !ts.iter().any(|o| {
+                        own(o, p)
+                            && o.created_ms < t.created_ms
                             && o.mtime_ms > t.created_ms + SUPERSEDE_SLACK_MS
                     })
                 })
@@ -1436,36 +1480,68 @@ pub fn assign_owned(
     out
 }
 
-/// `owners` after a list: each assigned thread's process and size now; a gone owner's entry
-/// kept while its transcript could still be a candidate (written since the oldest live
-/// process started, a minute's slack), dropped after.
+/// `owners` after a list. A match is recorded as ownership only when it is certain: an id on
+/// the command line, or no sibling without a recorded thread could have started (or resumed)
+/// that thread as well. Two fresh panes in one cwd and a first prompt is either's: the thread
+/// is recorded `contested` (for good, as which pane typed first is lost) and matched afresh each
+/// list, instead of handing one pane the other's thread for the life of both. A gone owner's
+/// entry takes its transcript's mtime the first time it is seen gone; it and a contested entry
+/// are kept while that transcript could still be a candidate (written since the oldest live
+/// process started, a minute's slack). Nothing else changes between lists, so the file is
+/// rewritten only when a thread starts, moves or closes.
 pub fn owners_after(
     owners: &Owners,
     assigned: &HashMap<i64, TranscriptRef>,
     procs: &[&Proc],
+    ts: &[TranscriptRef],
 ) -> Owners {
     let oldest = procs.iter().map(|p| p.start_ms).min().unwrap_or(i64::MAX);
-    let mut next: Owners = owners
-        .iter()
-        .filter(|(_, o)| procs.iter().any(|p| o.is(p)) || o.mtime_ms >= oldest - 60_000)
-        .map(|(k, o)| (k.clone(), *o))
-        .collect();
-    for p in procs {
-        if let Some(t) = assigned.get(&p.pid) {
-            // The first start seen stays: a wobble alone is no change (no rewrite).
-            let start_ms = next
-                .get(&t.session_id)
-                .filter(|o| o.is(p))
-                .map_or(p.start_ms, |o| o.start_ms);
-            next.insert(
-                t.session_id.clone(),
-                Owner {
-                    pid: p.pid,
-                    start_ms,
-                    mtime_ms: t.mtime_ms,
-                },
-            );
+    let mtime = |id: &str| ts.iter().find(|t| t.session_id == id).map(|t| t.mtime_ms);
+    let mut next = Owners::new();
+    for (id, o) in owners {
+        if procs.iter().any(|p| o.is(p)) {
+            next.insert(id.clone(), *o);
+            continue;
         }
+        let keep = if o.contested {
+            mtime(id)
+                .is_some_and(|m| m >= oldest - 60_000)
+                .then_some(*o)
+        } else {
+            o.closed_mtime_ms
+                .or_else(|| mtime(id))
+                .filter(|m| *m >= oldest - 60_000)
+                .map(|m| Owner {
+                    closed_mtime_ms: Some(m),
+                    ..*o
+                })
+        };
+        if let Some(o) = keep {
+            next.insert(id.clone(), o);
+        }
+    }
+    for p in procs {
+        let Some(t) = assigned.get(&p.pid) else {
+            continue;
+        };
+        let named = p
+            .explicit_session()
+            .is_some_and(|id| t.session_id == id || t.session_id.starts_with(&id));
+        let had = next.get(&t.session_id);
+        // The first start seen stays: a wobble alone is no change (no rewrite).
+        if had.is_some_and(|o| o.is(p) || (o.contested && !named)) {
+            continue;
+        }
+        let contested = !named && has_rival(p, t, procs, owners);
+        next.insert(
+            t.session_id.clone(),
+            Owner {
+                pid: p.pid,
+                start_ms: p.start_ms,
+                closed_mtime_ms: None,
+                contested,
+            },
+        );
     }
     next
 }
@@ -2475,6 +2551,15 @@ mod tests {
         assert_eq!(got[&2].session_id, "b");
     }
 
+    fn owner(pid: i64, start_ms: i64) -> Owner {
+        Owner {
+            pid,
+            start_ms,
+            closed_mtime_ms: None,
+            contested: false,
+        }
+    }
+
     #[test]
     fn a_closed_sessions_transcript_never_goes_to_an_idle_sibling() {
         // a and c run in /w; d started there later and is closed now. c has been idle since
@@ -2489,75 +2574,263 @@ mod tests {
         assert_eq!(assign(&[&a, &c], &ts)[&3].session_id, "d", "without owners");
         let mut owners = Owners::new();
         // A start time is `now - etime`: it wobbles by up to a second between lists.
-        owners.insert(
-            "a".into(),
-            Owner {
-                pid: 1,
-                start_ms: 1_000_900,
-                mtime_ms: 2_500_000,
-            },
-        );
-        owners.insert(
-            "c".into(),
-            Owner {
-                pid: 3,
-                start_ms: 1_500_000,
-                mtime_ms: 1_600_000,
-            },
-        );
-        owners.insert(
-            "d".into(),
-            Owner {
-                pid: 4,
-                start_ms: 2_000_000,
-                mtime_ms: 2_700_000,
-            },
-        );
+        owners.insert("a".into(), owner(1, 1_000_900));
+        owners.insert("c".into(), owner(3, 1_500_000));
+        owners.insert("d".into(), owner(4, 2_000_000));
         let got = assign_owned(&[&a, &c], &ts, &owners);
         assert_eq!(got[&1].session_id, "a");
         assert_eq!(got[&3].session_id, "c");
+        // The first list that sees d's process gone keeps d's size then.
+        let owners = owners_after(&owners, &got, &[&a, &c], &ts);
+        assert_eq!(owners["d"].closed_mtime_ms, Some(2_700_000));
+        assert_eq!(
+            owners["a"],
+            owner(1, 1_000_900),
+            "the first start seen stays"
+        );
         // d resumed inside c (`/resume`, no id on the command line): written since its owner
-        // was last seen, so it is c's now.
+        // was seen gone, so it is c's now.
         let mut ts = ts;
         ts[2].mtime_ms = 2_700_000 + ORPHAN_SLACK_MS + 1;
-        assert_eq!(assign_owned(&[&a, &c], &ts, &owners)[&3].session_id, "d");
+        let got = assign_owned(&[&a, &c], &ts, &owners);
+        assert_eq!(got[&3].session_id, "d");
+        assert_eq!(
+            owners_after(&owners, &got, &[&a, &c], &ts)["d"],
+            owner(3, 1_500_000)
+        );
         // A live owner keeps its thread from another process in the same cwd.
         let early = proc_(5, "/w", 900_000);
         let mut owners = Owners::new();
-        owners.insert(
-            "x".into(),
-            Owner {
-                pid: 5,
-                start_ms: 900_000,
-                mtime_ms: 1_200_000,
-            },
-        );
+        owners.insert("x".into(), owner(5, 900_000));
         let ts = vec![tref("x", "/w", 1_100_000, 1_200_000)];
         let got = assign_owned(&[&early, &a], &ts, &owners);
         assert_eq!(got[&5].session_id, "x");
         assert!(!got.contains_key(&1));
-        // Who runs what is recorded for the next list.
-        let next = owners_after(&owners, &got, &[&early, &a]);
-        assert_eq!(next, owners, "nothing changed: no rewrite");
-        // A start that wobbled is the same process: still no change.
-        let wobbly = proc_(5, "/w", 901_000);
-        assert_eq!(owners_after(&owners, &got, &[&wobbly, &a]), owners);
-        // A thread that grew records its new size; a gone owner's entry is dropped once its
-        // transcript is older than the oldest live process.
+        // Who runs what is recorded for the next list; a thread that only grew is no change.
         let mut grown = got.clone();
         grown.get_mut(&5).unwrap().mtime_ms = 1_300_000;
+        assert_eq!(owners_after(&owners, &grown, &[&early, &a], &ts), owners);
+        // A start that wobbled is the same process: still no change.
+        let wobbly = proc_(5, "/w", 901_000);
+        assert_eq!(owners_after(&owners, &got, &[&wobbly, &a], &ts), owners);
+        // A gone owner's entry is dropped once its transcript is older than the oldest live
+        // process (or no longer a candidate at all).
         let mut old = owners.clone();
-        old.insert(
-            "gone".into(),
-            Owner {
-                pid: 9,
-                start_ms: 1,
-                mtime_ms: 2,
-            },
-        );
-        let next = owners_after(&old, &grown, &[&early, &a]);
-        assert_eq!(next["x"].mtime_ms, 1_300_000);
+        old.insert("gone".into(), owner(9, 1));
+        let next = owners_after(&old, &got, &[&early, &a], &ts);
         assert!(!next.contains_key("gone"));
+    }
+
+    #[test]
+    fn late_writes_before_a_close_keep_the_thread_from_an_idle_sibling() {
+        // a, c live in /w; d (pid 4) was running at the last list, then kept writing for 20 s
+        // more (a long turn) and was closed before the next list.
+        let a = proc_(1, "/w", 1_000_000);
+        let c = proc_(3, "/w", 1_500_000);
+        let ts = vec![
+            tref("a", "/w", 1_000_500, 2_500_000),
+            tref("c", "/w", 1_500_400, 1_600_000),
+            tref("d", "/w", 2_000_400, 2_720_000),
+        ];
+        let mut owners = Owners::new();
+        owners.insert("a".into(), owner(1, 1_000_000));
+        owners.insert("c".into(), owner(3, 1_500_000));
+        owners.insert("d".into(), owner(4, 2_000_000));
+        let got = assign_owned(&[&a, &c], &ts, &owners);
+        assert_eq!(got[&3].session_id, "c", "c got {:?}", got.get(&3));
+        assert_eq!(got[&1].session_id, "a");
+        let next = owners_after(&owners, &got, &[&a, &c], &ts);
+        assert_eq!(next["d"].closed_mtime_ms, Some(2_720_000));
+    }
+
+    #[test]
+    fn prompt_order_unlike_start_order_is_never_recorded() {
+        // Pane B started at 0, pane A at 10 s; B's first prompt at 20 s, A's at 30 s.
+        let b = proc_(2, "/w", 1_000_000);
+        let a = proc_(1, "/w", 1_010_000);
+        let procs = [&b, &a];
+        // A list at 25 s: only B's thread exists, and either fresh pane could have started it.
+        let ts1 = vec![tref("bt", "/w", 1_020_000, 1_025_000)];
+        let got1 = assign_owned(&procs, &ts1, &Owners::new());
+        let o1 = owners_after(&Owners::new(), &got1, &procs, &ts1);
+        assert!(o1["bt"].contested, "{o1:?}");
+        // Both busy.
+        let ts2 = vec![
+            tref("bt", "/w", 1_020_000, 1_060_000),
+            tref("at", "/w", 1_030_000, 1_059_000),
+        ];
+        let got2 = assign_owned(&procs, &ts2, &o1);
+        let o2 = owners_after(&o1, &got2, &procs, &ts2);
+        assert!(o2.values().all(|o| o.contested), "{o2:?}");
+        // A's thread written last: A reads it (a contested thread is matched afresh).
+        let ts3 = vec![
+            tref("bt", "/w", 1_020_000, 1_090_000),
+            tref("at", "/w", 1_030_000, 1_100_000),
+        ];
+        let got3 = assign_owned(&procs, &ts3, &o2);
+        assert_eq!(got3[&1].session_id, "at");
+        assert_eq!(got3[&2].session_id, "bt");
+        assert_eq!(owners_after(&o2, &got3, &procs, &ts3), o2, "no rewrite");
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Ev {
+        Start(usize),
+        Prompt(usize),
+        Close(usize),
+        Tick,
+    }
+
+    /// Panes in one cwd going through `events`, a list after each (or after every second one):
+    /// an error when a list ever records a pane as running another pane's thread, or gives a
+    /// pane a thread recorded as another's.
+    fn simulate(events: &[Ev], busy: &[bool], every: usize) -> Result<Owners, String> {
+        let n = busy.len();
+        let mut procs: Vec<Option<Proc>> = vec![None; n];
+        let mut threads: Vec<Option<TranscriptRef>> = vec![None; n];
+        let mut owners = Owners::new();
+        for (k, ev) in events.iter().enumerate() {
+            let now = 1_000_000 + k as i64 * 10_000;
+            match *ev {
+                Ev::Start(i) => procs[i] = Some(proc_(10 + i as i64, "/w", now)),
+                Ev::Prompt(i) => {
+                    threads[i] = Some(tref(&format!("t{i}"), "/w", now + 500, now + 1_000))
+                }
+                Ev::Close(i) => procs[i] = None,
+                Ev::Tick => {}
+            }
+            for i in 0..n {
+                if busy[i]
+                    && procs[i].is_some()
+                    && let Some(t) = threads[i].as_mut()
+                    && t.created_ms < now
+                {
+                    t.mtime_ms = now + 2_000;
+                }
+            }
+            if (k + 1) % every != 0 && k + 1 != events.len() {
+                continue;
+            }
+            let live: Vec<&Proc> = procs.iter().flatten().collect();
+            let ts: Vec<TranscriptRef> = threads.iter().flatten().cloned().collect();
+            let got = assign_owned(&live, &ts, &owners);
+            let next = owners_after(&owners, &got, &live, &ts);
+            let whose = |id: &str| 10 + id[1..].parse::<i64>().unwrap();
+            for (id, o) in &next {
+                if !o.contested && o.pid != whose(id) {
+                    return Err(format!("after {ev:?}: {id} recorded as pid {}", o.pid));
+                }
+            }
+            for (pid, t) in &got {
+                if next
+                    .get(&t.session_id)
+                    .is_some_and(|o| !o.contested && o.pid != *pid)
+                {
+                    return Err(format!("after {ev:?}: pid {pid} shows {}", t.session_id));
+                }
+            }
+            owners = next;
+        }
+        Ok(owners)
+    }
+
+    /// Every order of starting and first-prompting `n` panes (each prompt after its start).
+    fn orders(n: usize) -> Vec<Vec<Ev>> {
+        fn go(n: usize, started: u8, prompted: u8, seq: &mut Vec<Ev>, out: &mut Vec<Vec<Ev>>) {
+            if seq.len() == 2 * n {
+                out.push(seq.clone());
+                return;
+            }
+            for i in 0..n {
+                let bit = 1u8 << i;
+                if started & bit == 0 {
+                    seq.push(Ev::Start(i));
+                    go(n, started | bit, prompted, seq, out);
+                    seq.pop();
+                } else if prompted & bit == 0 {
+                    seq.push(Ev::Prompt(i));
+                    go(n, started, prompted | bit, seq, out);
+                    seq.pop();
+                }
+            }
+        }
+        let mut out = Vec::new();
+        go(n, 0, 0, &mut Vec::new(), &mut out);
+        out
+    }
+
+    #[test]
+    fn no_pane_is_ever_recorded_with_another_panes_thread() {
+        let mut runs = 0;
+        for n in 2..=3 {
+            for order in orders(n) {
+                for busy_bits in 0..(1u8 << n) {
+                    let busy: Vec<bool> = (0..n).map(|i| busy_bits & (1 << i) != 0).collect();
+                    // No close, or any one pane closed, then a few more lists.
+                    for close in std::iter::once(None).chain((0..n).map(Some)) {
+                        let mut evs = order.clone();
+                        evs.extend(close.map(Ev::Close));
+                        evs.extend([Ev::Tick, Ev::Tick, Ev::Tick]);
+                        for every in [1, 2] {
+                            runs += 1;
+                            if let Err(e) = simulate(&evs, &busy, every) {
+                                panic!("{evs:?} busy {busy:?} every {every}: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(runs > 1_000, "{runs}");
+    }
+
+    #[test]
+    fn panes_started_and_prompted_in_turn_own_their_threads() {
+        // The ordinary case: each pane gets its first prompt before the next one starts.
+        // Every thread is recorded, and closing any pane leaves the others on their own.
+        for busy_bits in 0..8u8 {
+            let busy: Vec<bool> = (0..3).map(|i| busy_bits & (1 << i) != 0).collect();
+            for close in 0..3 {
+                let evs = [
+                    Ev::Start(0),
+                    Ev::Prompt(0),
+                    Ev::Start(1),
+                    Ev::Prompt(1),
+                    Ev::Start(2),
+                    Ev::Prompt(2),
+                    Ev::Close(close),
+                    Ev::Tick,
+                    Ev::Tick,
+                ];
+                let owners = simulate(&evs, &busy, 1).unwrap();
+                for i in 0..3 {
+                    let o = owners[&format!("t{i}")];
+                    assert!(
+                        !o.contested && o.pid == 10 + i as i64,
+                        "{busy:?} t{i}: {o:?}"
+                    );
+                }
+                let mut ts: Vec<TranscriptRef> =
+                    (0..3).map(|i| tref(&format!("t{i}"), "/w", 0, 0)).collect();
+                for (i, t) in ts.iter_mut().enumerate() {
+                    t.created_ms = 1_000_000 + (2 * i as i64 + 1) * 10_000 + 500;
+                    t.mtime_ms = t.created_ms + 500;
+                }
+                let live: Vec<Proc> = (0..3)
+                    .filter(|i| *i != close)
+                    .map(|i| proc_(10 + i as i64, "/w", 1_000_000 + 2 * i as i64 * 10_000))
+                    .collect();
+                let live: Vec<&Proc> = live.iter().collect();
+                let got = assign_owned(&live, &ts, &owners);
+                for p in &live {
+                    assert_eq!(
+                        got[&p.pid].session_id,
+                        format!("t{}", p.pid - 10),
+                        "{busy:?} close {close}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -2565,17 +2838,19 @@ mod tests {
         // a (started first) and b share a cwd; b is closed. a kept writing after b's
         // transcript appeared, so b's is another process's thread — not a `/new` of a's.
         let a = proc_(1, "/w", 1_000_000);
+        let mut owners = Owners::new();
+        owners.insert("a".into(), owner(1, 1_000_000));
         let ts = vec![
             tref("a", "/w", 1_000_500, 2_500_000),
             tref("b", "/w", 2_000_400, 2_600_000),
         ];
-        assert_eq!(assign(&[&a], &ts)[&1].session_id, "a");
+        assert_eq!(assign_owned(&[&a], &ts, &owners)[&1].session_id, "a");
         // A `/new` in a: its old transcript stopped when the new one was created.
         let ts = vec![
             tref("a", "/w", 1_000_500, 2_000_100),
             tref("a-new", "/w", 2_000_400, 2_600_000),
         ];
-        assert_eq!(assign(&[&a], &ts)[&1].session_id, "a-new");
+        assert_eq!(assign_owned(&[&a], &ts, &owners)[&1].session_id, "a-new");
         // Several `/new`s: the newest wins, the older ones were each superseded in turn.
         let ts = vec![
             tref("a", "/w", 1_000_500, 1_500_000),
@@ -2583,6 +2858,13 @@ mod tests {
             tref("a3", "/w", 2_000_100, 2_100_000),
         ];
         assert_eq!(assign(&[&a], &ts)[&1].session_id, "a3");
+        // Only a's own thread counts: one nobody is recorded with that kept writing doesn't
+        // knock out a's newer thread (two fresh panes, the other one prompted first).
+        let ts = vec![
+            tref("other", "/w", 1_000_500, 2_600_000),
+            tref("mine", "/w", 2_000_400, 2_700_000),
+        ];
+        assert_eq!(assign(&[&a], &ts)[&1].session_id, "mine");
     }
 
     #[test]

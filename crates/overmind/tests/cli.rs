@@ -314,6 +314,33 @@ fn harness_list_says_why_codex_is_unavailable() {
     );
 }
 
+// Every test command's state dir is its temp dir: `codex hooks install` (into a temp
+// `CODEX_HOME`) leaves its record in `<state dir>/overmind/codex-hooks`, and so would
+// `list` its `harness-owners.json` — never the machine's `~/.local/state`.
+#[test]
+fn test_commands_keep_state_in_their_temp_dir() {
+    let env = common::Env::new();
+    let codex = env.path("codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    let out = env
+        .cmd()
+        .args(["codex", "hooks", "install"])
+        .env("HOME", env.path("home"))
+        .env("CODEX_HOME", &codex)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        env.path("state/overmind/codex-hooks/.install.json")
+            .exists(),
+        "the state dir is not the test's own"
+    );
+}
+
 // Bare `overmind` opens the TUI on a terminal, but a piped stdout (this test, a
 // script, an agent) must get the one-shot list and *exit* — not the watch loop.
 // Enforced with a timeout so a regression fails the suite instead of hanging it.
@@ -328,6 +355,8 @@ fn bare_invocation_is_one_shot_when_piped() {
             "OVERMIND_HARNESS_OWNERS",
             cfg.path().join("harness-owners.json"),
         )
+        .env("XDG_STATE_HOME", cfg.path().join("state"))
+        .env_remove("OVERMIND_CODEX_HOOKS_DIR")
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
@@ -649,6 +678,8 @@ fn fixture_mode_does_not_write_the_watch_state_file() {
         .env("OVERMIND_FIXTURE", &path)
         .env("OVERMIND_CONFIG", dir.path().join("none.json"))
         .env("HOME", &home)
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env_remove("OVERMIND_CODEX_HOOKS_DIR")
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();

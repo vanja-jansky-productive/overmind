@@ -443,9 +443,21 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
         return Vec::new();
     }
     let procs = harness::processes();
-    // Who ran each thread, per harness, as the lists before this one saw it (see `assign_owned`).
+    if procs.is_empty() {
+        if harness::codex_home().is_dir() {
+            prune_codex_sidecars(&[]);
+        }
+        return Vec::new();
+    }
+    // Who ran each thread, per harness, as the lists before this one saw it (see
+    // `assign_owned`): read, matched and written under one lock, as lists run concurrently
+    // (the CLI, the web server, peers).
     let owners_file = owners_path();
-    let owners = read_owners(&owners_file);
+    let fixture = is_fixture();
+    let _guard = (!fixture)
+        .then(|| crate::core::snapshot::lock(&owners_file).ok())
+        .flatten();
+    let (owners, corrupt) = read_owners(&owners_file);
     let mut next_owners = owners.clone();
     let mut out = Vec::new();
     for (h, root) in [
@@ -467,7 +479,7 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
         let ts = harness::transcripts(h, &root, &mine);
         let had = owners.get(h.id()).cloned().unwrap_or_default();
         let assigned = harness::assign_owned(&mine, &ts, &had);
-        let next = harness::owners_after(&had, &assigned, &mine);
+        let next = harness::owners_after(&had, &assigned, &mine, &ts);
         if next.is_empty() {
             next_owners.remove(h.id());
         } else {
@@ -492,7 +504,7 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
             prune_codex_sidecars(&live);
         }
     }
-    if next_owners != owners && !is_fixture() {
+    if (next_owners != owners || corrupt) && !fixture {
         write_owners(&owners_file, &next_owners);
     }
     out
@@ -507,14 +519,34 @@ fn owners_path() -> std::path::PathBuf {
         .unwrap_or_else(|| crate::core::tools::state_dir().join("harness-owners.json"))
 }
 
-fn read_owners(path: &std::path::Path) -> HashMap<String, harness::Owners> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+/// The owners file, and whether it was there but unreadable. That starts from no record — a
+/// match is then recorded only where no sibling could have made it too (`owners_after`) — and
+/// is said once on stderr, then replaced by the next write.
+fn read_owners(path: &std::path::Path) -> (HashMap<String, harness::Owners>, bool) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (HashMap::new(), false),
+        Err(e) => return (HashMap::new(), warn_owners(path, &e.to_string())),
+    };
+    match serde_json::from_str(&text) {
+        Ok(o) => (o, false),
+        Err(e) => (HashMap::new(), warn_owners(path, &e.to_string())),
+    }
 }
 
-/// Best effort: a failed write only means the next list matches without it.
+fn warn_owners(path: &std::path::Path, why: &str) -> bool {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "overmind: {} is unreadable ({why}); starting from no record of who runs which Codex / pi thread",
+            path.display()
+        )
+    });
+    true
+}
+
+/// Best effort: a failed write only means the next list matches without it. The atomic
+/// `0600` writer the briefs use.
 fn write_owners(path: &std::path::Path, owners: &HashMap<String, harness::Owners>) {
     if let Ok(text) = serde_json::to_string(owners) {
         let _ = crate::core::brief::write_private(path, &text);
@@ -1011,6 +1043,25 @@ fn claude_prompts(cwd: &str, session_id: &str, n: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_owners_file_starts_from_no_record_and_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("harness-owners.json");
+        assert_eq!(
+            read_owners(&p),
+            (HashMap::new(), false),
+            "missing: nothing to say"
+        );
+        std::fs::write(&p, "{not json").unwrap();
+        assert_eq!(read_owners(&p), (HashMap::new(), true));
+        // Old files (an `mtimeMs` per entry) still read.
+        std::fs::write(&p, r#"{"codex":{"t":{"pid":4,"startMs":10,"mtimeMs":20}}}"#).unwrap();
+        let (o, corrupt) = read_owners(&p);
+        assert!(!corrupt);
+        assert_eq!(o["codex"]["t"].pid, 4);
+        assert_eq!(o["codex"]["t"].closed_mtime_ms, None);
+    }
 
     #[test]
     fn a_missing_claude_registry_is_no_sessions_an_unreadable_one_an_error() {

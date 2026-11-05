@@ -41,6 +41,10 @@ impl Env {
             .env("OVERMIND_SNAPSHOT", self.path("snapshot.json"))
             // …nor which process runs which Codex / pi thread (this machine's live ones).
             .env("OVERMIND_HARNESS_OWNERS", self.path("harness-owners.json"))
+            // Any other state file (locks, Codex hook sidecars, caches) lands in the temp dir
+            // too, whichever file a later change adds.
+            .env("XDG_STATE_HOME", self.path("state"))
+            .env_remove("OVERMIND_CODEX_HOOKS_DIR")
             .env("OVERMIND_MUX", "0")
             .env("OVERMIND_CONNECT_TIMEOUT", "2")
             .env("NO_COLOR", "1")

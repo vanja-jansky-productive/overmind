@@ -395,8 +395,9 @@ pub fn save_to(path: &Path, snap: &Snapshot) -> Result<()> {
 
 /// An exclusive lock on `<path>.lock` for one read-modify-write. `record` runs on every
 /// `overmind list` (the web server polls it), so without this a restore's "no longer dormant"
-/// could be overwritten by a poll that read the file a moment earlier.
-fn lock(path: &Path) -> Result<std::fs::File> {
+/// could be overwritten by a poll that read the file a moment earlier. Discovery's
+/// `harness-owners.json` takes it the same way.
+pub(crate) fn lock(path: &Path) -> Result<std::fs::File> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     if let Some(dir) = path.parent() {
         std::fs::DirBuilder::new()
