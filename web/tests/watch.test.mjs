@@ -27,11 +27,11 @@ function fakeFs() {
       watchers.push(w);
       return w;
     },
-    /** Deliver an event to the open watcher on `dir`. */
+    /** Deliver an event to every open watcher on `dir`. */
     fire(dir, filename, type = 'rename') {
-      const w = watchers.find((x) => x.dir === dir && !x.closed);
-      assert.ok(w, `a watcher on ${dir}`);
-      w.cb(type, filename);
+      const on = watchers.filter((x) => x.dir === dir && !x.closed);
+      assert.ok(on.length, `a watcher on ${dir}`);
+      for (const w of on) if (!w.closed) w.cb(type, filename);
     },
   };
 }
@@ -100,7 +100,8 @@ test('discoveryRoots follows the CLI: HOME, CODEX_HOME, PI_CODING_AGENT_DIR, XDG
 test('arms the roots that exist (recursive only for transcripts), skips missing ones, rearm() picks them up later', () => {
   const { fs, w } = setup({ missing: ['codex', 'codex-index', 'pi', 'stacks', 'codex-hooks'] });
   w.start();
-  assert.deepEqual(fs.open().map((x) => x.dir).sort(), [dir('sessions'), dir('claude'), dir('projects'), dir('done')].sort());
+  // + the state dir twice more: the parent of the missing stacks and codex-hooks roots (N3)
+  assert.deepEqual(fs.open().map((x) => x.dir).sort(), [dir('sessions'), dir('claude'), dir('projects'), dir('done'), dir('done'), dir('done')].sort());
   assert.equal(fs.open().find((x) => x.dir === dir('projects')).recursive, true);
   assert.equal(fs.open().find((x) => x.dir === dir('sessions')).recursive, false);
   assert.equal(w.status().mode, 'watch', 'optional roots missing is still healthy');
@@ -108,7 +109,7 @@ test('arms the roots that exist (recursive only for transcripts), skips missing 
   w.rearm();
   assert.ok(fs.open().some((x) => x.dir === dir('codex')));
   w.start();
-  assert.equal(fs.open().length, 5, 'start() is idempotent');
+  assert.equal(fs.open().length, 7, 'start() is idempotent');
 });
 
 test('no registry dir → degraded until it exists', () => {
@@ -202,6 +203,43 @@ test('codex-hooks sidecars: the hook\'s temp write is dropped, its rename is one
   fs.fire(h, `${id}.json`); // pruned after 1 h, or cleared
   clock.flush();
   assert.deepEqual(changes, ['fast', 'fast']);
+});
+
+test('review-38 N3: a root created after start is armed as it appears (its parent is watched meanwhile), and signals fast', () => {
+  const { fs, clock, changes, w } = setup({ missing: ['codex-hooks', 'sessions'] });
+  w.start();
+  const h = dir('codex-hooks');
+  const parentWatchers = () => fs.open().filter((x) => x.dir === path.dirname(h) && x !== fs.open().find((y) => y.dir === dir('done')));
+  assert.equal(parentWatchers().length, 1, 'the state dir is watched for codex-hooks');
+  fs.fire(path.dirname(h), 'snapshot.json');
+  clock.flush();
+  assert.deepEqual(changes, [], 'other names in the parent are no news');
+  fs.dirs.add(h); // `overmind codex hooks install`
+  fs.fire(path.dirname(h), 'codex-hooks');
+  assert.ok(fs.open().some((x) => x.dir === h), 'armed without waiting for a list');
+  assert.equal(parentWatchers().length, 0, 'the parent watch is closed');
+  clock.flush();
+  assert.deepEqual(changes, ['fast']);
+
+  assert.equal(w.status().mode, 'degraded');
+  fs.dirs.add(dir('sessions')); // Claude Code's first run on this host
+  fs.fire(dir('claude'), 'sessions');
+  assert.equal(w.status().mode, 'watch');
+  w.stop();
+  assert.equal(fs.open().length, 0, 'stop() closes parent watches too');
+});
+
+test('review-38 N2: a replaced watcher’s late error leaves the new one armed', () => {
+  const { fs, w } = setup();
+  w.start();
+  const old = fs.open().find((x) => x.dir === dir('sessions'));
+  fs.fire(dir('sessions'), 'sessions'); // replaced: a fresh watcher on the new dir
+  const fresh = fs.open().find((x) => x.dir === dir('sessions'));
+  assert.notEqual(fresh, old);
+  old.handlers.error(new Error('late'));
+  assert.equal(fresh.closed, false);
+  assert.equal(w.status().mode, 'watch');
+  assert.equal(w.status().roots.find((r) => r.id === 'sessions').armed, true);
 });
 
 test('names file: only a content change signals (list rewrites it unchanged)', () => {

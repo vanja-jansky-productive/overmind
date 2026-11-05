@@ -137,6 +137,7 @@ export function createDiscoveryWatcher({
 }) {
   if (typeof onChange !== 'function') throw new TypeError('onChange must be a function');
   const armed = new Map(); // root id -> FSWatcher
+  const parents = new Map(); // root id -> FSWatcher on the parent of a missing root, until it exists
   const failed = new Map(); // root id -> error message (a watcher that errored, until rearm)
   const headless = new Set(); // registry basenames of headless runs: their delete is ignored too
   const contents = new Map(); // root id -> last content of a compared file
@@ -250,6 +251,7 @@ export function createDiscoveryWatcher({
     if (armed.has(root.id)) return true;
     if (!exists(root.dir)) {
       failed.delete(root.id); // gone: nothing to watch (a required root counts as missing in status())
+      if (started) awaitRoot(root);
       return false;
     }
     try {
@@ -260,6 +262,7 @@ export function createDiscoveryWatcher({
         if (cls) emit(cls);
       });
       w.on?.('error', (err) => {
+        if (armed.get(root.id) !== w) return; // a replaced watcher's late error: not this slot's
         log(`[discovery] watch ${root.id} failed: ${err?.message ?? err} — falling back to the list TTL`);
         failed.set(root.id, String(err?.message ?? err));
         try {
@@ -269,11 +272,44 @@ export function createDiscoveryWatcher({
       });
       armed.set(root.id, w);
       failed.delete(root.id);
+      closeParent(root.id);
       return true;
     } catch (err) {
       if (err?.code !== 'ENOENT') failed.set(root.id, String(err?.message ?? err));
       return false;
     }
+  }
+
+  /**
+   * A root that does not exist yet (the first `~/.codex/sessions`, `codex-hooks` right after
+   * `codex hooks install`, a registry dir removed): watch its parent, when that exists, for the
+   * root's creation — arm it then, and signal fast (it may already hold a row's file). Without
+   * a parent the next run's `rearm()` picks it up.
+   */
+  function awaitRoot(root) {
+    const parent = path.dirname(root.dir);
+    if (parents.has(root.id) || parent === root.dir || !exists(parent)) return;
+    try {
+      const pw = watch(parent, { recursive: false, persistent: false }, (_type, filename) => {
+        if (parents.get(root.id) !== pw) return;
+        if (filename != null && String(filename) !== path.basename(root.dir)) return;
+        if (!exists(root.dir)) return;
+        if (arm(root)) emit('fast');
+      });
+      pw.on?.('error', () => {
+        if (parents.get(root.id) === pw) closeParent(root.id);
+      });
+      parents.set(root.id, pw);
+    } catch {}
+  }
+
+  function closeParent(id) {
+    const pw = parents.get(id);
+    if (!pw) return;
+    parents.delete(id);
+    try {
+      pw.close();
+    } catch {}
   }
 
   /**
@@ -313,6 +349,7 @@ export function createDiscoveryWatcher({
       } catch {}
     }
     armed.clear();
+    for (const id of [...parents.keys()]) closeParent(id);
     failed.clear();
     headless.clear(); // deletes missed while stopped would otherwise hide a reused pid's exit
     unknownSeen.clear();
