@@ -961,6 +961,7 @@ overmind mcp --http [--bind 127.0.0.1] [--port 7778] --token-file ~/.config/over
 | `OVERMIND_STACKS_DIR` | where [stacks](#stacks) live (default `${XDG_STATE_HOME:-~/.local/state}/overmind/stacks`) |
 | `VISUAL`, `EDITOR` | the editor for `overmind brief --edit`, `overmind stack edit` and `overmind config edit` (default `vi`) |
 | `OVERMIND_SNAPSHOT` | the [session-recovery](#session-recovery) snapshot (default `${XDG_STATE_HOME:-~/.local/state}/overmind/snapshot.json`) |
+| `OVERMIND_HARNESS_OWNERS` | which process runs which Codex / pi thread, as `list` last saw it (default `${XDG_STATE_HOME:-~/.local/state}/overmind/harness-owners.json`; see docs/architecture.md → Other harnesses) |
 | `OVERMIND_BOOT_ID` | override this boot's id (tests; a different value simulates a reboot) |
 | `OVERMIND_GROUPS_STATE` | `overmind group` state file (default `${XDG_STATE_HOME:-~/.local/state}/overmind/groups.json`) |
 | `OVERMIND_FIXTURE=<sessions.json>` | read a canned overmind from a file instead of the live registry (demo/tests; backends are inert) |

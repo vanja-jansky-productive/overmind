@@ -443,6 +443,10 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
         return Vec::new();
     }
     let procs = harness::processes();
+    // Who ran each thread, per harness, as the lists before this one saw it (see `assign_owned`).
+    let owners_file = owners_path();
+    let owners = read_owners(&owners_file);
+    let mut next_owners = owners.clone();
     let mut out = Vec::new();
     for (h, root) in [
         (Harness::Codex, harness::codex_home()),
@@ -461,7 +465,14 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
             continue;
         }
         let ts = harness::transcripts(h, &root, &mine);
-        let assigned = harness::assign(&mine, &ts);
+        let had = owners.get(h.id()).cloned().unwrap_or_default();
+        let assigned = harness::assign_owned(&mine, &ts, &had);
+        let next = harness::owners_after(&had, &assigned, &mine);
+        if next.is_empty() {
+            next_owners.remove(h.id());
+        } else {
+            next_owners.insert(h.id().to_string(), next);
+        }
         let names = if h == Harness::Codex {
             harness::codex_names(&root)
         } else {
@@ -481,7 +492,33 @@ fn discover_harnesses(panes: &HashMap<String, Pane>) -> Vec<Session> {
             prune_codex_sidecars(&live);
         }
     }
+    if next_owners != owners && !is_fixture() {
+        write_owners(&owners_file, &next_owners);
+    }
     out
+}
+
+/// `$OVERMIND_HARNESS_OWNERS`, else `<state dir>/harness-owners.json`:
+/// `{ "<harness>": { "<session id>": Owner } }`.
+fn owners_path() -> std::path::PathBuf {
+    std::env::var_os("OVERMIND_HARNESS_OWNERS")
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| crate::core::tools::state_dir().join("harness-owners.json"))
+}
+
+fn read_owners(path: &std::path::Path) -> HashMap<String, harness::Owners> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Best effort: a failed write only means the next list matches without it.
+fn write_owners(path: &std::path::Path, owners: &HashMap<String, harness::Owners>) {
+    if let Ok(text) = serde_json::to_string(owners) {
+        let _ = crate::core::brief::write_private(path, &text);
+    }
 }
 
 fn prune_codex_sidecars(live: &[&str]) {

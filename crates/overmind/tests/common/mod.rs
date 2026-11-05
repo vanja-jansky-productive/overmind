@@ -39,6 +39,8 @@ impl Env {
         c.env("OVERMIND_CONFIG", self.config_path())
             // `overmind list` records the session snapshot: never into the real one.
             .env("OVERMIND_SNAPSHOT", self.path("snapshot.json"))
+            // …nor which process runs which Codex / pi thread (this machine's live ones).
+            .env("OVERMIND_HARNESS_OWNERS", self.path("harness-owners.json"))
             .env("OVERMIND_MUX", "0")
             .env("OVERMIND_CONNECT_TIMEOUT", "2")
             .env("NO_COLOR", "1")

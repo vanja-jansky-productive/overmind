@@ -324,6 +324,10 @@ fn bare_invocation_is_one_shot_when_piped() {
     let mut child = std::process::Command::new(bin)
         .env("OVERMIND_CONFIG", cfg.path().join("none.json"))
         .env("OVERMIND_SNAPSHOT", cfg.path().join("snapshot.json"))
+        .env(
+            "OVERMIND_HARNESS_OWNERS",
+            cfg.path().join("harness-owners.json"),
+        )
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();

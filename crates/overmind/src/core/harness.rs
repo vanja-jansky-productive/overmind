@@ -20,7 +20,8 @@
 //! A process is matched to a transcript by an id on its command line (`codex resume <id>`,
 //! `pi --session <id>`), else by cwd and start time: the newest transcript in its cwd that
 //! was created after it started (one an older candidate kept writing past is a closed
-//! sibling's, not this process's `/new`), then the newest one written to since — never a `codex exec`
+//! sibling's, not this process's `/new`; one another process ran, by the owners discovery
+//! records, is never taken), then the newest one written to since — never a `codex exec`
 //! / `codex review` rollout (`source: "exec"`, `originator: "codex_exec"`): one run in the
 //! same cwd would take the TUI's row. A fresh Codex
 //! session has no transcript until its first prompt — it is listed without a session id.
@@ -1326,10 +1327,57 @@ fn subdirs(p: &Path) -> Vec<PathBuf> {
 /// newer one still counts as the same process's `/new`.
 const SUPERSEDE_SLACK_MS: i64 = 5_000;
 
+/// The process discovery last saw running a Codex / pi thread, and how far its transcript
+/// had grown then (`<state>/harness-owners.json`, kept across lists).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Owner {
+    pub pid: i64,
+    #[serde(rename = "startMs")]
+    pub start_ms: i64,
+    #[serde(rename = "mtimeMs")]
+    pub mtime_ms: i64,
+}
+
+/// Session id → its [`Owner`].
+pub type Owners = HashMap<String, Owner>;
+
+/// A process's start is `now - etime` (whole seconds): it wobbles between lists.
+const START_WOBBLE_MS: i64 = 3_000;
+
+impl Owner {
+    /// Whether `p` is the process this owner names (a reused pid starts at another time).
+    pub fn is(&self, p: &Proc) -> bool {
+        self.pid == p.pid && (self.start_ms - p.start_ms).abs() <= START_WOBBLE_MS
+    }
+}
+
+/// A transcript written this long after its gone owner was last seen with it was resumed
+/// by another process (Codex's `/resume`); before that, it is the gone owner's last write.
+const ORPHAN_SLACK_MS: i64 = 10_000;
+
+/// [`assign_owned`] without a record of owners (the first list on a host).
+pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptRef> {
+    assign_owned(procs, ts, &Owners::new())
+}
+
 /// Pair each process with its transcript (see the module docs). Later-started
 /// processes choose first, so two sessions in one cwd each get their own. A headless
-/// `codex exec` run is matched only by an id on the command line, never by cwd.
-pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptRef> {
+/// `codex exec` run is matched only by an id on the command line, never by cwd. By cwd, a
+/// transcript `owners` says another process runs is never taken: a live owner keeps it, and a
+/// gone owner's (a closed session) stays closed — unless written since that owner was last
+/// seen with it (resumed elsewhere). Without that record an idle sibling in the same cwd
+/// would read as having started it with `/new`.
+pub fn assign_owned(
+    procs: &[&Proc],
+    ts: &[TranscriptRef],
+    owners: &Owners,
+) -> HashMap<i64, TranscriptRef> {
+    let foreign = |t: &TranscriptRef, p: &Proc| {
+        owners.get(&t.session_id).is_some_and(|o| {
+            !o.is(p)
+                && (procs.iter().any(|q| o.is(q)) || t.mtime_ms <= o.mtime_ms + ORPHAN_SLACK_MS)
+        })
+    };
     let mut out = HashMap::new();
     let mut taken: HashSet<&Path> = HashSet::new();
     for p in procs {
@@ -1357,6 +1405,7 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
             let cands: Vec<&TranscriptRef> = ts
                 .iter()
                 .filter(|t| t.cwd == cwd && !t.headless && !taken.contains(t.path.as_path()))
+                .filter(|t| !foreign(t, p))
                 .filter(|t| {
                     if pass == 0 {
                         t.created_ms >= p.start_ms - 3000
@@ -1385,6 +1434,40 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
         }
     }
     out
+}
+
+/// `owners` after a list: each assigned thread's process and size now; a gone owner's entry
+/// kept while its transcript could still be a candidate (written since the oldest live
+/// process started, a minute's slack), dropped after.
+pub fn owners_after(
+    owners: &Owners,
+    assigned: &HashMap<i64, TranscriptRef>,
+    procs: &[&Proc],
+) -> Owners {
+    let oldest = procs.iter().map(|p| p.start_ms).min().unwrap_or(i64::MAX);
+    let mut next: Owners = owners
+        .iter()
+        .filter(|(_, o)| procs.iter().any(|p| o.is(p)) || o.mtime_ms >= oldest - 60_000)
+        .map(|(k, o)| (k.clone(), *o))
+        .collect();
+    for p in procs {
+        if let Some(t) = assigned.get(&p.pid) {
+            // The first start seen stays: a wobble alone is no change (no rewrite).
+            let start_ms = next
+                .get(&t.session_id)
+                .filter(|o| o.is(p))
+                .map_or(p.start_ms, |o| o.start_ms);
+            next.insert(
+                t.session_id.clone(),
+                Owner {
+                    pid: p.pid,
+                    start_ms,
+                    mtime_ms: t.mtime_ms,
+                },
+            );
+        }
+    }
+    next
 }
 
 /// What a transcript's tail says about its session.
@@ -2390,6 +2473,91 @@ mod tests {
         let got = assign(&[&a, &b], &ts);
         assert_eq!(got[&1].session_id, "a");
         assert_eq!(got[&2].session_id, "b");
+    }
+
+    #[test]
+    fn a_closed_sessions_transcript_never_goes_to_an_idle_sibling() {
+        // a and c run in /w; d started there later and is closed now. c has been idle since
+        // before d's transcript appeared, so only who ran d tells it apart from a `/new` of c.
+        let a = proc_(1, "/w", 1_000_000);
+        let c = proc_(3, "/w", 1_500_000);
+        let ts = vec![
+            tref("a", "/w", 1_000_500, 2_500_000),
+            tref("c", "/w", 1_500_400, 1_600_000),
+            tref("d", "/w", 2_000_400, 2_700_000),
+        ];
+        assert_eq!(assign(&[&a, &c], &ts)[&3].session_id, "d", "without owners");
+        let mut owners = Owners::new();
+        // A start time is `now - etime`: it wobbles by up to a second between lists.
+        owners.insert(
+            "a".into(),
+            Owner {
+                pid: 1,
+                start_ms: 1_000_900,
+                mtime_ms: 2_500_000,
+            },
+        );
+        owners.insert(
+            "c".into(),
+            Owner {
+                pid: 3,
+                start_ms: 1_500_000,
+                mtime_ms: 1_600_000,
+            },
+        );
+        owners.insert(
+            "d".into(),
+            Owner {
+                pid: 4,
+                start_ms: 2_000_000,
+                mtime_ms: 2_700_000,
+            },
+        );
+        let got = assign_owned(&[&a, &c], &ts, &owners);
+        assert_eq!(got[&1].session_id, "a");
+        assert_eq!(got[&3].session_id, "c");
+        // d resumed inside c (`/resume`, no id on the command line): written since its owner
+        // was last seen, so it is c's now.
+        let mut ts = ts;
+        ts[2].mtime_ms = 2_700_000 + ORPHAN_SLACK_MS + 1;
+        assert_eq!(assign_owned(&[&a, &c], &ts, &owners)[&3].session_id, "d");
+        // A live owner keeps its thread from another process in the same cwd.
+        let early = proc_(5, "/w", 900_000);
+        let mut owners = Owners::new();
+        owners.insert(
+            "x".into(),
+            Owner {
+                pid: 5,
+                start_ms: 900_000,
+                mtime_ms: 1_200_000,
+            },
+        );
+        let ts = vec![tref("x", "/w", 1_100_000, 1_200_000)];
+        let got = assign_owned(&[&early, &a], &ts, &owners);
+        assert_eq!(got[&5].session_id, "x");
+        assert!(!got.contains_key(&1));
+        // Who runs what is recorded for the next list.
+        let next = owners_after(&owners, &got, &[&early, &a]);
+        assert_eq!(next, owners, "nothing changed: no rewrite");
+        // A start that wobbled is the same process: still no change.
+        let wobbly = proc_(5, "/w", 901_000);
+        assert_eq!(owners_after(&owners, &got, &[&wobbly, &a]), owners);
+        // A thread that grew records its new size; a gone owner's entry is dropped once its
+        // transcript is older than the oldest live process.
+        let mut grown = got.clone();
+        grown.get_mut(&5).unwrap().mtime_ms = 1_300_000;
+        let mut old = owners.clone();
+        old.insert(
+            "gone".into(),
+            Owner {
+                pid: 9,
+                start_ms: 1,
+                mtime_ms: 2,
+            },
+        );
+        let next = owners_after(&old, &grown, &[&early, &a]);
+        assert_eq!(next["x"].mtime_ms, 1_300_000);
+        assert!(!next.contains_key("gone"));
     }
 
     #[test]
