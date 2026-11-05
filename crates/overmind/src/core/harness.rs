@@ -1415,11 +1415,6 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
     assign_owned(procs, ts, &Owners::new())
 }
 
-/// Whether `owners` records a thread `p` runs (an id on its command line counts too).
-fn has_thread(p: &Proc, owners: &Owners) -> bool {
-    p.explicit_session().is_some() || owners.values().any(|o| o.is(p))
-}
-
 /// Whether `q` kept writing its own recorded older thread past `at` (5 s slack) — when `t` was
 /// created, or last written for one taken up again: then `t` is not its `/new` (or `/resume`).
 fn busy_elsewhere(
@@ -1445,9 +1440,9 @@ fn acted_at(t: &TranscriptRef, resumed: bool) -> i64 {
 /// The processes that could have started `t`, a thread no one is recorded with: those in its
 /// cwd that existed when it was created — or, for one taken up again (`resumed`: created before
 /// the process matched started, or a gone owner's — `/resume`), when it was last written — less
-/// any [`busy_elsewhere`]. Codex stamps a thread when its TUI starts (the rollout appears at the
-/// first prompt), so a process without a recorded thread that started then (3 s slack) is
-/// taken as its only possible starter.
+/// any [`busy_elsewhere`]. Nothing else rules one out: Codex stamps a thread when its TUI starts
+/// and a `/new` thread at the `/new`, so a pane opened within 3 s of a sibling's `/new` (or, on a
+/// Codex that stamps at the first prompt, of a sibling's first prompt) fits both.
 fn starters(
     t: &TranscriptRef,
     resumed: bool,
@@ -1456,22 +1451,13 @@ fn starters(
     ts: &[TranscriptRef],
 ) -> Vec<Pid> {
     let at = acted_at(t, resumed);
-    let all: Vec<&&Proc> = procs
+    procs
         .iter()
         .filter(|q| q.cwd.as_deref() == Some(t.cwd.as_str()))
         .filter(|q| q.start_ms - CREATE_SLACK_MS <= at)
         .filter(|q| !busy_elsewhere(q, t, at, owners, ts))
-        .collect();
-    if resumed {
-        return all.into_iter().map(|q| Pid::of(q)).collect();
-    }
-    let born: Vec<&&Proc> = all
-        .iter()
-        .copied()
-        .filter(|q| !has_thread(q, owners) && (q.start_ms - t.created_ms).abs() <= CREATE_SLACK_MS)
-        .collect();
-    let pick = if born.is_empty() { all } else { born };
-    pick.into_iter().map(|q| Pid::of(q)).collect()
+        .map(|q| Pid::of(q))
+        .collect()
 }
 
 /// Of a contested thread's possible starters, those still possible: a gone one stays (the
@@ -1505,9 +1491,9 @@ fn resumed(t: &TranscriptRef, p: &Proc) -> bool {
 /// transcript `owners` says another process runs is never taken: a live owner keeps it, and a
 /// gone owner's (a closed session) stays closed — unless written since that owner was first
 /// seen gone (resumed elsewhere). A thread no one is recorded with (or a contested one) goes
-/// only to a process that could have started it, and to one that already runs a recorded
-/// thread only when no other could have: a `/new` beside an idle sibling would else read as
-/// the sibling's (both keep theirs until one is seen busy on its old thread).
+/// to a process only when it alone could have started it: a row shows no thread rather than
+/// one that may be another pane's (a `/new` beside a pane just opened, two panes opened
+/// together). A contested thread one of whose starters is gone is closed like a gone owner's.
 pub fn assign_owned(
     procs: &[&Proc],
     ts: &[TranscriptRef],
@@ -1527,10 +1513,15 @@ pub fn assign_owned(
         let could = match owners.get(&t.session_id) {
             // A gone owner's, grown since (`foreign` let it through): taken up again.
             Some(o) if !o.contested() => starters(t, true, procs, owners, ts),
-            Some(o) => still_possible(o, t, procs, owners, ts),
+            // A starter gone: closed like a gone owner's until it grows past then.
+            Some(o) => match o.closed_mtime_ms {
+                Some(m) if t.mtime_ms <= m + ORPHAN_SLACK_MS => return false,
+                Some(_) => starters(t, true, procs, owners, ts),
+                None => still_possible(o, t, procs, owners, ts),
+            },
             None => starters(t, resumed(t, p), procs, owners, ts),
         };
-        could.iter().any(|m| m.is(p)) && (could.len() == 1 || !has_thread(p, owners))
+        matches!(could.as_slice(), [m] if m.is(p))
     };
     let mut out = HashMap::new();
     let mut taken: HashSet<&Path> = HashSet::new();
@@ -1596,11 +1587,13 @@ pub fn assign_owned(
 /// - A match is recorded as ownership only when it is certain: an id on the command line, or
 ///   [`starters`] names this process alone.
 /// - Otherwise the thread is recorded contested, with its possible starters — also one no
-///   process was matched to, the first time a list sees it. It is matched afresh each list, so
-///   two fresh panes in one cwd and a first prompt, or a `/new` beside an idle sibling, never
-///   hand one pane the other's thread for good. A starter drops out once it is seen busy on its
-///   own older thread; when one live starter is left (and no gone one), it is the owner.
-/// - A gone owner's entry takes its transcript's mtime the first time it is seen gone.
+///   process was matched to, the first time a list sees it. A starter drops out once it is seen
+///   busy on its own older thread; when one live starter is left (and no gone one), it is the
+///   owner.
+/// - A gone owner's entry, and a contested one with a starter gone, takes its transcript's mtime
+///   the first time it is seen gone. A contested one grown past that by more than
+///   [`ORPHAN_SLACK_MS`] was taken up again: it is the owner's of the one process that could
+///   have (its last write judged as a `/resume`).
 /// - Gone owners' and contested entries are kept while their transcript could still be a
 ///   candidate (written since the oldest live process started, a minute's slack).
 ///
@@ -1625,7 +1618,16 @@ pub fn owners_after(
             let Some(t) = t.filter(|t| t.mtime_ms >= oldest - 60_000) else {
                 continue;
             };
-            let left = still_possible(o, t, procs, owners, ts);
+            let gone = o
+                .contested_by
+                .iter()
+                .any(|m| !procs.iter().any(|q| m.is(q)));
+            let closed = o.closed_mtime_ms.or(gone.then_some(t.mtime_ms));
+            let left = match closed {
+                Some(m) if t.mtime_ms > m + ORPHAN_SLACK_MS => starters(t, true, procs, owners, ts),
+                Some(_) => Vec::new(),
+                None => still_possible(o, t, procs, owners, ts),
+            };
             let alone = match left.as_slice() {
                 [m] => procs.iter().find(|q| m.is(q)),
                 _ => None,
@@ -1634,7 +1636,10 @@ pub fn owners_after(
                 id.clone(),
                 match alone {
                     Some(q) => Owner::new(q),
-                    None => o.clone(),
+                    None => Owner {
+                        closed_mtime_ms: closed,
+                        ..o.clone()
+                    },
                 },
             );
             continue;
@@ -2700,9 +2705,20 @@ mod tests {
             tref("b", "/w", 2_000_400, 2_400_000),
             tref("elsewhere", "/x", 2_000_400, 3_000_000),
         ];
+        // The first list: a could have started b's thread as well (nothing yet says it is busy
+        // on its own), so b shows none; a's is recorded.
         let got = assign(&[&a, &b], &ts);
         assert_eq!(got[&1].session_id, "a");
+        assert!(!got.contains_key(&2), "{got:?}");
+        // The next: a kept writing its own thread past b's start, so b's is b's.
+        let owners = owners_after(&Owners::new(), &got, &[&a, &b], &ts);
+        let got = assign_owned(&[&a, &b], &ts, &owners);
+        assert_eq!(got[&1].session_id, "a");
         assert_eq!(got[&2].session_id, "b");
+        assert_eq!(
+            owners_after(&owners, &got, &[&a, &b], &ts)["b"],
+            owner(2, 2_000_000)
+        );
     }
 
     fn owner(pid: i64, start_ms: i64) -> Owner {
@@ -2725,7 +2741,8 @@ mod tests {
             tref("c", "/w", 1_500_400, 1_600_000),
             tref("d", "/w", 2_000_400, 2_700_000),
         ];
-        assert_eq!(assign(&[&a, &c], &ts)[&3].session_id, "d", "without owners");
+        // Without owners, a or c could each have started d.
+        assert!(!assign(&[&a, &c], &ts).values().any(|t| t.session_id == "d"));
         let mut owners = Owners::new();
         // A start time is `now - etime`: it wobbles by up to a second between lists.
         owners.insert("a".into(), owner(1, 1_000_900));
@@ -2824,15 +2841,115 @@ mod tests {
         let got2 = assign_owned(&procs, &ts2, &o1);
         let o2 = owners_after(&o1, &got2, &procs, &ts2);
         assert!(o2.values().all(|o| o.contested()), "{o2:?}");
-        // A's thread written last: A reads it (a contested thread is matched afresh).
+        // Neither row shows a thread the other could have started; nothing is rewritten.
         let ts3 = vec![
             tref("bt", "/w", 1_020_000, 1_090_000),
             tref("at", "/w", 1_030_000, 1_100_000),
         ];
         let got3 = assign_owned(&procs, &ts3, &o2);
-        assert_eq!(got3[&1].session_id, "at");
-        assert_eq!(got3[&2].session_id, "bt");
+        assert!(got3.is_empty(), "{got3:?}");
         assert_eq!(owners_after(&o2, &got3, &procs, &ts3), o2, "no rewrite");
+    }
+
+    /// One list: the match and the owners after it.
+    fn list(
+        procs: &[&Proc],
+        ts: &[TranscriptRef],
+        owners: &Owners,
+    ) -> (HashMap<i64, TranscriptRef>, Owners) {
+        let got = assign_owned(procs, ts, owners);
+        let next = owners_after(owners, &got, procs, ts);
+        (got, next)
+    }
+
+    fn shown(got: &HashMap<i64, TranscriptRef>, pid: i64) -> Option<&str> {
+        got.get(&pid).map(|t| t.session_id.as_str())
+    }
+
+    #[test]
+    fn a_new_just_before_a_pane_opens_is_never_the_new_panes() {
+        // A runs a1 (recorded). `/new` in A at T: Codex stamps a2 at T. Pane B opens at T + 1 s
+        // in the same cwd; A's first prompt on a2 comes later. B could have started a2, but so
+        // could A (idle on a1): a2 is no one's yet.
+        let a = proc_(10, "/w", 1_000_000);
+        let b = proc_(11, "/w", 1_101_000);
+        let mut owners = Owners::new();
+        owners.insert("a1".into(), owner(10, 1_000_000));
+        let ts = vec![
+            tref("a1", "/w", 1_000_500, 1_040_000),
+            tref("a2", "/w", 1_100_000, 1_125_000),
+        ];
+        let (got, next) = list(&[&a, &b], &ts, &owners);
+        assert!(
+            next.get("a2").is_none_or(|o| o.contested()),
+            "a2 recorded: {next:?}"
+        );
+        assert_ne!(shown(&got, 11), Some("a2"), "B shown A's a2");
+        // B's own first prompt: b1, stamped at B's start; A keeps working a2.
+        let ts = vec![
+            tref("a1", "/w", 1_000_500, 1_040_000),
+            tref("a2", "/w", 1_100_000, 1_300_000),
+            tref("b1", "/w", 1_101_000, 1_205_000),
+        ];
+        let (_, next) = list(&[&a, &b], &ts, &next);
+        let (got, next) = list(&[&a, &b], &ts, &next);
+        for (id, o) in &next {
+            assert!(
+                o.contested() || o.by.pid == if id.starts_with('a') { 10 } else { 11 },
+                "{id} recorded as {o:?}"
+            );
+        }
+        assert_ne!(
+            shown(&got, 11),
+            Some("a2"),
+            "B shown A's a2 after its own prompt"
+        );
+        assert_ne!(shown(&got, 10), Some("b1"), "A shown B's b1");
+    }
+
+    #[test]
+    fn a_first_prompt_just_before_a_pane_opens_is_never_the_new_panes() {
+        // A Codex that stamps a thread at its first prompt: A, open and idle for a while, is
+        // prompted at T; pane B opens at T + 1 s in the same cwd.
+        let a = proc_(10, "/w", 1_000_000);
+        let b = proc_(11, "/w", 1_101_000);
+        let ts = vec![tref("a1", "/w", 1_100_000, 1_110_000)];
+        let (got, next) = list(&[&a, &b], &ts, &Owners::new());
+        assert!(
+            next.get("a1").is_none_or(|o| o.contested()),
+            "a1 recorded: {next:?}"
+        );
+        assert_ne!(shown(&got, 11), Some("a1"), "B shown A's a1");
+    }
+
+    #[test]
+    fn a_contested_thread_whose_pane_closed_is_not_shown_to_the_survivor() {
+        // F and G start 1 s apart in /w: either could have started either thread. G's last turn
+        // is newer than F's; then G closes.
+        let f = proc_(10, "/w", 1_000_000);
+        let g = proc_(11, "/w", 1_001_000);
+        let mut ts = vec![
+            tref("f", "/w", 1_000_000, 1_050_000),
+            tref("g", "/w", 1_001_000, 1_060_000),
+        ];
+        let (_, o) = list(&[&f, &g], &ts, &Owners::new());
+        let (_, o) = list(&[&f, &g], &ts, &o);
+        assert!(o.values().all(|o| o.contested()), "{o:?}");
+        let (got, o) = list(&[&f], &ts, &o);
+        assert_ne!(shown(&got, 10), Some("g"), "F shown closed G's thread");
+        let (got, o) = list(&[&f], &ts, &o);
+        assert_ne!(shown(&got, 10), Some("g"), "F shown closed G's thread");
+        // F writes its thread again, well past G's close: it is F's.
+        ts[0].mtime_ms = 1_060_000 + ORPHAN_SLACK_MS + 1;
+        let (got, o) = list(&[&f], &ts, &o);
+        let (got2, o) = list(&[&f], &ts, &o);
+        assert_eq!(shown(&got, 10), Some("f"));
+        assert_eq!(shown(&got2, 10), Some("f"));
+        assert_eq!(o["f"], owner(10, 1_000_000), "{o:?}");
+        assert!(
+            o.get("g").is_none_or(|g| g.contested() || g.by.pid != 10),
+            "{o:?}"
+        );
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2846,14 +2963,15 @@ mod tests {
         Tick,
     }
 
-    /// Panes in one cwd going through `events`, a list after each (or after every second one).
-    /// A pane's first thread is stamped when its process starts (Codex 0.166), or at its first
-    /// prompt with `stamp_at_prompt`. An error when a list ever records a pane as running
-    /// another pane's thread, or gives a pane a thread recorded as another's.
+    /// Panes in one cwd going through `events`, `step` ms apart, a list after each (or after
+    /// every second one). A pane's first thread is stamped when its process starts (Codex
+    /// 0.166), or at its first prompt with `stamp_at_prompt`. An error when a list ever records
+    /// a pane as running another pane's thread, or shows a pane another pane's thread.
     fn simulate(
         events: &[Ev],
         busy: &[bool],
         every: usize,
+        step: i64,
         stamp_at_prompt: bool,
     ) -> Result<(Owners, HashMap<i64, TranscriptRef>), String> {
         let n = busy.len();
@@ -2863,7 +2981,7 @@ mod tests {
         let mut owners = Owners::new();
         let mut got = HashMap::new();
         for (k, ev) in events.iter().enumerate() {
-            let now = 1_000_000 + k as i64 * 10_000;
+            let now = 1_000_000 + k as i64 * step;
             let mut fresh = None;
             match *ev {
                 Ev::Start(i) => procs[i] = Some(proc_(10 + i as i64, "/w", now)),
@@ -2901,10 +3019,7 @@ mod tests {
                 }
             }
             for (pid, t) in &got {
-                if next
-                    .get(&t.session_id)
-                    .is_some_and(|o| !o.contested() && o.by.pid != *pid)
-                {
+                if whose(&t.session_id) != *pid {
                     return Err(format!("after {ev:?}: pid {pid} shows {}", t.session_id));
                 }
             }
@@ -2938,69 +3053,110 @@ mod tests {
         out
     }
 
+    /// `order` with a `/new` in pane `i` placed at every point after its first prompt (also
+    /// before another pane starts).
+    fn with_new(order: &[Ev], i: usize) -> Vec<Vec<Ev>> {
+        let after = order.iter().position(|e| *e == Ev::Prompt(i)).unwrap() + 1;
+        (after..=order.len())
+            .map(|at| {
+                let mut evs = order.to_vec();
+                evs.insert(at, Ev::New(i));
+                evs
+            })
+            .collect()
+    }
+
     #[test]
     fn no_pane_is_ever_recorded_with_another_panes_thread() {
-        let mut runs = 0;
+        // Steps under and over the 3 s slack of a start and a stamp, and the 5 s of a `/new`.
+        const STEPS: [i64; 5] = [500, 1_000, 2_500, 4_000, 10_000];
+        let mut runs: Vec<(Vec<Ev>, Vec<bool>, usize)> = Vec::new();
         for n in 2..=3 {
             for order in orders(n) {
-                for busy_bits in 0..(1u8 << n) {
-                    let busy: Vec<bool> = (0..n).map(|i| busy_bits & (1 << i) != 0).collect();
-                    // Then maybe a `/new` in one pane, maybe one pane closed, and a few lists.
-                    for new in std::iter::once(None).chain((0..n).map(Some)) {
+                let mut seqs = vec![order.clone()];
+                for i in 0..n {
+                    seqs.extend(with_new(&order, i));
+                }
+                for seq in seqs {
+                    for busy_bits in 0..(1u8 << n) {
+                        let busy: Vec<bool> = (0..n).map(|i| busy_bits & (1 << i) != 0).collect();
+                        // Then maybe one pane closed, and a few lists.
                         for close in std::iter::once(None).chain((0..n).map(Some)) {
-                            let mut evs = order.clone();
-                            evs.extend(new.map(Ev::New));
+                            let mut evs = seq.clone();
                             evs.push(Ev::Tick);
                             evs.extend(close.map(Ev::Close));
                             evs.extend([Ev::Tick, Ev::Tick, Ev::Tick]);
                             // Lists skipping events too, on the two-pane runs (the cost).
                             for every in if n == 2 { &[1, 2][..] } else { &[1][..] } {
-                                let every = *every;
-                                for stamp_at_prompt in [false, true] {
-                                    runs += 1;
-                                    if let Err(e) = simulate(&evs, &busy, every, stamp_at_prompt) {
-                                        panic!(
-                                            "{evs:?} busy {busy:?} every {every} \
-                                             stamp_at_prompt {stamp_at_prompt}: {e}"
-                                        );
-                                    }
-                                }
+                                runs.push((evs.clone(), busy.clone(), *every));
                             }
                         }
                     }
                 }
             }
         }
-        assert!(runs > 10_000, "{runs}");
+        assert!(runs.len() > 20_000, "{}", runs.len());
+        // ~240k simulations (each run at every step, both stamps): spread over the cores.
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let chunk = runs.len().div_ceil(threads);
+        std::thread::scope(|s| {
+            for part in runs.chunks(chunk) {
+                s.spawn(move || {
+                    for (evs, busy, every) in part {
+                        for step in STEPS {
+                            for stamp_at_prompt in [false, true] {
+                                if let Err(e) = simulate(evs, busy, *every, step, stamp_at_prompt) {
+                                    panic!(
+                                        "{evs:?} busy {busy:?} every {every} step {step} \
+                                         stamp_at_prompt {stamp_at_prompt}: {e}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
     }
 
     #[test]
     fn panes_started_and_prompted_in_turn_own_their_threads() {
-        // The ordinary case: each pane gets its first prompt before the next one starts. Every
-        // thread is recorded, and closing any pane leaves the others on their own.
+        // The ordinary case: each pane gets its first prompt before the next one starts. A
+        // thread is recorded (and shown) once every pane opened before it is seen busy on its
+        // own: an idle one could have made it with `/new` just as the pane opened. Closing any
+        // pane leaves the others on their own.
         for busy_bits in 0..8u8 {
             let busy: Vec<bool> = (0..3).map(|i| busy_bits & (1 << i) != 0).collect();
+            let sure = |i: usize| (0..i).all(|j| busy[j]);
+            let evs = [
+                Ev::Start(0),
+                Ev::Prompt(0),
+                Ev::Start(1),
+                Ev::Prompt(1),
+                Ev::Start(2),
+                Ev::Prompt(2),
+                Ev::Tick,
+            ];
+            let (owners, got) = simulate(&evs, &busy, 1, 10_000, false).unwrap();
+            for i in 0..3 {
+                let id = format!("t{i}-{}", 2 * i + 1);
+                let pid = 10 + i as i64;
+                assert_eq!(
+                    owners[&id].is(&proc_(pid, "/w", 1_000_000 + 2 * i as i64 * 10_000)),
+                    sure(i),
+                    "{busy:?} t{i}: {:?}",
+                    owners[&id]
+                );
+                assert_eq!(
+                    got.get(&pid).map(|t| t.session_id == id),
+                    sure(i).then_some(true)
+                );
+            }
             for close in 0..3 {
-                let evs = [
-                    Ev::Start(0),
-                    Ev::Prompt(0),
-                    Ev::Start(1),
-                    Ev::Prompt(1),
-                    Ev::Start(2),
-                    Ev::Prompt(2),
-                    Ev::Close(close),
-                    Ev::Tick,
-                    Ev::Tick,
-                ];
-                let (owners, got) = simulate(&evs, &busy, 1, false).unwrap();
-                for i in 0..3 {
-                    let o = &owners[&format!("t{i}-{}", 2 * i + 1)];
-                    assert!(
-                        !o.contested() && o.by.pid == 10 + i as i64,
-                        "{busy:?} t{i}: {o:?}"
-                    );
-                }
-                for i in (0..3).filter(|i| *i != close) {
+                let mut evs = evs.to_vec();
+                evs.extend([Ev::Close(close), Ev::Tick, Ev::Tick]);
+                let (_, got) = simulate(&evs, &busy, 1, 10_000, false).unwrap();
+                for i in (0..3).filter(|i| *i != close && sure(*i)) {
                     let pid = 10 + i as i64;
                     assert_eq!(
                         got[&pid].session_id,
@@ -3008,7 +3164,6 @@ mod tests {
                         "{busy:?}"
                     );
                 }
-                assert_eq!(got.len(), 2, "{busy:?} close {close}: {got:?}");
             }
         }
     }
@@ -3027,7 +3182,7 @@ mod tests {
             Ev::New(0),
             Ev::Tick,
         ];
-        let (owners, got) = simulate(&evs, &[true, false], 1, false).unwrap();
+        let (owners, got) = simulate(&evs, &[true, false], 1, 10_000, false).unwrap();
         assert_eq!(got[&11].session_id, "t1-3");
         assert_ne!(got[&10].session_id, "t1-3");
         assert!(
@@ -3035,7 +3190,7 @@ mod tests {
             "{owners:?}"
         );
         // Pane 1 busy on its own thread: the new one can only be pane 0's.
-        let (owners, got) = simulate(&evs, &[true, true], 1, false).unwrap();
+        let (owners, got) = simulate(&evs, &[true, true], 1, 10_000, false).unwrap();
         assert_eq!(got[&10].session_id, "t0-4");
         assert_eq!(owners["t0-4"], owner(10, 1_000_000));
     }

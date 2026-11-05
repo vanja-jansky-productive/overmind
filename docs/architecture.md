@@ -253,21 +253,27 @@ sibling's transcript (same cwd) from taking a survivor's row, and one pane's thr
   10 s past that (taken up again with `/resume`; the 10 s cover the app-server daemon's last
   writes after its TUI exits). A gone owner's entry is dropped once its transcript is older than
   the oldest live process. An unreadable file is said once on stderr and starts empty.
-- **Starters**: a thread no one is recorded with goes only to a process that could have started
-  it — one in its cwd that existed when it was created, less one that kept writing its own
-  recorded older thread past then (busy, so not its `/new`). Codex stamps a thread when its TUI
-  starts (the rollout appears at the first prompt), so a process with no recorded thread that
-  started then (3 s slack) is its only starter. The match is recorded as ownership only when the
-  starter is certain (or the id is on the command line). Otherwise the thread is recorded with
-  its possible starters (`contestedBy`; `resumed` when it was taken up again, judged by its last
-  write instead of its creation), also when no row took it, while they are all alive. A starter
-  drops out once seen busy on its own older thread; when one live starter is left (and no gone
-  one), it becomes the owner. A process that already runs a recorded thread takes a contested or
-  unrecorded one only when it is the only starter: a `/new` beside an idle sibling in the same
-  cwd keeps both rows on their own threads (the `/new` pane's row stale) until the sibling is
-  written again — never the sibling's row on the new thread. Two panes started within 3 s of each
-  other in one cwd stay contested for good; their rows may swap between lists, as before this
-  record existed, but neither is recorded with the other's thread.
+- **Starters**: a thread no one is recorded with goes to a process only when that process alone
+  could have started it: the processes in its cwd that existed when it was created (3 s slack),
+  less one that kept writing its own recorded older thread past then (busy, so not its `/new`).
+  Nothing else rules one out. Codex stamps a thread when its TUI starts and a `/new` thread at the
+  `/new`, so a pane opened within 3 s of a sibling's `/new` fits both, and so does an idle
+  sibling of any fresh pane. When more than one process could have, the thread is recorded with
+  them (`contestedBy`; `resumed` when it was taken up again, judged by its last write instead of
+  its creation), also when no row took it, while they are all alive, and **no row shows it**: a
+  row shows an older thread of its own, or none, rather than one that may be another pane's. A
+  starter drops out once seen busy on its own older thread; when one live starter is left (and no
+  gone one), it becomes the owner and its row shows the thread. A contested thread one of whose
+  starters is gone is closed like a gone owner's (`closedMtimeMs`): no row takes it until it grows
+  more than 10 s past that, then it goes to the one process that could have taken it up. The
+  costs, all a missing thread and never another pane's:
+  - A pane opened beside an idle Codex pane in the same cwd shows no thread until the idle pane is
+    used again (its next turn proves it was not the `/new`).
+  - Two panes opened within 3 s of each other in one cwd show none for as long as both stay open
+    without a recorded thread; when one closes, the other's shows once it is written again.
+  - A `/new` pane's row stays on its older thread until its sibling is busy on its own.
+  - On a host's first list (or after an unreadable owners file) only the earliest pane in a cwd
+    is certain; each later one shows its thread once the panes before it are seen busy on theirs.
 - **Superseded**: a newer candidate is the process's `/new` only if its own recorded older thread
   went quiet when it appeared (5 s slack). Codex 0.166 does not write the old rollout after
   `/new` (checked live with the mock).
