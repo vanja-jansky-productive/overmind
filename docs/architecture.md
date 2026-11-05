@@ -282,7 +282,9 @@ refresh plus one list, measured on Codex 0.166). `waiting_for` is `<label>: \`<c
 ≤ 80 chars>\`` (`Bash` → `exec approval`, else `<tool> approval`); the menu text is the web card's.
 Only exec approvals are read (an `apply_patch` screen is not the exec menu: `busy`). Sidecars of
 threads no live row has (and temp files a killed hook left) are deleted after an hour, by any
-`list` on a host with a Codex home, Codex running or not.
+`list` on a host with a Codex home, Codex running or not — only files provably ours (a
+`<thread>.json` holding that thread's v1 sidecar, the exact temp-file pattern), since
+`OVERMIND_CODEX_HOOKS_DIR` may point at a dir holding other files.
 
 Targets (`peek <target>`, `send <target>` …) resolve against title, name, session-id prefix or pid,
 walking exact → prefix → substring → characters-in-order; two matches on the same rung is an error

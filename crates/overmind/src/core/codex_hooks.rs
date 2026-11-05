@@ -148,11 +148,42 @@ pub fn write_sidecar(dir: &Path, id: &str, sidecar: &Value) -> Result<()> {
     crate::core::brief::write_private(&dir.join(format!("{id}.json")), &sidecar.to_string())
 }
 
-/// A file `uninstall` and prune may delete: a sidecar, the install record, a temp file.
-fn is_ours(name: &str) -> bool {
-    name == INSTALL_RECORD
-        || name.ends_with(".tmp")
-        || name.strip_suffix(".json").is_some_and(safe_id)
+/// A file `uninstall` and prune may delete — provably ours, since the dir may be one the user
+/// chose (`OVERMIND_CODEX_HOOKS_DIR`) and hold anything:
+/// - `<thread>.json` holding a v1 sidecar of that thread;
+/// - `.install.json` holding our install record (`v` 1, a command running `_codex-hook`);
+/// - `<thread>.json.<pid>.<8 hex>.tmp` / `.install.json.<pid>.<8 hex>.tmp`, the temp file
+///   `write_private` makes (a killed hook's leftover).
+fn is_ours(dir: &Path, name: &str) -> bool {
+    let read = || std::fs::read_to_string(dir.join(name)).ok();
+    if name == INSTALL_RECORD {
+        return read()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|r| {
+                r.get("v").and_then(Value::as_u64) == Some(1)
+                    && r.get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|c| our_binary(c).is_some())
+            });
+    }
+    if let Some(stem) = name.strip_suffix(".tmp") {
+        let mut parts = stem.rsplitn(3, '.');
+        let (Some(nonce), Some(pid), Some(base)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return false;
+        };
+        return nonce.len() == 8
+            && nonce.bytes().all(|b| b.is_ascii_hexdigit())
+            && !pid.is_empty()
+            && pid.bytes().all(|b| b.is_ascii_digit())
+            && (base == INSTALL_RECORD || base.strip_suffix(".json").is_some_and(safe_id));
+    }
+    name.strip_suffix(".json").is_some_and(|id| {
+        safe_id(id)
+            && read()
+                .and_then(|t| parse_sidecar(&t))
+                .is_some_and(|sc| sc.thread_id == id)
+    })
 }
 
 // ------------------------------------------------------------------ sidecar read side
@@ -207,7 +238,7 @@ pub fn prune_sidecars(dir: &Path, live: &[&str], max_age_ms: i64, now: i64) {
     };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name == INSTALL_RECORD || !is_ours(&name) {
+        if name == INSTALL_RECORD {
             continue;
         }
         if name
@@ -223,7 +254,8 @@ pub fn prune_sidecars(dir: &Path, live: &[&str], max_age_ms: i64, now: i64) {
             .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| now - d.as_millis() as i64)
             .unwrap_or(0);
-        if age > max_age_ms {
+        // Old enough first: only those are read to prove they are ours.
+        if age > max_age_ms && e.file_type().is_ok_and(|t| t.is_file()) && is_ours(dir, &name) {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -738,6 +770,24 @@ fn write_guarded(path: &Path, before: Option<&[u8]>, doc: &Value) -> Result<()> 
     Ok(())
 }
 
+/// Delete `path`, unless someone else wrote it since we read `before`.
+fn remove_guarded(path: &Path, before: Option<&[u8]>) -> Result<()> {
+    if std::fs::read(path).ok().as_deref() != before {
+        return Err(Error::Other(format!(
+            "{} changed underneath (a `/hooks` toggle in Codex?) — re-run",
+            path.display()
+        )));
+    }
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+/// `install`'s record in `sidecars`, if any.
+fn read_record(sidecars: &Path) -> Option<Value> {
+    let text = std::fs::read_to_string(sidecars.join(INSTALL_RECORD)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// What `install` did.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Installed {
@@ -777,6 +827,9 @@ pub fn install(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Install
         .into_iter()
         .flat_map(|(_, keys)| keys)
         .collect();
+    // Whether hooks.json is ours to delete again on uninstall: it did not exist before the
+    // first install (a reinstall carries the first one's word).
+    let created = bytes.is_none() || read_record(sidecars).is_some_and(|r| r["created"] == true);
     write_guarded(&path, bytes.as_deref(), &new)?;
     let record = json!({
         "v": 1,
@@ -784,6 +837,7 @@ pub fn install(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Install
         "command": cmd,
         "rewrote": rewrote,
         "trust": trust,
+        "created": created,
     });
     let _ = crate::core::brief::write_private(&sidecars.join(INSTALL_RECORD), &record.to_string());
     Ok(match old {
@@ -799,13 +853,18 @@ pub fn uninstall(codex_home: &Path, sidecars: &Path) -> Result<(bool, bool)> {
     let path = hooks_path(codex_home);
     let (bytes, doc) = read_doc(&path)?;
     let (new, shifted) = removed(&doc)?;
-    if new != doc {
+    let created = read_record(sidecars).is_some_and(|r| r["created"] == true);
+    let empty = new == json!({}) || new == json!({ "hooks": {} });
+    if new != doc && created && empty {
+        // `install` made the file and nothing else is in it now: no file, as before.
+        remove_guarded(&path, bytes.as_deref())?;
+    } else if new != doc {
         write_guarded(&path, bytes.as_deref(), &new)?;
     }
     if let Ok(rd) = std::fs::read_dir(sidecars) {
         for e in rd.flatten() {
             let ours = e.file_type().is_ok_and(|t| t.is_file())
-                && is_ours(&e.file_name().to_string_lossy());
+                && is_ours(sidecars, &e.file_name().to_string_lossy());
             if ours {
                 let _ = std::fs::remove_file(e.path());
             }
@@ -1125,15 +1184,24 @@ mod tests {
     #[test]
     fn prune_drops_only_old_sidecars_of_threads_no_row_has() {
         let dir = tempfile::tempdir().unwrap();
-        for name in [
-            "live.json",
-            "dead.json",
-            "dead.json.123.0000abcd.tmp",
-            INSTALL_RECORD,
-            "notes.txt",
-        ] {
+        let sidecar = |id: &str| {
+            sidecar_from_payload(&json!({ "session_id": id, "hook_event_name": "Stop" }), 1)
+                .unwrap()
+                .1
+                .to_string()
+        };
+        for id in ["live", "dead"] {
+            std::fs::write(dir.path().join(format!("{id}.json")), sidecar(id)).unwrap();
+        }
+        for name in ["dead.json.123.0000abcd.tmp", INSTALL_RECORD, "notes.txt"] {
             std::fs::write(dir.path().join(name), "{}").unwrap();
         }
+        // A shared dir's other files: names a sidecar could have, content no sidecar has.
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        std::fs::write(dir.path().join("snapshot.json"), "[]").unwrap();
+        std::fs::write(dir.path().join("other.json"), sidecar("someone-else")).unwrap();
+        std::fs::write(dir.path().join("x.tmp"), "").unwrap();
+        std::fs::write(dir.path().join("build.json.9.tmp"), "").unwrap();
         let now = now_ms();
         prune_sidecars(dir.path(), &["live"], 3_600_000, now);
         assert!(dir.path().join("dead.json").exists(), "young: kept");
@@ -1143,7 +1211,16 @@ mod tests {
             !dir.path().join("dead.json.123.0000abcd.tmp").exists(),
             "a killed hook's temp file"
         );
-        for kept in ["live.json", INSTALL_RECORD, "notes.txt"] {
+        for kept in [
+            "live.json",
+            INSTALL_RECORD,
+            "notes.txt",
+            "package.json",
+            "snapshot.json",
+            "other.json",
+            "x.tmp",
+            "build.json.9.tmp",
+        ] {
             assert!(dir.path().join(kept).exists(), "{kept}");
         }
     }
@@ -1275,6 +1352,41 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_deletes_a_hooks_json_install_created_and_keeps_one_the_user_had() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join("state/codex-hooks");
+        let path = hooks_path(home.path());
+        let exe = Path::new("/bin/overmind");
+        // None before: install creates it, a reinstall keeps that word, uninstall deletes it.
+        install(home.path(), exe, &state).unwrap();
+        install(home.path(), Path::new("/elsewhere/overmind"), &state).unwrap();
+        assert!(path.exists());
+        assert_eq!(uninstall(home.path(), &state).unwrap(), (true, false));
+        assert!(!path.exists(), "the round trip leaves no file");
+        // Created, then the user added a hook of their own: kept, with only theirs.
+        install(home.path(), exe, &state).unwrap();
+        let mut doc = read_doc(&path).unwrap().1;
+        doc["hooks"]["Stop"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "hooks": [{ "type": "command", "command": "say done" }] }));
+        std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+        uninstall(home.path(), &state).unwrap();
+        assert_eq!(
+            read_doc(&path).unwrap().1["hooks"]["Stop"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        // The user's own (empty) file before install: still a file after.
+        std::fs::write(&path, "{}").unwrap();
+        install(home.path(), exe, &state).unwrap();
+        uninstall(home.path(), &state).unwrap();
+        assert!(path.exists(), "theirs before: kept");
+    }
+
+    #[test]
     fn uninstall_leaves_a_user_chosen_dir_and_its_other_files_alone() {
         let home = tempfile::tempdir().unwrap();
         let shared = home.path().join("shared");
@@ -1282,18 +1394,31 @@ mod tests {
         std::fs::write(shared.join("keep.txt"), "x").unwrap();
         std::fs::write(shared.join("sub/also.json"), "{}").unwrap();
         std::fs::write(shared.join("not an id.json"), "{}").unwrap();
+        std::fs::write(shared.join("package.json"), r#"{"name":"app"}"#).unwrap();
+        std::fs::write(shared.join("snapshot.json"), "[]").unwrap();
+        std::fs::write(shared.join("foo.tmp"), "").unwrap();
         let exe = Path::new("/bin/overmind");
         install(home.path(), exe, &shared).unwrap();
         let (id, sc) = sidecar_from_payload(&payload("PermissionRequest"), 1).unwrap();
         write_sidecar(&shared, &id, &sc).unwrap();
-        std::fs::write(shared.join("x.json.9.tmp"), "").unwrap();
+        std::fs::write(shared.join(format!("{id}.json.9.0000abcd.tmp")), "").unwrap();
         uninstall(home.path(), &shared).unwrap();
         let mut left: Vec<_> = std::fs::read_dir(&shared)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         left.sort();
-        assert_eq!(left, ["keep.txt", "not an id.json", "sub"]);
+        assert_eq!(
+            left,
+            [
+                "foo.tmp",
+                "keep.txt",
+                "not an id.json",
+                "package.json",
+                "snapshot.json",
+                "sub"
+            ]
+        );
         assert!(shared.join("sub/also.json").exists());
     }
 
