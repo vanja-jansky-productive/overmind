@@ -435,6 +435,8 @@ pub fn ask_claude(
             "Bash,Edit,Write,Read,WebFetch,WebSearch,Task",
         ])
         .current_dir(std::env::temp_dir())
+        // No lessons injected into (or mined from) a one-shot helper call (docs/lessons.md).
+        .env("OVERMIND_LESSONS", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
