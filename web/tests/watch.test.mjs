@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { createDiscoveryWatcher, discoveryRoots, readFileTail, turnState } from '../lib/watch.mjs';
+import { createDiscoveryWatcher, discoveryRoots, readFileHead, readFileTail, rolloutIsHeadless, turnState } from '../lib/watch.mjs';
 
 const HOME = '/home/tester';
 
@@ -68,6 +68,7 @@ function setup({ live = [{ session_id: 'sid-live', harness: 'claude' }], missing
     watch: fs.watch,
     readFile: fs.readFile,
     readTail: (f, n) => (fs.files.has(f) ? fs.files.get(f).slice(-n) : null),
+    readHead: (f) => (fs.files.get(f)?.includes('\n') ? fs.files.get(f).split('\n')[0] : null),
     exists: fs.exists,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
@@ -297,23 +298,22 @@ test('Codex / pi: a listed row’s rollout mid-turn is slow; session_index.jsonl
   assert.deepEqual(changes, ['slow', 'slow', 'slow'], 'mid-turn writes, and a tail with no boundary, are slow');
 });
 
-test('review-38 S1: a Codex / pi session started outside the web UI is fast the first time, then slow once per list', () => {
+const sessionMeta = (payload) => JSON.stringify({ timestamp: '2026-11-04T10:00:00Z', type: 'session_meta', payload: { id: 'x', cwd: '/w', ...payload } });
+
+test('review-38 S1/R1: a rollout no row owns is fast the first time, slow once more, then dropped — at most two lists however long it streams', () => {
   let live = [{ session_id: 'sid-live', harness: 'claude' }]; // no Codex row at all
   const { fs, clock, changes, w } = setup({ live: () => live });
   w.start();
   const fresh = '2026/11/04/rollout-2026-11-04T10-01-00-new-id.jsonl';
-  fs.fire(dir('codex'), fresh, 'change');
-  fs.fire(dir('codex'), fresh, 'change');
-  clock.flush();
-  assert.deepEqual(changes, ['fast'], 'its first prompt: the row appears within the fast gap');
-  fs.fire(dir('codex'), fresh, 'change');
-  clock.flush();
-  assert.deepEqual(changes, ['fast'], 'more writes before the next list are dropped');
-  live = [...live]; // a list ran, and still no row owns it (a sub-agent's rollout)
-  fs.fire(dir('codex'), fresh, 'change');
-  fs.fire(dir('codex'), fresh, 'change');
-  clock.flush();
-  assert.deepEqual(changes, ['fast', 'slow'], 'once per list, slow');
+  fs.files.set(path.join(dir('codex'), fresh), `${sessionMeta({ source: 'cli', originator: 'codex_cli_rs' })}\n`);
+  // It streams for many lists, and every signal makes a new rows array (a list ran): bounded.
+  for (let i = 0; i < 10; i += 1) {
+    fs.fire(dir('codex'), fresh, 'change');
+    fs.fire(dir('codex'), fresh, 'change');
+    clock.flush();
+    live = [...live];
+  }
+  assert.deepEqual(changes, ['fast', 'slow'], 'its row appears within the fast gap; one retry for a list that was early; then nothing');
   fs.fire(dir('pi'), '--home-tester-x--/2026-11-04T10-00-00-000Z_p9.jsonl', 'change');
   clock.flush();
   assert.deepEqual(changes, ['fast', 'slow', 'fast'], 'pi too');
@@ -325,6 +325,58 @@ test('review-38 S1: a Codex / pi session started outside the web UI is fast the 
   fs.fire(dir('codex'), fresh, 'change');
   clock.flush();
   assert.equal(changes.at(-1), 'fast', 'stop() forgets what it saw');
+});
+
+test('review-38 R1: a headless `codex exec` / `codex review` or a sub-agent rollout (its session_meta says so) never signals', () => {
+  let live = [{ session_id: 'sid-live', harness: 'claude' }];
+  const { fs, clock, changes, w } = setup({ live: () => live });
+  w.start();
+  const heads = {
+    'exec-src': { source: 'exec', originator: 'codex_exec' },
+    'exec-orig': { source: 'cli', originator: 'codex_exec' },
+    'sub-new': { source: 'cli', thread_source: 'subagent' },
+    'sub-old': { source: { subagent: { thread_spawn: { parent_thread_id: 'p' } } } },
+  };
+  for (let i = 0; i < 5; i += 1) {
+    for (const [id, payload] of Object.entries(heads)) {
+      const rel = `2026/11/04/rollout-2026-11-04T10-01-00-${id}.jsonl`;
+      fs.files.set(path.join(dir('codex'), rel), `${sessionMeta(payload)}\n{"type":"response_item","payload":{"type":"message","i":${i}}}\n`);
+      fs.fire(dir('codex'), rel, 'change');
+    }
+    clock.flush();
+    live = [...live];
+  }
+  assert.deepEqual(changes, []);
+  // A first line not fully written yet decides nothing: the next event reads it again.
+  const half = '2026/11/04/rollout-2026-11-04T10-01-00-half.jsonl';
+  fs.files.set(path.join(dir('codex'), half), '{"timestamp":"2026-11-04T10:00:00Z","type":"session_meta","payload":{"id":"x","source":"ex');
+  fs.fire(dir('codex'), half, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast'], 'undecided: treated as interactive (a list too many, never too few)');
+  live = [...live];
+  fs.files.set(path.join(dir('codex'), half), `${sessionMeta({ source: 'exec' })}\n`);
+  fs.fire(dir('codex'), half, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast'], 'once its head reads exec, it is dropped');
+});
+
+test('review-38 R2: a rollout that was a row and is unknown again (`codex resume` after an exit) is fast once more', () => {
+  let live = [{ session_id: 'sid-live', harness: 'claude' }];
+  const { fs, clock, changes, w } = setup({ live: () => live });
+  w.start();
+  const rel = '2026/11/04/rollout-2026-11-04T10-01-00-01a1-uuid.jsonl';
+  fs.files.set(path.join(dir('codex'), rel), `${sessionMeta({ source: 'cli' })}\n`);
+  fs.fire(dir('codex'), rel, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast']);
+  live = [...live, { session_id: '01a1-uuid', harness: 'codex', status: 'busy' }];
+  fs.fire(dir('codex'), rel, 'change');
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'slow'], 'a row now: mid-turn writes are slow');
+  live = live.filter((r) => r.harness !== 'codex'); // it exited
+  fs.fire(dir('codex'), rel, 'change'); // resumed under the same id
+  clock.flush();
+  assert.deepEqual(changes, ['fast', 'slow', 'fast']);
 });
 
 test('review-38 S2: a Codex / pi turn boundary the last list does not show is fast (busy ↔ idle within the fast gap)', () => {
@@ -386,6 +438,35 @@ test('readFileTail reads the end of a real file', async () => {
   } finally {
     nfs.rmSync(d, { recursive: true, force: true });
   }
+});
+
+test('readFileHead reads a real file\'s first line, only once it is whole and within the cap', async () => {
+  const os = await import('node:os');
+  const nfs = await import('node:fs');
+  const d = nfs.mkdtempSync(path.join(os.tmpdir(), 'overmind-watch-'));
+  try {
+    const f = path.join(d, 'r.jsonl');
+    nfs.writeFileSync(f, `${'h'.repeat(100 * 1024)}\nsecond\n`);
+    assert.equal(readFileHead(f, 1024 * 1024).length, 100 * 1024, 'across read chunks');
+    assert.equal(readFileHead(f, 1024), null, 'longer than the cap');
+    nfs.writeFileSync(f, '{"half');
+    assert.equal(readFileHead(f, 1024), null, 'no newline yet');
+    assert.equal(readFileHead(path.join(d, 'none'), 1024), null);
+  } finally {
+    nfs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('rolloutIsHeadless: the markers core/harness.rs uses, plus exec; pi has none; unreadable → null', () => {
+  assert.equal(rolloutIsHeadless('codex', sessionMeta({ source: 'exec' })), true);
+  assert.equal(rolloutIsHeadless('codex', sessionMeta({ originator: 'codex_exec' })), true);
+  assert.equal(rolloutIsHeadless('codex', sessionMeta({ thread_source: 'subagent' })), true);
+  assert.equal(rolloutIsHeadless('codex', sessionMeta({ source: { subagent: 'review' } })), true);
+  assert.equal(rolloutIsHeadless('codex', sessionMeta({ source: 'cli', originator: 'codex_cli_rs' })), false);
+  assert.equal(rolloutIsHeadless('codex', '{"type":"response_item"}'), false);
+  assert.equal(rolloutIsHeadless('pi', JSON.stringify({ type: 'session', id: 'p1', cwd: '/w' })), false);
+  assert.equal(rolloutIsHeadless('codex', null), null);
+  assert.equal(rolloutIsHeadless('codex', '{"half'), null);
 });
 
 test('before the first list every transcript passes (unknown is never dropped)', () => {

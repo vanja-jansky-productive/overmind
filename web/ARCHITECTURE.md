@@ -435,7 +435,12 @@ its rename ignored), a Codex / pi rollout whose tail ends in another turn state 
 listed row owns, the first time it is seen (a session started in a terminal: its row appears after
 its first prompt); **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
 and `<sid>/…`), the other Codex / pi rollout writes of listed rows, `session_index.jsonl`, and an
-unknown rollout already seen, once per list (a sub-agent's). `snapshot.json*` and its lock (written
+unknown rollout once more on a later list (a row that list was too early for) — after that it is
+dropped while no row owns it, so a headless `pi -p` costs at most two lists however long it
+streams; a row that owned it and is gone (a `codex resume` later) makes it fast once again;
+**none** — a rollout whose `session_meta` (its first line, read once per id) marks `codex exec` /
+`codex review` (`source: "exec"`, `originator: "codex_exec"`) or a sub-agent (`thread_source:
+"subagent"`, `source.subagent`, as core/harness.rs drops them). `snapshot.json*` and its lock (written
 by `list`) never signal. A root that does not exist yet (the first `~/.codex/sessions`, `codex-hooks`
 right after `codex hooks install`) is armed as it appears: its parent is watched meanwhile, when
 that exists (else the next run's `rearm()`).

@@ -11,8 +11,12 @@
 //         message), and so is a rollout no listed row owns, the first time it is seen (a
 //         session started outside the web UI: its row appears)
 //   slow  transcripts of live sessions (`~/.claude/projects/<enc>/<sid>.jsonl` and `<sid>/…`),
-//         Codex rollouts and `session_index.jsonl`, pi sessions; an unknown rollout already
-//         seen passes once per list (a sub-agent's, or a row the last list did not make yet)
+//         Codex rollouts and `session_index.jsonl`, pi sessions; an unknown rollout once more,
+//         on a later list (a row that list was too early for), then never again while no row
+//         owns it — so a headless `pi -p` costs at most two lists however long it streams
+//   none  a rollout whose `session_meta` (its first line, read once) says `codex exec` /
+//         `codex review` (`source: "exec"`, `originator: "codex_exec"`) or a sub-agent
+//         (`thread_source: "subagent"`, `source.subagent`, as core/harness.rs drops them)
 // What has no file signal (tmux/iTerm tab names, branches, a crashed process, a Codex or pi
 // exit, a Codex start before its first prompt) is left to the caller's age bound.
 //
@@ -68,6 +72,55 @@ export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) 
 
 /** How much of a rollout's end `turnState` reads: a turn boundary is a short line. */
 const TAIL_BYTES = 16 * 1024;
+
+/** How much of a rollout's head `rolloutIsHeadless` reads: `session_meta` carries the system prompt. */
+const HEAD_BYTES = 1024 * 1024;
+
+/** A file's first line (no newline), or null when unreadable, not whole yet or longer than `max`. */
+export function readFileHead(file, max) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const chunks = [];
+    let total = 0;
+    const buf = Buffer.alloc(64 * 1024);
+    while (total < max) {
+      const n = fs.readSync(fd, buf, 0, Math.min(buf.length, max - total), total);
+      if (n === 0) return null;
+      const nl = buf.subarray(0, n).indexOf(10);
+      if (nl >= 0) {
+        chunks.push(Buffer.from(buf.subarray(0, nl)));
+        return Buffer.concat(chunks).toString('utf8');
+      }
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+      total += n;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * Whether a rollout's first line marks a run that is never a row: `codex exec` / `codex review`
+ * (`source: "exec"`, `originator: "codex_exec"`) or a sub-agent (`thread_source: "subagent"`,
+ * `source.subagent` — the markers `transcript_ref` in core/harness.rs drops). pi's head has no
+ * such marker (false). null: no whole first line to read yet.
+ */
+export function rolloutIsHeadless(harness, head) {
+  if (typeof head !== 'string') return null;
+  let v;
+  try {
+    v = JSON.parse(head);
+  } catch {
+    return null;
+  }
+  if (harness !== 'codex' || v?.type !== 'session_meta') return false;
+  const p = v.payload ?? {};
+  return p.source === 'exec' || p.originator === 'codex_exec' || p.thread_source === 'subagent' || (p.source != null && typeof p.source === 'object' && 'subagent' in p.source);
+}
 
 /** The last `bytes` of a file as text (null when unreadable). */
 export function readFileTail(file, bytes) {
@@ -131,6 +184,7 @@ export function createDiscoveryWatcher({
   watch = fs.watch,
   readFile = (file) => fs.readFileSync(file, 'utf8'),
   readTail = readFileTail,
+  readHead = readFileHead,
   exists = (dir) => fs.existsSync(dir),
   coalesceMs = 250,
   setTimer = setTimeout,
@@ -143,9 +197,9 @@ export function createDiscoveryWatcher({
   const failed = new Map(); // root id -> error message (a watcher that errored, until rearm)
   const headless = new Set(); // registry basenames of headless runs: their delete is ignored too
   const contents = new Map(); // root id -> last content of a compared file
-  const unknownSeen = new Set(); // rollouts no listed row owned, already let through as fast
-  const unknownThisList = new Set(); // …and let through since the last list (`unknownRows`)
-  let unknownRows = null;
+  // Rollouts no listed row owns: id -> { passes, rows (the rows array of the last pass), headless }.
+  // A row owning the id forgets it, so a rollout that is unknown again (a resume) is fast again.
+  const unknown = new Map();
   const pending = { fast: null, slow: null };
   let started = false;
   let events = 0;
@@ -172,9 +226,10 @@ export function createDiscoveryWatcher({
    * The class of a transcript event, or null to drop it. Claude: a live session's files are slow,
    * others dropped. Codex / pi (`…/rollout-<stamp>-<id>.jsonl`, `--<cwd>--/<stamp>_<id>.jsonl`):
    * a listed row's rollout is fast when its tail shows another turn state than the row (busy ↔
-   * idle), else slow; an unknown one is fast the first time (a session started in a terminal:
-   * its row appears after its first prompt), then slow once per list. Before the first list,
-   * anything passes (a list too many, never too few).
+   * idle), else slow; an unknown one is dropped when its head says `codex exec` or a sub-agent,
+   * else fast the first time (a session started in a terminal: its row appears after its first
+   * prompt), slow once more on a later list, then dropped while no row owns it. Before the first
+   * list, anything passes (a list too many, never too few).
    */
   function transcriptClass(root, rel) {
     const rows = live();
@@ -190,19 +245,21 @@ export function createDiscoveryWatcher({
     const id = base.replace(/\.jsonl$/, '');
     const row = rows.find((r) => r?.harness === root.harness && typeof r.session_id === 'string' && !r.session_id.startsWith('pid-') && id.endsWith(r.session_id));
     if (row) {
+      unknown.delete(id);
       const turn = turnState(root.harness, readTail(path.join(root.dir, rel), TAIL_BYTES));
       return turn && turn !== (row.status === 'idle' ? 'idle' : 'busy') ? 'fast' : 'slow';
     }
-    if (rows !== unknownRows) {
-      unknownRows = rows;
-      unknownThisList.clear();
+    let u = unknown.get(id);
+    if (!u) {
+      if (unknown.size >= 1000) unknown.clear(); // a long-lived server: forget, at worst two lists each
+      u = { passes: 0, rows: null, headless: null };
+      unknown.set(id, u);
     }
-    if (unknownThisList.has(id)) return null;
-    unknownThisList.add(id);
-    if (unknownSeen.has(id)) return 'slow';
-    if (unknownSeen.size >= 1000) unknownSeen.clear(); // a long-lived server: forget, at worst a list
-    unknownSeen.add(id);
-    return 'fast';
+    if (u.headless === null) u.headless = rolloutIsHeadless(root.harness, readHead(path.join(root.dir, rel), HEAD_BYTES));
+    if (u.headless || u.passes >= 2 || u.rows === rows) return null;
+    u.passes += 1;
+    u.rows = rows;
+    return u.passes === 1 ? 'fast' : 'slow';
   }
 
   function classify(root, filename) {
@@ -354,9 +411,7 @@ export function createDiscoveryWatcher({
     for (const id of [...parents.keys()]) closeParent(id);
     failed.clear();
     headless.clear(); // deletes missed while stopped would otherwise hide a reused pid's exit
-    unknownSeen.clear();
-    unknownThisList.clear();
-    unknownRows = null;
+    unknown.clear();
     for (const cls of Object.keys(pending)) {
       clearTimer(pending[cls]);
       pending[cls] = null;
