@@ -583,7 +583,7 @@ fn glob_match(pat: &str, s: &str) -> bool {
 }
 
 /// stdout of `cmd`, or `None` when it fails or outlives `timeout` (then it is killed).
-fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> {
+pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<String> {
     let mut child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -648,7 +648,7 @@ pub fn info(h: Harness, with_models: bool) -> HarnessInfo {
         h,
         &command,
         installed,
-        &crate::core::tools::fallback_dirs(),
+        crate::core::tools::fallback_dirs,
         &codex_home(),
     );
     HarnessInfo {
@@ -676,33 +676,68 @@ pub fn binary(command: &str) -> Option<PathBuf> {
     }
 }
 
-/// Whether Codex has a login in `home` (`$CODEX_HOME`): its `auth.json`, or a `config.toml`
-/// that keeps credentials in the OS keyring (`cli_auth_credentials_store = "keyring"` /
-/// `"auto"`), where overmind can't look and takes them as there.
-pub fn codex_logged_in(home: &Path) -> bool {
+/// What overmind can tell about Codex's login in its home (`$CODEX_HOME`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexLogin {
+    /// No `auth.json`, and the config keeps credentials in a file (or says nothing).
+    None,
+    /// `auth.json` is there.
+    File,
+    /// No `auth.json`, and `cli_auth_credentials_store` is `"keyring"` or `"auto"`: the
+    /// credentials may be in the OS keyring, where overmind can't look. Counted as logged in,
+    /// but unverified — `"auto"` on a host without a keyring (headless Linux) falls back to a
+    /// file, so no `auth.json` there really means not logged in.
+    Keyring,
+}
+
+impl CodexLogin {
+    pub fn logged_in(self) -> bool {
+        self != CodexLogin::None
+    }
+}
+
+/// Codex's login in `home`: its `auth.json`, or a top-level `cli_auth_credentials_store` of
+/// `"keyring"` / `"auto"` in `config.toml` ([`CodexLogin::Keyring`]).
+pub fn codex_login(home: &Path) -> CodexLogin {
     if home.join("auth.json").is_file() {
-        return true;
+        return CodexLogin::File;
     }
     let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
-    config
+    let keyring = config
         .lines()
         .map(str::trim)
         .take_while(|l| !l.starts_with('['))
         .filter_map(|l| l.split_once('='))
         .any(|(k, v)| {
             k.trim() == "cli_auth_credentials_store"
-                && matches!(v.trim().trim_matches('"'), "keyring" | "auto")
-        })
+                && matches!(toml_string(v), Some("keyring" | "auto"))
+        });
+    if keyring {
+        CodexLogin::Keyring
+    } else {
+        CodexLogin::None
+    }
+}
+
+/// A TOML string value on one line: `"x"` or `'x'`, a trailing `# comment` allowed.
+fn toml_string(v: &str) -> Option<&str> {
+    let v = v.trim_start();
+    let q = v.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let rest = &v[1..];
+    let end = rest.find(q)?;
+    let tail = rest[end + 1..].trim_start();
+    (tail.is_empty() || tail.starts_with('#')).then_some(&rest[..end])
 }
 
 /// Why `h` can't be used here, with the fix — `None` when nothing is known to be wrong.
-/// `installed` is [`binary`]`(command).is_some()`; `looked_in` the dirs searched after
-/// `$PATH`; `codex_home` Codex's home (only read for Codex).
+/// `installed` is [`binary`]`(command).is_some()`, passed in so this stays pure;
+/// `looked_in` gives the dirs searched after `$PATH` (only called when not installed);
+/// `codex_home` is Codex's home (only read for Codex).
 pub fn problem(
     h: Harness,
     command: &str,
     installed: bool,
-    looked_in: &[PathBuf],
+    looked_in: impl FnOnce() -> Vec<PathBuf>,
     codex_home: &Path,
 ) -> Option<String> {
     use crate::core::tools::tildify;
@@ -720,7 +755,7 @@ pub fn problem(
             Harness::Codex => "install it (brew install codex, or npm i -g @openai/codex)",
             Harness::Pi => "install it",
         };
-        let dirs: Vec<String> = looked_in
+        let dirs: Vec<String> = looked_in()
             .iter()
             .map(|d| tildify(&d.display().to_string()))
             .collect();
@@ -738,7 +773,7 @@ pub fn problem(
             tildify(&codex_home.display().to_string())
         ));
     }
-    (!codex_logged_in(codex_home)).then(|| "not logged in — run `codex login`".to_string())
+    (!codex_login(codex_home).logged_in()).then(|| "not logged in — run `codex login`".to_string())
 }
 
 // --- processes ----------------------------------------------------------------
@@ -1737,24 +1772,35 @@ mod tests {
     fn codex_is_logged_in_with_an_auth_json_or_a_keyring_store() {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
-        assert!(!codex_logged_in(h));
-        std::fs::write(h.join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
-        assert!(!codex_logged_in(h));
+        let with = |config: &str| {
+            std::fs::write(h.join("config.toml"), config).unwrap();
+            codex_login(h)
+        };
+        assert_eq!(codex_login(h), CodexLogin::None);
+        assert_eq!(with("model = \"gpt-6.1-sol\"\n"), CodexLogin::None);
         // credentials in the OS keyring: overmind can't look, so it takes them as there
-        std::fs::write(
-            h.join("config.toml"),
+        for store in [
             "cli_auth_credentials_store = \"keyring\"\n",
-        )
-        .unwrap();
-        assert!(codex_logged_in(h));
-        std::fs::write(
-            h.join("config.toml"),
+            "cli_auth_credentials_store = 'keyring'\n",
+            "cli_auth_credentials_store=\"auto\"   # keyring when there is one\n",
+            "  cli_auth_credentials_store = 'auto' #x\n[profiles.a]\n",
+        ] {
+            assert_eq!(with(store), CodexLogin::Keyring, "{store}");
+        }
+        for not in [
             "cli_auth_credentials_store = \"file\"\n",
-        )
-        .unwrap();
-        assert!(!codex_logged_in(h));
+            "cli_auth_credentials_store = \"keyring\" trailing\n",
+            "cli_auth_credentials_store = \"keyring'\n",
+            "[profiles.a]\ncli_auth_credentials_store = \"keyring\"\n",
+        ] {
+            assert_eq!(with(not), CodexLogin::None, "{not}");
+        }
+        assert!(!CodexLogin::None.logged_in() && CodexLogin::Keyring.logged_in());
         std::fs::write(h.join("auth.json"), "{}").unwrap();
-        assert!(codex_logged_in(h));
+        assert_eq!(
+            with("cli_auth_credentials_store = \"auto\"\n"),
+            CodexLogin::File
+        );
     }
 
     #[test]
@@ -1766,7 +1812,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let none = home.path().join("absent");
 
-        let p = problem(Harness::Codex, "codex", false, &dirs, &none).unwrap();
+        let p = problem(Harness::Codex, "codex", false, || dirs.to_vec(), &none).unwrap();
         assert!(p.starts_with("not found"), "{p}");
         for want in [
             "$PATH",
@@ -1781,7 +1827,7 @@ mod tests {
             Harness::Codex,
             "~/wrap/codex -a on-request",
             false,
-            &dirs,
+            || dirs.to_vec(),
             &none,
         )
         .unwrap();
@@ -1790,30 +1836,39 @@ mod tests {
             "{p}"
         );
         assert!(!p.contains("/opt/homebrew/bin"), "{p}");
-        let p = problem(Harness::Claude, "claude", false, &dirs, &none).unwrap();
+        let p = problem(Harness::Claude, "claude", false, || dirs.to_vec(), &none).unwrap();
         assert!(
             p.contains("OVERMIND_CMD") && p.contains("config `claude`"),
             "{p}"
         );
-        let p = problem(Harness::Pi, "pi", false, &dirs, &none).unwrap();
+        let p = problem(Harness::Pi, "pi", false, || dirs.to_vec(), &none).unwrap();
         assert!(p.contains("harnesses.pi.command"), "{p}");
 
         // installed Codex: never run here, then not logged in, then fine
-        let p = problem(Harness::Codex, "codex", true, &dirs, &none).unwrap();
+        let p = problem(Harness::Codex, "codex", true, || dirs.to_vec(), &none).unwrap();
         assert!(
             p.contains("never run here") && p.contains("codex login"),
             "{p}"
         );
-        let p = problem(Harness::Codex, "codex", true, &dirs, home.path()).unwrap();
+        let p = problem(Harness::Codex, "codex", true, || dirs.to_vec(), home.path()).unwrap();
         assert_eq!(p, "not logged in — run `codex login`");
         std::fs::write(home.path().join("auth.json"), "{}").unwrap();
         assert_eq!(
-            problem(Harness::Codex, "codex", true, &dirs, home.path()),
+            problem(Harness::Codex, "codex", true, || dirs.to_vec(), home.path()),
             None
         );
+        // the lookup dirs are only listed (and read) when the harness is not found
+        let p = problem(Harness::Pi, "pi", true, || unreachable!(), &none);
+        assert_eq!(p, None);
         // the others have no login overmind can see
-        assert_eq!(problem(Harness::Claude, "claude", true, &dirs, &none), None);
-        assert_eq!(problem(Harness::Pi, "pi", true, &dirs, &none), None);
+        assert_eq!(
+            problem(Harness::Claude, "claude", true, || dirs.to_vec(), &none),
+            None
+        );
+        assert_eq!(
+            problem(Harness::Pi, "pi", true, || dirs.to_vec(), &none),
+            None
+        );
     }
 
     #[test]

@@ -334,8 +334,70 @@ fn probe_counts_sessions_per_harness_and_reports_codex() {
     assert_eq!(v["codex"], "codex-cli 9.9.9", "{v}");
     assert_eq!(v["codexHome"], true, "{v}");
     assert_eq!(v["codexLogin"], false, "{v}");
+    assert_eq!(v["codexKeyring"], false, "{v}");
+    std::fs::write(
+        codex_home.join("config.toml"),
+        "cli_auth_credentials_store = 'auto' # keyring when there is one\n",
+    )
+    .unwrap();
+    let v = probe();
+    assert_eq!(
+        (&v["codexLogin"], &v["codexKeyring"]),
+        (&true.into(), &true.into()),
+        "{v}"
+    );
     std::fs::write(codex_home.join("auth.json"), "{}").unwrap();
-    assert_eq!(probe()["codexLogin"], true);
+    let v = probe();
+    assert_eq!(
+        (&v["codexLogin"], &v["codexKeyring"]),
+        (&true.into(), &false.into()),
+        "{v}"
+    );
+}
+
+// A launcher's `--version` runs with the fallback dirs on PATH (an npm `codex` is a
+// `#!/usr/bin/env node` script, and node may only be in nvm/Volta/~/.npm-global), and a
+// launcher that never exits on `--version` is killed and shown as `?`.
+#[test]
+fn probe_versions_find_the_interpreter_in_the_fallback_dirs_and_time_out() {
+    let env = Env::new();
+    let home = env.path("home");
+    let exe = |rel: &str, body: &str| {
+        let p = home.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, body).unwrap();
+        std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        p
+    };
+    exe(
+        ".npm-global/bin/om-fake-node",
+        "#!/bin/sh\necho codex-cli 7.7.7\n",
+    );
+    let codex = exe("tools/codex", "#!/usr/bin/env om-fake-node\n");
+    let pi = exe("tools/pi", "#!/bin/sh\nexec sleep 60\n");
+    env.write_config(&serde_json::json!({
+        "version": 1,
+        "harnesses": {
+            "codex": { "command": codex.display().to_string() },
+            "pi": { "command": pi.display().to_string() }
+        }
+    }));
+    let start = std::time::Instant::now();
+    let out = env
+        .cmd()
+        .arg("_probe")
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("CODEX_HOME", home.join(".codex"))
+        .env("OVERMIND_FIXTURE", fixture(env.dir.path(), "[]"))
+        .timeout(std::time::Duration::from_secs(30))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["codex"], "codex-cli 7.7.7", "{v}");
+    assert_eq!(v["pi"], "?", "{v}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(20));
 }
 
 #[test]

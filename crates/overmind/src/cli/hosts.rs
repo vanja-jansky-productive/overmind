@@ -139,8 +139,11 @@ pub struct Probe {
     pub codex: Option<String>,
     /// Codex's home (`$CODEX_HOME`, default `~/.codex`) exists: it has run here.
     pub codex_home: bool,
-    /// Codex has a login there ([`crate::core::harness::codex_logged_in`]).
+    /// Codex has a login there ([`crate::core::harness::codex_login`]).
     pub codex_login: bool,
+    /// …only as far as its config keeps credentials in the OS keyring, which overmind can't
+    /// read ([`crate::core::harness::CodexLogin::Keyring`]).
+    pub codex_keyring: bool,
     /// `pi --version`; `null` when pi isn't installed.
     pub pi: Option<String>,
     pub node: Option<String>,
@@ -165,6 +168,22 @@ pub struct BotHealth {
     pub name: String,
     pub ok: bool,
     pub line: String,
+}
+
+/// `<bin> --version` of a harness launcher: stdin closed, the fallback dirs on `PATH` (an
+/// npm-installed launcher is a `#!/usr/bin/env node` script, and node may be in nvm/Volta too),
+/// and killed after a few seconds (a wrapper that ignores `--version` and starts its TUI).
+/// A launcher that runs but prints nothing still counts as there: `"?"`.
+fn launcher_version(bin: &Path) -> String {
+    harness::run_with_timeout(
+        Command::new(bin)
+            .arg("--version")
+            .env("PATH", tools::search_path()),
+        Duration::from_secs(5),
+    )
+    .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+    .filter(|l| !l.is_empty())
+    .unwrap_or_else(|| "?".into())
 }
 
 fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
@@ -192,13 +211,9 @@ pub fn gather_probe() -> Probe {
     let claude = tools::claude().and_then(|c| first_line(&c, &["--version"]));
     let node = tools::find_binary("node")
         .and_then(|n| first_line(&n.display().to_string(), &["--version"]));
-    // A launcher that runs but prints no version still counts as there.
-    let version_of = |h: Harness| {
-        harness::binary(&h.command()).map(|b| {
-            first_line(&b.display().to_string(), &["--version"]).unwrap_or_else(|| "?".into())
-        })
-    };
+    let version_of = |h: Harness| harness::binary(&h.command()).map(|b| launcher_version(&b));
     let codex_home = harness::codex_home();
+    let codex_login = harness::codex_login(&codex_home);
     let rows = crate::core::discovery::discover();
     let sessions = |h: Harness| rows.iter().filter(|s| s.harness == h).count();
     Probe {
@@ -213,7 +228,8 @@ pub fn gather_probe() -> Probe {
         claude,
         codex: version_of(Harness::Codex),
         codex_home: codex_home.is_dir(),
-        codex_login: harness::codex_logged_in(&codex_home),
+        codex_login: codex_login.logged_in(),
+        codex_keyring: codex_login == harness::CodexLogin::Keyring,
         pi: version_of(Harness::Pi),
         node,
         tmux_sessions: crate::core::tmux::list_sessions()
@@ -310,38 +326,55 @@ fn probe_lines(p: &Probe, compare: Option<&str>) -> (Vec<(Mark, String)>, usize)
             failures += 1;
         }
     }
+    // Doctor fails only when nothing can run here: a Codex that isn't logged in is a note on a
+    // host that has Claude or pi, and a failure on a Codex-only one.
+    let codex_usable = p.codex.is_some() && p.codex_home && p.codex_login;
+    let usable = p.claude.is_some() || codex_usable || p.pi.is_some();
     match &p.claude {
         Some(c) => l.ok(&format!(
             "claude {c} — {} live session(s)",
             p.claude_sessions
         )),
         // A Codex- or pi-only host is a supported setup.
-        None if p.codex.is_some() || p.pi.is_some() => l.info(&format!(
+        None if usable => l.info(&format!(
             "{} claude: missing (fine: this host runs another harness)",
             "·".dimmed()
         )),
-        None => l.bad("claude: missing"),
+        None => {
+            l.bad("claude: missing, and no other harness can run here (install Claude Code, or Codex and `codex login`, or pi)");
+            failures += 1;
+        }
     }
+    let codex_problem = |v: &str| {
+        let why = if p.codex_home {
+            "not logged in"
+        } else {
+            "never run here (no $CODEX_HOME, default ~/.codex)"
+        };
+        format!("{}: {why} — run `codex login`", codex_version(v))
+    };
     match &p.codex {
-        Some(v) if !p.codex_home => l.info(&format!(
-                "{} {}: never run here (no $CODEX_HOME, default ~/.codex) — run `codex login`",
-                "·".dimmed(),
-                codex_version(v)
-            ),
-        ),
-        Some(v) if !p.codex_login => l.bad(&format!("{}: not logged in — run `codex login`", codex_version(v)),
-        ),
-        Some(v) => l.ok(&format!(
-                "{} — {} live session(s)",
+        Some(v) if codex_usable => {
+            let keyring = if p.codex_keyring {
+                " (credentials in keyring, unverified)"
+            } else {
+                ""
+            };
+            l.ok(&format!(
+                "{} — {} live session(s){keyring}",
                 codex_version(v),
                 p.codex_sessions
-            ),
-        ),
+            ));
+        }
+        Some(v) if usable => l.info(&format!("{} {}", "·".dimmed(), codex_problem(v))),
+        Some(v) => {
+            l.bad(&codex_problem(v));
+            failures += 1;
+        }
         None => l.info(&format!(
-                "{} codex: missing (optional — brew install codex, or npm i -g @openai/codex; or set harnesses.codex.command)",
-                "·".dimmed()
-            ),
-        ),
+            "{} codex: missing (optional — brew install codex, or npm i -g @openai/codex; or set harnesses.codex.command)",
+            "·".dimmed()
+        )),
     }
     if let Some(v) = &p.pi {
         l.ok(&format!("pi {v} — {} live session(s)", p.pi_sessions));
@@ -917,10 +950,17 @@ mod tests {
     }
 
     #[test]
-    fn no_harness_at_all_keeps_claude_missing_red_and_the_failure_count_unchanged() {
+    fn no_harness_at_all_fails_doctor() {
         let (lines, failures) = probe_lines(&tmux_host(), None);
-        assert_eq!(failures, 0);
-        assert!(has(&lines, Mark::Bad, "claude: missing"), "{lines:?}");
+        assert_eq!(failures, 1, "{lines:?}");
+        assert!(
+            has(
+                &lines,
+                Mark::Bad,
+                "claude: missing, and no other harness can run here"
+            ),
+            "{lines:?}"
+        );
         assert!(has(&lines, Mark::Info, "codex: missing"), "{lines:?}");
         assert!(
             has(&lines, Mark::Info, "npm i -g @openai/codex"),
@@ -930,15 +970,16 @@ mod tests {
     }
 
     #[test]
-    fn codex_says_never_run_and_not_logged_in() {
-        let base = Probe {
+    fn a_codex_that_cannot_run_is_info_beside_claude_and_a_failure_alone() {
+        let claude = Probe {
             claude: Some("2.1.0 (Claude Code)".into()),
             claude_sessions: 3,
             codex: Some("codex-cli 0.166.0".into()),
             ..tmux_host()
         };
-        let (lines, failures) = probe_lines(&base, None);
-        assert_eq!(failures, 0);
+        // never run here, then not logged in: a note, Claude still runs
+        let (lines, failures) = probe_lines(&claude, None);
+        assert_eq!(failures, 0, "{lines:?}");
         assert!(
             has(
                 &lines,
@@ -953,15 +994,53 @@ mod tests {
         );
         let p = Probe {
             codex_home: true,
-            ..base
+            ..claude
         };
         let (lines, failures) = probe_lines(&p, None);
-        assert_eq!(failures, 0);
+        assert_eq!(failures, 0, "{lines:?}");
         assert!(
             has(
                 &lines,
-                Mark::Bad,
+                Mark::Info,
                 "codex 0.166.0: not logged in — run `codex login`"
+            ),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|(m, _)| *m == Mark::Bad), "{lines:?}");
+
+        // Codex-only, not logged in / never run: nothing can run, so both lines fail
+        for home in [true, false] {
+            let p = Probe {
+                codex: Some("codex-cli 0.166.0".into()),
+                codex_home: home,
+                ..tmux_host()
+            };
+            let (lines, failures) = probe_lines(&p, None);
+            assert_eq!(failures, 2, "{lines:?}");
+            assert!(has(&lines, Mark::Bad, "claude: missing"), "{lines:?}");
+            assert!(
+                has(&lines, Mark::Bad, "codex 0.166.0: ") && has(&lines, Mark::Bad, "codex login"),
+                "{lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_keyring_login_counts_but_says_it_is_unverified() {
+        let p = Probe {
+            codex: Some("codex-cli 0.166.0".into()),
+            codex_home: true,
+            codex_login: true,
+            codex_keyring: true,
+            ..tmux_host()
+        };
+        let (lines, failures) = probe_lines(&p, None);
+        assert_eq!(failures, 0, "{lines:?}");
+        assert!(
+            has(
+                &lines,
+                Mark::Ok,
+                "codex 0.166.0 — 0 live session(s) (credentials in keyring, unverified)"
             ),
             "{lines:?}"
         );
@@ -980,6 +1059,7 @@ mod tests {
             "codex",
             "codexHome",
             "codexLogin",
+            "codexKeyring",
             "codexSessions",
             "pi",
             "piSessions",
