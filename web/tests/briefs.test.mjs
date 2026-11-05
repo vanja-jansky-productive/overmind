@@ -314,6 +314,94 @@ test('readDelta: only the new conversation, clipped to maxChars, newest kept', a
   assert.equal((await readDelta(file, 10 ** 9)).userTurns, 3);
 });
 
+// A Codex rollout (`$CODEX_HOME/sessions/…/rollout-*.jsonl`): discovery names it on the row.
+const cx = (type, payload) => line({ timestamp: '2026-01-01T10:00:00.000Z', type, payload });
+const cxMsg = (role, text) => cx('response_item', { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
+const cxItem = (item) => cx('event_msg', { type: 'item_completed', item });
+const cxCmd = (script, cwd, output = '') => cxItem({ type: 'CommandExecution', command: ['/bin/zsh', '-lc', script], cwd: `file://${cwd}`, aggregated_output: output, exit_code: 0 });
+
+function codexFixture(t) {
+  const root = tmpdir(t);
+  const home = path.join(root, 'home');
+  const cwd = path.join(home, 'Code', 'project');
+  fs.mkdirSync(path.join(cwd, 'src'), { recursive: true });
+  for (const f of ['src/a.ts', 'out.txt']) fs.writeFileSync(path.join(cwd, f), 'x');
+  const file = path.join(root, 'rollout-2026-01-01T10-00-00-x.jsonl');
+  fs.writeFileSync(
+    file,
+    [
+      cx('session_meta', { id: SID, cwd, originator: 'codex-tui' }),
+      cx('turn_context', { cwd, model: 'gpt-6.1-sol' }),
+      cxMsg('developer', '<permissions instructions> https://github.com/o/r/pull/997'),
+      cxMsg('user', '# AGENTS.md instructions for the repo https://github.com/o/r/pull/998'),
+      cxMsg('user', '<environment_context>https://github.com/o/r/pull/999</environment_context>'),
+      cxMsg('user', 'Fix the bug from https://github.com/o/r/issues/7 please'),
+      cxItem({ type: 'UserMessage', content: [{ type: 'text', text: 'Fix the bug from https://github.com/o/r/issues/7 please' }] }),
+      cxItem({ type: 'FileChange', status: 'completed', changes: { [path.join(cwd, 'src', 'a.ts')]: { type: 'update' }, [path.join(cwd, 'gone.ts')]: { type: 'delete' }, '/tmp/scratch.txt': { type: 'add' } } }),
+      cxCmd('echo hi > out.txt', cwd),
+      cxCmd('gh pr create --fill', cwd, 'https://github.com/o/r/pull/12\n'),
+      cxCmd('gh pr list', cwd, 'https://github.com/o/r/pull/99\n'),
+      cxMsg('assistant', 'Opened https://github.com/o/r/pull/12 — docs at https://docs.example.dev/auth'),
+      cx('event_msg', { type: 'task_complete' }),
+    ].join(''),
+  );
+  return { root, home, cwd, file, session: { session_id: SID, cwd, harness: 'codex', transcript: file, status: 'idle' } };
+}
+
+test('extract: a Codex row reads its rollout (not a Claude lookup) — files it changed, PRs it created, links, origin; its own context skipped', async (t) => {
+  const fx = codexFixture(t);
+  const ex = createBriefExtractor({ locate: async () => assert.fail('a Codex row names its rollout'), userHome: fx.home, skipPath: /^\/tmp\// });
+  const r = await ex.refresh(fx.session);
+  assert.equal(r.file, fx.file);
+  assert.equal(r.harness, 'codex');
+  const got = r.resources.map((x) => `${x.kind} ${x.url ?? x.path}`).sort();
+  assert.deepEqual(got, [
+    `File ${path.join(fx.cwd, 'out.txt')}`,
+    `File ${path.join(fx.cwd, 'src', 'a.ts')}`,
+    'Link https://docs.example.dev/auth',
+    'Origin https://github.com/o/r/issues/7',
+    'PR https://github.com/o/r/pull/12',
+  ]);
+  assert.equal(r.todos, null);
+  assert.deepEqual(r.dirs, [fx.cwd]);
+  assert.equal(r.offset, fs.statSync(fx.file).size);
+});
+
+test('readDelta: a Codex rollout — its prompts and replies, without its own context messages', async (t) => {
+  const fx = codexFixture(t);
+  const d = await readDelta(fx.file, 0, { maxChars: 12000, harness: 'codex' });
+  assert.equal(d.userTurns, 1);
+  assert.equal(d.messages, 2);
+  assert.equal(d.text, '[user] Fix the bug from https://github.com/o/r/issues/7 please\n\n[assistant] Opened https://github.com/o/r/pull/12 — docs at https://docs.example.dev/auth');
+  assert.equal(d.end, fs.statSync(fx.file).size);
+});
+
+test('briefs: a Codex row gets its resources and a summary from its rollout', async (t) => {
+  const fx = codexFixture(t);
+  const asks = [];
+  const svc = createBriefs({
+    settings: { ...DEFAULT_BRIEFS, enabled: true },
+    self: 'laptop',
+    store: createBriefStore({ dir: path.join(fx.root, 'briefs') }),
+    extractor: createBriefExtractor({ locate: async () => null, userHome: fx.home, skipPath: /^\/tmp\// }),
+    listSessions: async () => [fx.session],
+    ask: async (req) => (asks.push(req), '## Summary\nFixing the login bug.\n'),
+    git: async () => null,
+    log: () => {},
+    home: fx.home,
+  });
+  const r = await svc.regenerate(fx.session);
+  assert.equal(r.started, true);
+  assert.equal((await r.job).ok, true);
+  assert.equal(asks.length, 1);
+  assert.match(asks[0].prompt, /\[user\] Fix the bug from https:\/\/github\.com\/o\/r\/issues\/7 please/);
+  assert.match(asks[0].prompt, /\[assistant\] Opened https:\/\/github\.com\/o\/r\/pull\/12/);
+  const b = parseBrief(fs.readFileSync(path.join(fx.root, 'briefs', `${SID}.md`), 'utf8'));
+  assert.equal(b.summary, 'Fixing the login bug.');
+  assert.match(b.resourcesText, /- PR: \[o\/r#12\]\(https:\/\/github\.com\/o\/r\/pull\/12\)/);
+  assert.match(b.resourcesText, /- File: `src\/a\.ts`/);
+});
+
 // ------------------------------------------------------------------ the service
 
 function setup(t, { settings = {}, answer, sessions } = {}) {

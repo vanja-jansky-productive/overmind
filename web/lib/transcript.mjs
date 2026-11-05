@@ -223,7 +223,7 @@ export function codexRef(line) {
 }
 
 /** Codex wraps its own context (AGENTS.md, environment, permissions) in user messages. */
-function isCodexContext(text) {
+export function isCodexContext(text) {
   return text.startsWith('<') || text.startsWith('# AGENTS.md');
 }
 
@@ -292,6 +292,11 @@ export function parsePiTranscript(text) {
 }
 
 const PARSERS = { claude: parseTranscript, codex: parseCodexTranscript, pi: parsePiTranscript };
+
+/** The chat parser for a row's harness (Claude's for an unknown one). */
+export function parserFor(harness) {
+  return PARSERS[harness] ?? parseTranscript;
+}
 
 // ------------------------------------------------------------------ deltas (#37)
 

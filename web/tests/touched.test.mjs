@@ -142,6 +142,28 @@ function setupWithRoots(t) {
   return { fx, statOne: async (p) => (await files.stat([p], fx.cwd, { session: SESSION })).files[0] };
 }
 
+test('a Codex row: the files its rollout says it changed or wrote resolve a bare name (no Claude lookup)', async (t) => {
+  const fx = fixture(t);
+  const rollout = path.join(fx.root, 'codex', 'rollout-x.jsonl');
+  fs.mkdirSync(path.dirname(rollout), { recursive: true });
+  const deep = path.join(fx.other, 'knowledge', 'notes');
+  const item = (it) => JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: it } }) + '\n';
+  fs.writeFileSync(
+    rollout,
+    item({ type: 'FileChange', changes: { [path.join(deep, 'sibling.md')]: { type: 'update' }, [path.join(deep, 'gone.md')]: { type: 'delete' } } }) +
+      item({ type: 'CommandExecution', command: ['/bin/zsh', '-lc', 'echo x > made.md'], cwd: `file://${deep}`, aggregated_output: '' }),
+  );
+  fs.writeFileSync(path.join(deep, 'made.md'), 'x');
+  const touched = createTouchedIndex({ locate: async () => assert.fail('a Codex row names its rollout') });
+  const files = createFiles({ home: fx.home, run: async () => ({}), touched });
+  const session = { ...SESSION, harness: 'codex', transcript: rollout };
+  const list = await touched.get(session);
+  assert.deepEqual(list.worked, [path.join(deep, 'made.md'), path.join(deep, 'sibling.md')]);
+  const stat = async (p) => (await files.stat([p], fx.cwd, { session })).files[0];
+  assert.equal((await stat('sibling.md')).resolvedVia, 'touched');
+  assert.equal((await stat('made.md')).resolvedVia, 'touched');
+});
+
 test('sandbox holds: touched paths / roots outside $HOME are ignored, secrets refused', async (t) => {
   const { fx, append, statOne } = setup(t);
   append(toolUse('Read', { file_path: path.join(fx.outside, 'knowledge', 'notes', 'only-out.md') }));

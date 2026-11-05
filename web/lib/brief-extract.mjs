@@ -14,12 +14,16 @@
 //   the first user prompt: its other links (a task, a Slack thread, an issue)      → Origin
 // Todos: the latest TodoWrite list, or the task list built from TaskCreate / TaskUpdate calls.
 // Dirs: the working directories the session's entries record (`cwd`; a `cd` in Bash moves it).
+// A Codex row reads its rollout (the path discovery puts on the row): its prompts and replies
+// (`response_item` messages, its own context skipped), files its `FileChange` items changed or
+// its `CommandExecution` commands wrote, and the output of `gh pr|issue create`; no todos (the
+// model writes them). Dirs: `session_meta` / `turn_context` cwd.
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { classifyUserText, parseTranscript } from './transcript.mjs';
-import { ingestCommand } from './touched.mjs';
+import { classifyUserText, isCodexContext, parserFor } from './transcript.mjs';
+import { codexCommand, codexItem, ingestCommand } from './touched.mjs';
 import { CONTINUE_SEPARATOR, classifyUrl, cleanUrl, resourceKey } from './brief-format.mjs';
 
 /** On the first read of a transcript, only its last this-many bytes are scanned. */
@@ -133,6 +137,60 @@ function addFile(state, abs) {
 }
 
 /** Feed one JSONL line. */
+/** A working directory the session's entries record, first-seen order. */
+function addDir(state, cwd) {
+  if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.includes('\0') || (state.skipPath ?? TEMP_PATH_RE).test(`${cwd}/`)) return;
+  const d = path.normalize(cwd);
+  if (state.dirs.has(d)) return;
+  state.dirs.add(d); // where the session started, then where it went
+  if (state.dirs.size > MAX_DIRS) state.dirs.delete(state.dirs.values().next().value);
+}
+
+/** Text of a Codex message's `input_text` / `output_text` parts. */
+function codexText(content) {
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((b) => b && (b.type === 'input_text' || b.type === 'output_text') && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+}
+
+/** Feed one Codex rollout line (see the header). */
+export function ingestCodexLine(state, line, home = os.homedir()) {
+  if (!line || !line.trim()) return;
+  const item = codexItem(line);
+  if (item) {
+    if (item.type === 'FileChange' && item.changes && typeof item.changes === 'object') {
+      for (const [p, c] of Object.entries(item.changes)) if (c?.type !== 'delete') addFile(state, p);
+    } else if (item.type === 'CommandExecution') {
+      const cmd = codexCommand(item);
+      if (!cmd) return;
+      const tmp = { paths: new Map(), seq: 0 };
+      ingestCommand(tmp, cmd.text, home);
+      for (const [p, v] of tmp.paths) if (v.tier === 2) addFile(state, p);
+      if (GH_CREATE_RE.test(cmd.script) && typeof item.aggregated_output === 'string') {
+        for (const u of extractUrls(item.aggregated_output, ['PR', 'Issue'])) addItem(state, u);
+      }
+    }
+    return;
+  }
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return;
+  }
+  const p = entry?.payload;
+  if (!p || typeof p !== 'object') return;
+  if (entry.type === 'session_meta' || entry.type === 'turn_context') return addDir(state, p.cwd);
+  if (entry.type !== 'response_item' || p.type !== 'message') return;
+  const text = codexText(p.content);
+  if (!text) return;
+  if (p.role === 'user' && !isCodexContext(text)) ingestUserText(state, text);
+  else if (p.role === 'assistant') for (const u of extractUrls(text)) addItem(state, u);
+}
+
 export function ingestLine(state, line, home = os.homedir()) {
   if (!line || !line.trim()) return;
   let entry;
@@ -143,13 +201,7 @@ export function ingestLine(state, line, home = os.homedir()) {
   }
   if (!entry || typeof entry !== 'object' || entry.isSidechain) return;
   const content = entry.message?.content;
-  if (typeof entry.cwd === 'string' && entry.cwd.startsWith('/') && !entry.cwd.includes('\0') && !(state.skipPath ?? TEMP_PATH_RE).test(`${entry.cwd}/`)) {
-    const d = path.normalize(entry.cwd);
-    if (!state.dirs.has(d)) {
-      state.dirs.add(d); // first-seen order: where the session started, then where it went
-      if (state.dirs.size > MAX_DIRS) state.dirs.delete(state.dirs.values().next().value);
-    }
-  }
+  addDir(state, entry.cwd);
 
   if (entry.type === 'assistant' && Array.isArray(content)) {
     for (const block of content) {
@@ -276,7 +328,9 @@ export function createBriefExtractor({ locate, maxBytes = MAX_SCAN_BYTES, userHo
     const id = session?.session_id;
     if (!id) return null;
     let st = states.get(id);
-    const file = st?.file ?? (await locate(session.cwd ?? null, id));
+    // Codex / pi: discovery names the file; Claude's is found from cwd + id.
+    const harness = session.harness && session.harness !== 'claude' ? session.harness : 'claude';
+    const file = st?.file ?? (harness === 'claude' ? await locate(session.cwd ?? null, id) : (typeof session.transcript === 'string' && session.transcript) || null);
     if (!file) return null;
     let stat;
     try {
@@ -307,13 +361,14 @@ export function createBriefExtractor({ locate, maxBytes = MAX_SCAN_BYTES, userHo
         }
         const lastNl = buf.lastIndexOf(0x0a);
         const upto = lastNl >= from ? lastNl + 1 : from;
-        for (const line of buf.subarray(from, upto).toString('utf8').split('\n')) ingestLine(st, line, userHome);
+        const ingest = harness === 'codex' ? ingestCodexLine : ingestLine;
+        for (const line of buf.subarray(from, upto).toString('utf8').split('\n')) ingest(st, line, userHome);
         st.offset = start + upto;
       }
       st.size = stat.size;
       st.mtimeMs = stat.mtimeMs;
     }
-    return { file, size: st.size, offset: st.offset, resources: resourcesFromState(st), todos: todosFromState(st), dirs: [...st.dirs] };
+    return { file, harness, size: st.size, offset: st.offset, resources: resourcesFromState(st), todos: todosFromState(st), dirs: [...st.dirs] };
   }
 
   return {
@@ -342,12 +397,12 @@ function clip(text, max) {
 
 /**
  * The conversation a transcript grew by since byte `from`: user prompts and the assistant's
- * turn-ending replies, each clipped, newest kept first until `maxChars`. Reads at most
+ * turn-ending replies (`harness`: whose transcript format), each clipped, newest kept first until `maxChars`. Reads at most
  * `maxBytes` (the newest part of a big delta).
  * → { text, userTurns, chars, messages, omitted, end } — `end` is the offset consumed (the last
  * complete line), what `generatedThrough` becomes.
  */
-export async function readDelta(file, from, { maxChars = 12000, maxBytes = DEFAULT_MAX_DELTA_BYTES } = {}) {
+export async function readDelta(file, from, { maxChars = 12000, maxBytes = DEFAULT_MAX_DELTA_BYTES, harness = 'claude' } = {}) {
   const stat = await fsp.stat(file);
   let start = Math.max(0, Math.min(Number(from) || 0, stat.size));
   if (stat.size < (Number(from) || 0)) start = 0; // replaced / shrunk: start over
@@ -374,7 +429,7 @@ export async function readDelta(file, from, { maxChars = 12000, maxBytes = DEFAU
   }
   const lastNl = buf.lastIndexOf(0x0a);
   const upto = lastNl >= fromIdx ? lastNl + 1 : fromIdx;
-  const msgs = parseTranscript(buf.subarray(fromIdx, upto).toString('utf8')).filter(
+  const msgs = parserFor(harness)(buf.subarray(fromIdx, upto).toString('utf8')).filter(
     (m) => (m.role === 'user' && m.kind === 'user') || (m.role === 'assistant' && m.final),
   );
   const rendered = msgs.map((m) => (m.role === 'user' ? `[user] ${clip(m.text, PER_USER_CHARS)}` : `[assistant] ${clip(m.text, PER_ASSISTANT_CHARS)}`));

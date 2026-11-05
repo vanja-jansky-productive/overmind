@@ -301,11 +301,11 @@ export function createBriefs({
     const id = session.session_id;
     const m = memFor(id);
     const { brief } = await load(id);
-    let delta = await readDelta(ext.file, brief.meta.generatedThrough ?? 0, { maxChars: cfg.maxDeltaChars });
+    let delta = await readDelta(ext.file, brief.meta.generatedThrough ?? 0, { maxChars: cfg.maxDeltaChars, harness: ext.harness });
     let recap = false;
     if (reason === 'manual' && delta.messages === 0) {
       // Nothing new: a manual regenerate re-reads the recent conversation instead.
-      delta = { ...(await readDelta(ext.file, 0, { maxChars: cfg.maxDeltaChars })), end: delta.end };
+      delta = { ...(await readDelta(ext.file, 0, { maxChars: cfg.maxDeltaChars, harness: ext.harness })), end: delta.end };
       recap = true;
     }
     const prompt = buildPrompt({
@@ -381,7 +381,7 @@ export function createBriefs({
       }
       return 'hourly cap';
     }
-    const delta = await readDelta(ext.file, through, { maxChars: cfg.maxDeltaChars });
+    const delta = await readDelta(ext.file, through, { maxChars: cfg.maxDeltaChars, harness: ext.harness });
     if (delta.userTurns < cfg.minNewTurns && delta.chars < cfg.minNewChars) return (m.pending = false), 'too little new';
     busy = id;
     try {

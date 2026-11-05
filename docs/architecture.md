@@ -151,7 +151,7 @@ server. Path: `$OVERMIND_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/overmind/c
 | `web.notes` | `{ root, name?, searchCmd?, exclude? }` (default off): the web UI's notes explorer (`#/notes`) over the markdown notes under `root` on this host — browse, full-text search (built in, or an external `searchCmd` such as `rg -n -i -F {query}`), preview with `[[wiki]]` / relative links between notes; hidden entries, `node_modules`, `.gitignore`d paths and age-encrypted blocks are never served (web/ARCHITECTURE.md → notes). Peers browse each other's notes through the usual proxy |
 | `web.operator` | `{ hosts?, model?, voice?, clearIdleMinutes? }` (default `[self]`, Claude's default model, `alloy`, 60): the [voice operator](#voice-operator) — `hosts`: where it runs, the first that answers (set the same list on every machine so all talk to one operator); the model its Claude session runs; the OpenAI voice that reads its replies; `/clear` after that many idle minutes (0 = never) |
 | `web.focus` | `{ host? }` (default: none): Focus mode — the sidebar toggle runs the `focus` CLI (Do Not Disturb + quitting distracting apps) on `host`, the machine you sit at; set the same on every machine. Unset, or a host without `focus` (501): no toggle |
-| `web.files.roots` | array of dirs (`~` expanded, default `[]`): extra roots a relative file path in chat may be under. A relative path missing under the session cwd first matches files the session touched (from its transcript), then ancestors of those, then these roots; the sandbox stays `$HOME` + cwd |
+| `web.files.roots` | array of dirs (`~` expanded, default `[]`): extra roots a relative file path in chat may be under. A relative path missing under the session cwd first matches files the session touched (from its transcript; a Codex row's rollout: `FileChange` files and its commands' writes), then ancestors of those, then these roots; the sandbox stays `$HOME` + cwd |
 | `desktop.url` | the server [Overmind.app](desktop.md) opens instead of `hosts.<self>.web`; unset → this machine's server |
 | `tmux` | tmux binary; `null` → `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin` |
 | `hosts.<name>.overmindBin` | path to `overmind` on that host; `null` → `~/.local/bin/overmind`, then `PATH` |
@@ -970,6 +970,13 @@ an edited body.
    authoritative and to update, not rewrite. The answer must be a `## Summary` (≤ 1200 chars) and
    optionally a `## Todos` of checkboxes (`## Plan` is accepted too); anything else keeps the old brief. An edit that lands
    while the model runs wins (the answer is discarded).
+
+A **Codex** row reads its rollout (the `transcript` discovery puts on the row) instead of a Claude
+transcript: files its completed `FileChange` items changed and its `CommandExecution` commands
+wrote (resolved against the item's cwd), `gh pr|issue create` output, links in its replies and
+prompts (Codex's own context messages skipped), dirs from `session_meta` / `turn_context`; it keeps
+no todo list, so the Todos come from the model. The Summary is still `claude -p`'s (background jobs
+stay on Claude).
 
 **Continue prompt** (`continuePrompt` in `web/lib/brief-format.mjs`, `continue_prompt` in
 `core::brief`; byte-identical, pinned by `testdata/briefs/sample.continue.txt`) — the first prompt

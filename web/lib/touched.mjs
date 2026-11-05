@@ -4,6 +4,8 @@
 // command writes (`> f`, `tee f`, resolved against a leading `cd <dir>`) as touched, other
 // absolute paths in it as hints. lib/files.mjs uses them to resolve a
 // relative mention ("Updated docs/x.md") that is relative to another repo than the cwd.
+// A Codex row reads its rollout (the path discovery puts on the row) instead: the files its
+// completed `FileChange` items changed and its `CommandExecution` commands (run in their own cwd).
 // Parsed incrementally: each call reads only what the transcript grew by since the last one.
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -73,6 +75,68 @@ export function ingestCommand(state, cmd, home = os.homedir()) {
   }
 }
 
+// ------------------------------------------------------------------ Codex rollouts
+
+/** A Codex rollout line's completed item (`event_msg` / `item_completed`), or null. */
+export function codexItem(line) {
+  if (!line || !line.includes('"item_completed"')) return null;
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const item = entry?.type === 'event_msg' && entry.payload?.type === 'item_completed' ? entry.payload.item : null;
+  return item && typeof item === 'object' ? item : null;
+}
+
+/** A Codex item's cwd (`file:///…` or a path) → an absolute path, else null. */
+function codexCwd(cwd) {
+  if (typeof cwd !== 'string') return null;
+  let p = cwd;
+  if (p.startsWith('file://')) {
+    try {
+      p = decodeURIComponent(new URL(p).pathname);
+    } catch {
+      return null;
+    }
+  }
+  return p.startsWith('/') && !p.includes("'") ? path.normalize(p) : null;
+}
+
+/** A `CommandExecution`'s script (`[shell, -lc, script]`), its cwd made a leading `cd` so relative writes resolve. */
+export function codexCommand(item) {
+  const argv = item?.command;
+  let script = null;
+  if (typeof argv === 'string') script = argv;
+  else if (Array.isArray(argv) && argv.every((a) => typeof a === 'string')) {
+    script = argv.length >= 3 && /^-l?c$/.test(argv[argv.length - 2]) ? argv[argv.length - 1] : argv.join(' ');
+  }
+  if (!script) return null;
+  const cwd = codexCwd(item.cwd);
+  return { script, text: cwd ? `cd '${cwd}' && ${script}` : script };
+}
+
+/** Feed one Codex rollout line. */
+export function ingestCodexLine(state, line, home = os.homedir()) {
+  const item = codexItem(line);
+  if (!item) return;
+  if (item.type === 'FileChange' && item.changes && typeof item.changes === 'object') {
+    for (const [p, c] of Object.entries(item.changes)) if (c?.type !== 'delete') add(state, p, 2);
+  } else if (item.type === 'CommandExecution') {
+    const cmd = codexCommand(item);
+    if (cmd) ingestCommand(state, cmd.text, home);
+    const out = typeof item.aggregated_output === 'string' ? item.aggregated_output : '';
+    let n = 0;
+    if (out.includes('/')) {
+      for (const m of out.matchAll(ABS_IN_TEXT)) {
+        add(state, m[1].replace(/[.:]+$/, ''), 1);
+        if (++n >= MAX_RESULT_PATHS) break;
+      }
+    }
+  }
+}
+
 /** Feed one JSONL line. */
 export function ingestLine(state, line, home = os.homedir()) {
   if (!line || !line.includes('"tool_')) return; // cheap skip: only tool_use / tool_result lines matter
@@ -128,7 +192,10 @@ export function createTouchedIndex({ home = claudeHome(), maxBytes = MAX_SCAN_BY
     const id = session?.session_id;
     if (!id) return null;
     let st = states.get(id);
-    const file = st?.file ?? (await findTranscript(session.cwd ?? null, id));
+    // Codex / pi: discovery names the file; Claude's is found from cwd + id.
+    const codex = session.harness === 'codex';
+    const own = session.harness && session.harness !== 'claude';
+    const file = st?.file ?? (own ? (typeof session.transcript === 'string' && session.transcript) || null : await findTranscript(session.cwd ?? null, id));
     if (!file) return null;
     let stat;
     try {
@@ -159,7 +226,8 @@ export function createTouchedIndex({ home = claudeHome(), maxBytes = MAX_SCAN_BY
       }
       const lastNl = buf.lastIndexOf(0x0a);
       const upto = lastNl >= from ? lastNl + 1 : from; // an unfinished last line waits for the next read
-      for (const line of buf.subarray(from, upto).toString('utf8').split('\n')) ingestLine(st, line, userHome);
+      const ingest = codex ? ingestCodexLine : ingestLine;
+      for (const line of buf.subarray(from, upto).toString('utf8').split('\n')) ingest(st, line, userHome);
       st.offset = start + upto;
     }
     st.size = stat.size;
