@@ -127,7 +127,7 @@ The frameworks figures are js-framework-benchmark results, Chrome 156 run of Oct
 | 1 | **Render hygiene.** Move every per-second clock into a small `<Ago at>` component. Make polls bail out on unchanged data (overmind, chat, queue, slack, dormant). Stop toggling `refreshing` on background polls. Memoize the session rows. | −75–80% idle UI CPU | ~1 day |
 | 2 | **Chat deltas.** `…/messages?after=<ref>` or ETag/304, so an unchanged chat is a 304 and a new message is a few KB | −95% chat bandwidth (~750 KB/min → ~0 per open session) | ~1 day |
 | 3 | **Cheaper discovery on the server.** Run `overmind list` when `~/.claude/sessions/` or the transcripts change (`fs.watch`) plus a slow safety refresh, instead of every 3 s | ~3.5% of a core back on each host | 1–2 days |
-| 4 | React Compiler (after 1, measure again) | 10–30% render time | hours |
+| 4 | React Compiler (after 1, measure again) — **measured in #39, not kept**: −58–77% component renders, no latency or CPU gain, +18% JS (see below) | 10–30% render time | hours |
 | 5 | Code splitting tuned for the phone (`xterm`, review, notes, memos, operator, settings as separate chunks, with shared chunks kept in the main file) | −35% startup JS on the phone; no desktop gain | ~1 day |
 | 6 | One SSE stream per client (session list deltas, chat appends, questions), with polling as the fallback | Updates appear immediately instead of within 3–5 s; fewer requests | ~1 week |
 | — | Framework switch (Solid / Svelte / Preact) | Smaller than 1; risky | 4–10 weeks: **not recommended** |
@@ -310,6 +310,70 @@ every one dumped since, the streaming reply had grown or new messages had landed
 
 Reproduce: `node scripts/perf/chat-transfer.mjs --mode full|delta --scenario idle|busy [--via-peer] [--verify] [--server <checkout>/web/server.mjs]`
 (scripts/perf/README.md).
+
+## React Compiler measured (#39): not kept
+
+React Compiler 1.0.0 (`babel-plugin-react-compiler`, `infer` mode, through `@rolldown/plugin-babel`
+0.2.4 + plugin-react 6.1's `reactCompilerPreset`) on top of #36. It is not on `main`: the attempt is
+the `perf/39-react-compiler-experiment` branch (one commit on top of this one), to pick up again if a
+real device shows render-bound interactions.
+
+**What compiled.** 347 functions compiled, 59 skipped (they stay plain React, still correct). The
+skips are mostly the compiler's own gaps: `try … finally` (32) and `?.` / `||` / `??` / `? :` inside
+a `try` (10), five functions with an `eslint-disable` of `react-hooks/exhaustive-deps`, and `App`
+(wouter's `hook={useHashLocation}` passes a hook as a value). `SessionScreen` compiled only after its
+`try` blocks were cut down to the awaited call. The compiler's ESLint rules
+(`eslint-plugin-react-hooks` 7.1.1 `recommended-latest`) found one Rules-of-React issue:
+`Scratchpad`'s curried `begin('move')` handler, which writes a ref, called during render.
+
+**Opted out (`'use no memo'`).** The compiler caches a call with no reactive inputs for the
+component's life (checked on a minimal case), so:
+- `useAgoNow`: `tickerNow(AGO_FAST_MS)` (#36's warning above) would freeze the label's 1 s clock at
+  mount. Compiler 1.0 happens to bail on it (an internal invariant), but a later version may not.
+- `useSessionTitle`: `sessionTitle(s, pending)` defaults `now = Date.now()` to drop an optimistic
+  title after 30 s; cached on `(s, pending)`, the title would outlive that.
+Stamps (`createStamp`) are read through `useSyncExternalStore` only, which the compiler handles.
+
+**Measured** with `scripts/perf/idle-cpu.mjs` and `scripts/perf/interaction.mjs` (new in #39):
+frozen demo API, headless WebKit 26 (Playwright 1.58.2), one machine, `main` vs the compiled build,
+runs interleaved (before, after, before, after…). Medians of 7 runs for interactions (30 session
+switches and 120 composer keystrokes per run), 3 for render counts, 4 for idle (60 s each).
+
+| | before | after | after / before |
+| --- | --- | --- | --- |
+| Session switch: input → next frame, p50 / p95 (ms) | 25 / 42 | 27 / 43 | ~1 (per-run p50s 20–34 vs 23–28) |
+| Session switch: click → settled, p50 (ms) | 548 | 542 | ~1 |
+| Session switch: WebKit CPU, 30 switches (s) | 7.2 | 7.1 | 0.99 |
+| Session switch: component renders (commits) | 34 771 (231) | 14 498 (232) | **0.42** |
+| Typing: keydown → next frame, p50 / p95 (ms) | 6 / 15 | 5 / 13 | ~0.85 (within spread) |
+| Typing: WebKit CPU, 120 keys (s) | 1.6 | 1.4 | 0.88 (runs 1.3–1.7 vs 1.1–1.6) |
+| Typing: component renders (commits) | 1 244 (242) | 283 (241) | **0.23** |
+| Idle CPU, 60 s — `list` / `session` / `mobile` (s) | 0.95 / 1.28 / 0.20 | 0.87 / 1.21 / 0.24 | within spread |
+| JS bundle: raw / gzip / brotli (KB) | 1 363 / 388 / 314 | 1 566 / 471 / 370 | **1.15 / 1.21 / 1.18** |
+| `vite build`, wall clock (s) | 0.4–0.65 | 4.4–4.7 | ~8 |
+
+- **Renders fell, time did not.** The compiler removed 58% of the component renders on a session
+  switch and 77% while typing, as expected. But on this machine those renders were not where the
+  time went. A switch costs ~25 ms to the next frame either way: the new pane's DOM, layout and
+  paint, plus its fetches. A keystroke costs ~6 ms. Idle had nothing left to remove after #36.
+- **The bundle got bigger.** +56 KB brotli (+18%) of memo-cache code, on the phone's startup path.
+  Recommendation 5 is trying to cut that path.
+- **Costs that stay.** Babel is back in the build (~8× build time). A second linter (ESLint, for the
+  compiler rules only) is needed. And render purity matters more in a codebase built on mutable
+  stamps and shared tickers: an impure helper called in render becomes a stale value, not just an
+  extra render.
+- **What would change the call.** A profile from a slow device or a big fleet where interactions
+  are render-bound (long chats, many rows), or the native compiler (`@vitejs/plugin-react`'s
+  `compiler: true` on oxc, experimental today) cutting the build cost. The bundle cost stays either
+  way.
+
+Harness fix found on the way: `idle-cpu.mjs` summed the CPU of *every* Playwright WebKit process on
+the machine. Another agent's WebKit running alongside could triple a run, and an exiting one could
+make a run negative. Both scripts now count only the processes their own browser started (by pid,
+`scripts/perf/lib.mjs`). #36's numbers above were taken with the old harness, but on a quiet machine.
+
+Reproduce: `node scripts/perf/interaction.mjs --dist <dist> [--runs 7]`, `… --renders --runs 3`,
+`node scripts/perf/idle-cpu.mjs --dist <dist> --runs 4`, interleaving the two builds.
 
 ## Caveats
 
