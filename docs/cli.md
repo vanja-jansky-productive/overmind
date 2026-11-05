@@ -874,8 +874,10 @@ overmind mcp --http [--bind 127.0.0.1] [--port 7778] --token-file ~/.config/over
 - Listens on `127.0.0.1` by default: put a TLS reverse proxy (Caddy, `tailscale serve`/`funnel`)
   in front for anything that is not on this machine.
 - Without `--tools` it leaves out what changes the machine rather than its sessions: `exec`,
-  `install`, `init`, `config_set`, `web_build`, `skill_install` and every `*_install_service` —
-  and `slack_link` (who may talk to a session is your call, not a remote agent's).
+  `install`, `init`, `config_set`, `web_build`, `skill_install`, every `*_install_service`,
+  `codex_hooks_install` and `codex_hooks_uninstall` (they edit Codex's `hooks.json` and add a
+  command Codex runs) — and `slack_link` (who may talk to a session is your call, not a remote
+  agent's).
 - Tools with `no_wait` (`handoff`, `stack_spawn`) default it to `true`: remote runtimes give a call
   ~30 s, and waiting for a new session to register can take longer.
 
