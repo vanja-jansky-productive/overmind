@@ -230,8 +230,10 @@ not exist is skipped. Each process is matched to a transcript:
 
 Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) wins; otherwise,
 later-started processes first, the newest transcript in the process's cwd created after it
-started (3 s slack), then the newest written to since it started. A Codex session before its first
-prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`.
+started (3 s slack), then the newest written to since it started. A `codex exec` / `codex review`
+rollout (`session_meta` `source: "exec"` or `originator: "codex_exec"`, the markers the web
+watcher drops) is only ever matched by id: by cwd, one run beside an open TUI would take its row.
+A Codex session before its first prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`.
 
 Codex runs a session's shell commands through a shared app-server daemon, so in them `$TMUX_PANE` is the pane that started the daemon (or unset); `$CODEX_THREAD_ID` is the session's `session_id`, and `overmind done` / `overmind slack link|reply` find their own session by it (`core::done::own_pane`).
 

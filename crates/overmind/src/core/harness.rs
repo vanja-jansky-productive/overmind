@@ -19,7 +19,9 @@
 //!
 //! A process is matched to a transcript by an id on its command line (`codex resume <id>`,
 //! `pi --session <id>`), else by cwd and start time: the newest transcript in its cwd that
-//! was created after it started, then the newest one written to since. A fresh Codex
+//! was created after it started, then the newest one written to since — never a `codex exec`
+//! / `codex review` rollout (`source: "exec"`, `originator: "codex_exec"`): one run in the
+//! same cwd would take the TUI's row. A fresh Codex
 //! session has no transcript until its first prompt — it is listed without a session id.
 
 use std::collections::{HashMap, HashSet};
@@ -847,6 +849,10 @@ pub struct TranscriptRef {
     pub cwd: String,
     pub created_ms: i64,
     pub mtime_ms: i64,
+    /// A `codex exec` / `codex review` run (`source: "exec"`, `originator: "codex_exec"` —
+    /// the web watcher's markers): never a TUI's by cwd and start time, only when a command
+    /// line names it (`codex resume <id>`).
+    pub headless: bool,
 }
 
 fn mtime_ms(p: &Path) -> Option<i64> {
@@ -889,6 +895,9 @@ fn transcript_ref(h: Harness, path: &Path) -> Option<TranscriptRef> {
         Harness::Pi => (head.get("type")?.as_str()? == "session").then_some(&head)?,
         Harness::Claude => return None,
     };
+    let headless = h == Harness::Codex
+        && (meta.get("source").and_then(Value::as_str) == Some("exec")
+            || meta.get("originator").and_then(Value::as_str) == Some("codex_exec"));
     let session_id = meta
         .get("id")
         .or_else(|| meta.get("session_id"))?
@@ -905,6 +914,7 @@ fn transcript_ref(h: Harness, path: &Path) -> Option<TranscriptRef> {
         cwd,
         created_ms: created,
         mtime_ms: mtime,
+        headless,
     })
 }
 
@@ -985,7 +995,8 @@ fn subdirs(p: &Path) -> Vec<PathBuf> {
 }
 
 /// Pair each process with its transcript (see the module docs). Later-started
-/// processes choose first, so two sessions in one cwd each get their own.
+/// processes choose first, so two sessions in one cwd each get their own. A headless
+/// `codex exec` run is matched only by an id on the command line, never by cwd.
 pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptRef> {
     let mut out = HashMap::new();
     let mut taken: HashSet<&Path> = HashSet::new();
@@ -1013,7 +1024,7 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
             };
             let pick = ts
                 .iter()
-                .filter(|t| t.cwd == cwd && !taken.contains(t.path.as_path()))
+                .filter(|t| t.cwd == cwd && !t.headless && !taken.contains(t.path.as_path()))
                 .filter(|t| {
                     if pass == 0 {
                         t.created_ms >= p.start_ms - 3000
@@ -1564,6 +1575,7 @@ mod tests {
             cwd: cwd.into(),
             created_ms: created,
             mtime_ms: mtime,
+            headless: false,
         }
     }
 
@@ -1724,8 +1736,45 @@ mod tests {
         assert!(kept(
             r#""vscode","thread_source":"conversational_onboarding""#
         ));
+        // A `codex exec` run is kept as a transcript — `codex resume <exec-id>` names it —
+        // but marked headless, so cwd + start-time matching never hands it a TUI's row
+        // (see a_codex_exec_rollout_never_takes_a_tui_row_by_cwd).
         assert!(kept(r#""exec""#));
         assert!(kept(CODEX_USER));
+        let headless = |src: &str, originator: &str| {
+            let line = codex_meta_src(CHILD_ID, "/w", ts, src)
+                .replace(r#""originator":"codex-tui""#, originator);
+            std::fs::write(&f, line + "\n").unwrap();
+            transcript_ref(Harness::Codex, &f).unwrap().headless
+        };
+        assert!(headless(r#""exec""#, r#""originator":"codex_exec""#));
+        assert!(headless(r#""exec""#, r#""originator":"codex-tui""#));
+        assert!(headless(CODEX_USER, r#""originator":"codex_exec""#));
+        assert!(!headless(CODEX_USER, r#""originator":"codex-tui""#));
+        assert!(!headless(r#""vscode""#, r#""originator":"codex_cli_rs""#));
+    }
+
+    #[test]
+    fn a_codex_exec_rollout_never_takes_a_tui_row_by_cwd() {
+        // Live test F2: a TUI idle in /w, then a `codex exec` in /w — created after the
+        // TUI started and written last, it won both passes and the row showed its turns.
+        let tui = proc_(1, "/w", 1_000_000);
+        let exec = |id: &str, created, mtime| TranscriptRef {
+            headless: true,
+            ..tref(id, "/w", created, mtime)
+        };
+        let ts = vec![
+            tref("tui", "/w", 1_000_500, 1_500_000),
+            exec("exec", 1_600_000, 1_700_000),
+        ];
+        assert_eq!(assign(&[&tui], &ts)[&1].session_id, "tui");
+        // A fresh TUI before its first prompt has no rollout: no row data from the exec.
+        assert!(assign(&[&tui], &ts[1..]).is_empty());
+        // `codex resume <exec-id>` names it: that still finds it.
+        let mut resumed = proc_(2, "/w", 2_000_000);
+        resumed.harness = Harness::Codex;
+        resumed.argv = vec!["codex".into(), "resume".into(), "exec".into()];
+        assert_eq!(assign(&[&resumed], &ts)[&2].session_id, "exec");
     }
 
     #[test]
