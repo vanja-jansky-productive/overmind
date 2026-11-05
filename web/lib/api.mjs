@@ -389,7 +389,6 @@ export function createApi({
           // Deltas (#37): `full` = replace the list; else keep what is before `from` and append.
           full: result.full,
           from: result.from,
-          stable: result.stable,
           cursor: result.cursor,
           ...(after === null ? {} : { screen: onScreen ?? null }),
         },

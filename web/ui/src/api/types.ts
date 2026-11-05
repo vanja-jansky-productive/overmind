@@ -602,7 +602,6 @@ export interface MessagesResponse {
   full?: boolean
   /** `full: false`: keep the messages before this absolute index, then append `messages`. */
   from?: number
-  stable?: number
   /** Opaque: sent back as `after` on the next poll. */
   cursor?: string
   /** With `after`: the prompt the terminal shows (never inside `messages`), null when none. */

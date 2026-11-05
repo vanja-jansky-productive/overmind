@@ -55,25 +55,6 @@ export async function locateTranscript(cwd, sessionId, home = claudeHome()) {
   return null;
 }
 
-/** Read at most the last `maxBytes` of a file, dropping a leading partial line. */
-export async function readTail(file, maxBytes = MAX_TAIL_BYTES) {
-  const stat = await fs.stat(file);
-  const start = Math.max(0, stat.size - maxBytes);
-  const fh = await fs.open(file, 'r');
-  try {
-    const buf = Buffer.alloc(stat.size - start);
-    await fh.read(buf, 0, buf.length, start);
-    let text = buf.toString('utf8');
-    if (start > 0) {
-      const nl = text.indexOf('\n');
-      text = nl === -1 ? '' : text.slice(nl + 1);
-    }
-    return { text, truncated: start > 0, size: stat.size, mtimeMs: stat.mtimeMs };
-  } finally {
-    await fh.close();
-  }
-}
-
 // ------------------------------------------------------------------ parsing
 
 const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;

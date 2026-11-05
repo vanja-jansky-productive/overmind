@@ -367,9 +367,9 @@ export function SessionScreen({
       if (!mounted || modeRef.current !== 'chat') toast.error(`Not sent: ${sendErrorMessage(err)}`)
     },
   })
-  // The real message arrived → drop its optimistic bubble.
   // What the chat shows: the transcript window, then the prompt the terminal shows (if any).
   const chatMessages = useMemo(() => (chat ? (chat.screen ? [...chat.messages, chat.screen] : chat.messages) : null), [chat])
+  // The real message arrived → drop its optimistic bubble.
   useEffect(() => {
     if (chatMessages) box.reconcile(chatMessages)
   }, [chatMessages, box])

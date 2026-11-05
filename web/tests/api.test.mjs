@@ -1115,7 +1115,7 @@ test('refreshOvermind({ wait: true }) with an armed watcher resolves after a lis
 
 // --- chat deltas (#37) -----------------------------------------------------------------------
 
-test('messages: no `after` is today\'s shape (+ full/from/stable/cursor), the screen prompt inside messages', async (t) => {
+test('messages: no `after` is today\'s shape (+ full/from/cursor), the screen prompt inside messages', async (t) => {
   const id = 'cccccccc-0000-0000-0000-000000000037';
   const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%4', updated_at: 4 }]);
   host.transcripts = fakeTranscripts([{ role: 'user', kind: 'user', text: 'go' }, { role: 'assistant', kind: 'assistant', text: 'Need a pick.' }]);
@@ -1129,7 +1129,8 @@ test('messages: no `after` is today\'s shape (+ full/from/stable/cursor), the sc
 
   const legacy = await get(url());
   assert.equal(legacy.status, 200);
-  for (const k of ['host', 'id', 'status', 'backend', 'name', 'limit', 'messages', 'queue', 'total', 'truncated', 'updatedAt', 'capturedAt', 'full', 'from', 'stable', 'cursor']) assert.ok(k in legacy.body, k);
+  for (const k of ['host', 'id', 'status', 'backend', 'name', 'limit', 'messages', 'queue', 'total', 'truncated', 'updatedAt', 'capturedAt', 'full', 'from', 'cursor']) assert.ok(k in legacy.body, k);
+  assert.equal('stable' in legacy.body, false, 'inside the cursor only');
   assert.equal('screen' in legacy.body, false);
   assert.deepEqual(legacy.body.messages.map((m) => m.kind), ['user', 'assistant', 'question'], 'the screen prompt last, as today');
   assert.deepEqual([legacy.body.total, legacy.body.truncated, legacy.body.full, legacy.body.from], [2, false, true, 0]);

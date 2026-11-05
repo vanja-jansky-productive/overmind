@@ -18,7 +18,7 @@ const FROZEN = process.env.GUIDE_FREEZE === '1' ? Date.now() : 0
 const chatDelta = (after, total, body) => {
   if (!FROZEN || after === null) return body
   const cursor = `f0f0f0f0:${total}:${total}:0000000000000000:60`
-  return after === cursor ? { ...body, messages: [], full: false, from: total, stable: total, cursor, screen: null } : { ...body, full: true, from: 0, stable: total, cursor, screen: null }
+  return after === cursor ? { ...body, messages: [], full: false, from: total, cursor, screen: null } : { ...body, full: true, from: 0, cursor, screen: null }
 }
 const now = () => FROZEN || Date.now()
 const iso = (ms) => new Date(ms).toISOString()
