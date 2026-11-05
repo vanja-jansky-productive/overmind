@@ -192,6 +192,8 @@ pub struct Changes {
     pub consequence: Option<String>,
     pub scope: Option<String>,
     pub repo: Option<String>,
+    /// The repo a `scope: repo` lesson gets when it has none and `repo` is not given.
+    pub repo_fallback: Option<String>,
     pub tier: Option<u8>,
     pub confidence: Option<f64>,
 }
@@ -212,6 +214,8 @@ impl Changes {
         }
         if let Some(v) = &self.repo {
             l.repo = Some(check_repo(v)?);
+        } else if l.repo.is_none() && self.scope.as_deref() == Some("repo") {
+            l.repo = self.repo_fallback.clone();
         }
         if let Some(v) = &self.scope {
             l.scope = check_scope(v)?;
@@ -352,8 +356,18 @@ pub fn load() -> Result<Store> {
 
 pub fn load_from(p: &Path) -> Result<Store> {
     match std::fs::read_to_string(p) {
-        Ok(t) => serde_json::from_str(&t)
-            .map_err(|e| Error::Other(format!("{}: not a lessons file: {e}", p.display()))),
+        Ok(t) => {
+            let s: Store = serde_json::from_str(&t)
+                .map_err(|e| Error::Other(format!("{}: not a lessons file: {e}", p.display())))?;
+            if s.version > 1 {
+                return Err(Error::Other(format!(
+                    "{}: lessons file version {} is newer than this overmind (1) — update it",
+                    p.display(),
+                    s.version
+                )));
+            }
+            Ok(s)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
         Err(e) => Err(e.into()),
     }
@@ -395,11 +409,22 @@ pub fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-/// Who owns the lessons learned here: `lessons.handle`, else `$USER`.
+/// Who owns the lessons learned here: `lessons.handle`, else `$USER-<this host's name>` — one
+/// person's hosts trade lessons too, so the default differs per host.
 pub fn handle() -> String {
-    setting("handle")
-        .or_else(|| std::env::var("USER").ok().filter(|u| !u.trim().is_empty()))
-        .unwrap_or_else(|| "me".into())
+    if let Some(h) = setting("handle") {
+        return h;
+    }
+    let user = std::env::var("USER")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "me".into());
+    let host = crate::core::config::get().self_name().to_string();
+    if host.trim().is_empty() {
+        user
+    } else {
+        format!("{user}-{host}")
+    }
 }
 
 /// The persona new lessons belong to: `lessons.persona`, else `claude` (the generalist).
@@ -423,11 +448,11 @@ pub fn mining_on() -> bool {
 
 impl Store {
     fn bump(&mut self) -> u64 {
-        // `next` starts past every number of ours already used, whatever the file says.
+        // `next` starts past every number already used, whatever the file says (imported ids
+        // too: one of your other hosts may share the handle).
         let used = self
             .lessons
             .iter()
-            .filter(|l| l.is_mine())
             .filter_map(|l| l.id.rsplit_once('#')?.1.parse::<u64>().ok())
             .chain(
                 self.proposals
@@ -663,9 +688,9 @@ pub struct Pick {
 }
 
 /// Up to `limit` active lessons for `sit`, best first, none of `skip`: every tier-0 lesson in
+/// scope, then tier-1 lessons that are about this repo or match the task (at least two
 /// distinct task words, one of them rare among the lessons), by score. Tier 2 never comes back
 /// here (`search` finds it).
-/// distinct task words), by score. Tier 2 never comes back here (`search` finds it).
 pub fn select(
     lessons: &[Lesson],
     sit: &Situation,
@@ -888,8 +913,21 @@ pub fn import(
                 continue;
             }
         };
+        if store.lessons.iter().any(|x| x.id == l.id && x.is_mine()) {
+            rep.invalid.push(format!(
+                "{source}:{}: {} is the id of one of your own lessons (set lessons.handle per host)",
+                n + 1,
+                l.id
+            ));
+            continue;
+        }
         if store.adopted.contains(&l.id) || store.lessons.iter().any(|x| x.id == l.id) {
             rep.already += 1;
+            continue;
+        }
+        if l.scope != "global" && l.scope != "repo" {
+            rep.invalid
+                .push(format!("{source}:{}: scope {:?}", n + 1, l.scope));
             continue;
         }
         if !l.is_active() {
@@ -930,7 +968,10 @@ pub fn export_line(l: &Lesson) -> Option<String> {
     l.title = tildify_text(&l.title);
     l.rule = tildify_text(&l.rule);
     l.consequence = tildify_text(&l.consequence);
-    l.retired_reason = l.retired_reason.map(|r| tildify_text(&r));
+    l.retired_reason = l
+        .retired_reason
+        .filter(|r| !sensitive(r))
+        .map(|r| tildify_text(&r));
     l.evidence.retain(|e| !sensitive(&e.quote));
     for e in &mut l.evidence {
         e.quote = tildify_text(&e.quote);

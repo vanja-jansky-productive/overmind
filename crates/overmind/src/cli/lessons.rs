@@ -50,6 +50,7 @@ impl ChangeArgs {
             consequence: self.consequence.clone(),
             scope: self.scope.clone(),
             repo: self.repo.clone(),
+            repo_fallback: cwd().as_deref().and_then(repo_of),
             tier: self.tier,
             confidence: self.confidence,
         }
@@ -759,16 +760,17 @@ fn import(files: &[String], extra_repos: &[String], json: bool) -> Result<()> {
 fn export(out: Option<&str>) -> Result<()> {
     let s = lessons::load()?;
     let mut mine: Vec<&Lesson> = s.lessons.iter().filter(|l| l.is_mine()).collect();
-    mine.sort_by(|a, b| {
-        a.persona
-            .cmp(&b.persona)
-            .then(id_order(&a.id).cmp(&id_order(&b.id)))
-    });
+    // Sorted by id, as the format's files are.
+    mine.sort_by_key(|l| id_order(&l.id));
     let mut by_persona: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+    let mut all = Vec::new();
     let mut held = 0;
     for l in mine {
         match lessons::export_line(l) {
-            Some(line) => by_persona.entry(&l.persona).or_default().push(line),
+            Some(line) => {
+                by_persona.entry(&l.persona).or_default().push(line.clone());
+                all.push(line);
+            }
             None => held += 1,
         }
     }
@@ -780,10 +782,8 @@ fn export(out: Option<&str>) -> Result<()> {
     }
     match out {
         None => {
-            for lines in by_persona.values() {
-                for l in lines {
-                    println!("{l}");
-                }
+            for l in &all {
+                println!("{l}");
             }
         }
         Some(dir) => {
@@ -850,11 +850,21 @@ pub fn hook_answer(input: &Value) -> Option<String> {
                 .and_then(|d| crate::core::brief::read(&d, sid).ok().flatten())
                 .map(|b| b.chars().take(4000).collect::<String>());
             extra.extend(brief.as_deref());
-            inject(event, sid, cwd, &extra, lessons::INJECT_LIMIT, false)
+            // After /compact or /clear the context lost what it was given: start over.
+            let fresh = matches!(s("source"), Some("compact" | "clear"));
+            inject(event, sid, cwd, &extra, lessons::INJECT_LIMIT, false, fresh)
         }
         "UserPromptSubmit" => {
             let prompt = s("prompt")?;
-            inject(event, sid, cwd, &[prompt], lessons::PROMPT_LIMIT, true)
+            inject(
+                event,
+                sid,
+                cwd,
+                &[prompt],
+                lessons::PROMPT_LIMIT,
+                true,
+                false,
+            )
         }
         "SessionEnd" => {
             if lessons::mining_on()
@@ -884,12 +894,14 @@ fn inject(
     extra: &[&str],
     limit: usize,
     on_prompt: bool,
+    fresh: bool,
 ) -> Option<String> {
     let marker = marker_path(sid)?;
     let mut seen: Value = std::fs::read_to_string(&marker)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| json!({ "ids": [], "prompted": false }));
+        .filter(|_| !fresh)
+        .unwrap_or_else(|| json!({ "ids": [], "prompted": fresh }));
     if on_prompt && seen["prompted"] == true {
         return None;
     }

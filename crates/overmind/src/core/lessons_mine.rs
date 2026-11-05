@@ -19,6 +19,9 @@ use crate::error::{Error, Result};
 /// A session with fewer prompts (since the last mine) is not mined.
 pub const MIN_PROMPTS: usize = 3;
 pub const MAX_PROPOSALS: usize = 3;
+/// An evidence quote shorter than this proves nothing ("ok").
+const MIN_QUOTE_CHARS: usize = 20;
+const MIN_QUOTE_WORDS: usize = 4;
 /// The compacted transcript the model reads: the head and the (longer) tail past this.
 const MAX_CHARS: usize = 80_000;
 const HEAD_CHARS: usize = 20_000;
@@ -116,7 +119,7 @@ pub fn compact(path: &Path, from: u64) -> Result<Compact> {
                     }
                     out.push_str(&format!("USER: {}\n", t.trim()));
                     hay.push_str(&fold(t));
-                    hay.push(' ');
+                    hay.push('\n');
                 }
             }
             Some("assistant") => {
@@ -129,7 +132,7 @@ pub fn compact(path: &Path, from: u64) -> Result<Compact> {
                             let t = p["text"].as_str().unwrap_or_default();
                             out.push_str(&format!("ASSISTANT: {}\n", cut(t, REPLY_CHARS)));
                             hay.push_str(&fold(t));
-                            hay.push(' ');
+                            hay.push('\n');
                         }
                         Some("tool_use") => {
                             let name = p["name"].as_str().unwrap_or("tool");
@@ -314,7 +317,10 @@ pub fn mine_with(o: &Opts, ask: impl FnOnce(&str) -> Result<String>) -> Result<R
     let now = lessons::now_iso();
     lessons::update(|s| {
         for r in raws {
-            let quote_ok = !r.quote.is_empty() && c.haystack.contains(&fold(&r.quote));
+            let q = fold(&r.quote);
+            let quote_ok = q.chars().count() >= MIN_QUOTE_CHARS
+                && q.split(' ').count() >= MIN_QUOTE_WORDS
+                && c.haystack.contains(&q);
             if !quote_ok {
                 rep.dropped
                     .push(format!("{}: its quote is not in the session", r.title));
@@ -358,7 +364,9 @@ pub fn mine_with(o: &Opts, ask: impl FnOnce(&str) -> Result<String>) -> Result<R
             }
         }
         if let Some(sid) = &session {
-            s.mined.insert(sid.clone(), c.end);
+            // Two miners of one session (SessionEnd on /clear, then on exit): never go back.
+            let at = s.mined.entry(sid.clone()).or_default();
+            *at = (*at).max(c.end);
         }
         Ok(())
     })?;

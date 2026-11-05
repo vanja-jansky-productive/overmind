@@ -35,7 +35,9 @@ impl T {
 
     fn cmd(&self) -> assert_cmd::Command {
         let mut c = self.env.cmd();
-        c.env("OVERMIND_LESSONS_FILE", self.env.path("state/lessons.json"))
+        // Outside any checkout, so nothing picks up this repo's own origin.
+        c.current_dir(self.env.path("home"))
+            .env("OVERMIND_LESSONS_FILE", self.env.path("state/lessons.json"))
             .env("OVERMIND_BRIEFS_DIR", self.env.path("briefs"))
             .env("HOME", self.env.path("home"))
             .env("XDG_STATE_HOME", self.env.path("state"))
@@ -267,7 +269,10 @@ fn import_once_and_export_only_mine() {
     assert_eq!(lines.len(), 1);
     let v: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(v["schema"], 1);
-    assert_eq!(v["id"], "tester/claude#1");
+    assert_eq!(
+        v["id"], "tester/claude#16",
+        "past every number already used"
+    );
     assert!(v.get("origin").is_none());
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(keys[0], "schema");
@@ -277,7 +282,7 @@ fn import_once_and_export_only_mine() {
     let file = t.env.path("out/claude.jsonl");
     let other = T::new(json!({}));
     let rep = other.json(&["lesson", "import", s(&file), "--json"]);
-    assert_eq!(rep[0]["report"]["adopted"], json!(["tester/claude#1"]));
+    assert_eq!(rep[0]["report"]["adopted"], json!(["tester/claude#16"]));
 }
 
 #[test]
@@ -501,4 +506,102 @@ fn mining_proposes_checks_quotes_and_remembers_rejections() {
     transcript(&short, &["hi"]);
     let rep = mine(&["lesson", "mine", s(&short), "--json"]);
     assert!(rep["skipped"].is_string());
+}
+
+#[test]
+fn compact_brings_the_lessons_back() {
+    let t = T::new(json!({ "handle": "tester", "mine": false }));
+    let app = t.repo("app", "example/app", "main");
+    t.ok(&[
+        "lesson",
+        "learn",
+        "--scope",
+        "global",
+        "--tier",
+        "0",
+        "--rule",
+        "Run the migration check before seeding.",
+        "--consequence",
+        "Stale schema.",
+    ]);
+    let ev = |source: &str| json!({"hook_event_name": "SessionStart", "session_id": SID, "cwd": s(&app), "source": source});
+    assert!(t.hook(ev("startup"), &[]).contains("tester/claude#1"));
+    assert_eq!(t.hook(ev("resume"), &[]), "", "already in the context");
+    assert!(t.hook(ev("compact"), &[]).contains("tester/claude#1"));
+}
+
+#[test]
+fn lesson_commands_stay_on_this_host_unless_named() {
+    let t = T::new(json!({}));
+    let o = t
+        .cmd()
+        .env("OVERMIND_HOST", "workstation")
+        .args(["-n", "lesson", "list"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", common::stderr(&o));
+    assert!(!stdout(&o).contains("ssh"), "{}", stdout(&o));
+}
+
+#[test]
+fn import_refuses_own_ids_and_unknown_scopes() {
+    let t = T::new(json!({ "handle": "someone" }));
+    t.ok(&[
+        "lesson",
+        "learn",
+        "--scope",
+        "global",
+        "--rule",
+        "Mine.",
+        "--consequence",
+        "x",
+    ]);
+    let odd = t.env.path("odd.jsonl");
+    let line = std::fs::read_to_string(FIXTURE)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let own = line.replace("someone/claude#3", "someone/claude#1");
+    let scoped = line
+        .replace("someone/claude#3", "other/claude#2")
+        .replace(r#""scope":"global""#, r#""scope":"project""#);
+    std::fs::write(&odd, format!("{own}\n{scoped}\n")).unwrap();
+    let rep = t.json(&["lesson", "import", s(&odd), "--json"]);
+    assert!(rep[0]["report"]["adopted"].as_array().unwrap().is_empty());
+    assert_eq!(rep[0]["report"]["invalid"].as_array().unwrap().len(), 2);
+    // A later lesson of ours never takes an imported number.
+    t.ok(&["lesson", "import", FIXTURE, "--repo", "example/app"]);
+    let l = t.json(&[
+        "lesson",
+        "learn",
+        "--scope",
+        "global",
+        "--rule",
+        "Next.",
+        "--consequence",
+        "x",
+        "--json",
+    ]);
+    assert_eq!(l["id"], "someone/claude#16");
+}
+
+#[test]
+fn trivial_quotes_are_not_evidence() {
+    let t = T::new(json!({}));
+    let tr = t.env.path(format!("{SID}.jsonl").as_str());
+    transcript(&tr, &["ok", "fine", "go on"]);
+    let path = fake_claude(
+        &t,
+        &json!([{"title": "T", "rule": "When x, y.", "consequence": "z", "quote": "ok"}]),
+    );
+    let o = t
+        .cmd()
+        .env("PATH", &path)
+        .args(["lesson", "mine", s(&tr), "--json"])
+        .output()
+        .unwrap();
+    let rep: Value = serde_json::from_str(&stdout(&o)).unwrap();
+    assert!(rep["proposed"].as_array().unwrap().is_empty());
 }

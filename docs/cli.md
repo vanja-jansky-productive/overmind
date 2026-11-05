@@ -852,7 +852,7 @@ the design, ranking and file formats are in [lessons.md](lessons.md).
 
 `--json` of `list`, `show`, `learn` is the lesson record (schema-1 field names, snake_case, plus
 `origin` and `adopted_from`). State: `${XDG_STATE_HOME:-~/.local/state}/overmind/lessons.json`
-(`OVERMIND_LESSONS_FILE`). Config `lessons` (optional): `handle` (id prefix, default `$USER`),
+(`OVERMIND_LESSONS_FILE`). Config `lessons` (optional): `handle` (id prefix, default `$USER-<self name>`),
 `persona` (default `claude`), `mineModel`, `mine` (`false`: the `SessionEnd` hook does not mine).
 
 ## Web

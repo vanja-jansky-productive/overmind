@@ -1459,7 +1459,12 @@ set one with: overmind config set hosts.{h}.ssh <alias>"
         return Ok(0);
     }
 
-    if let Placement::Dispatch(scope) = placement(&command) {
+    // A lesson command acts on this host's store — the one the hook injected from — unless
+    // `-H` names another: `OVERMIND_HOST` in a session's environment does not move it.
+    let lesson_here = matches!(command, Commands::Lesson { .. }) && cli.host.is_none();
+    if let Placement::Dispatch(scope) = placement(&command)
+        && !lesson_here
+    {
         let t = target(cli.host.as_deref(), cli.local, scope)?;
         hosts::debug(&format!("target: {t:?}"));
         if let Target::Remote(r) = t {

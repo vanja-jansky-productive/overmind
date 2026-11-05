@@ -11,7 +11,7 @@ One lesson is one schema-1 line ([format below](#agent-memory-jsonl-schema-1)), 
 
 | field | meaning |
 | --- | --- |
-| `id` | `<handle>/<persona>#<n>` — yours get `lessons.handle` (default `$USER`); an imported one keeps its source id |
+| `id` | `<handle>/<persona>#<n>` — yours get `lessons.handle` (default `$USER-<this host's name>`, so your own hosts never mint the same id); an imported one keeps its source id |
 | `kind` | `approach` (default), `friction`, `intuition`, `style`, `fluency`, or any other word |
 | `title`, `rule`, `consequence` | a short name; what holds ("When X, do Y"); what goes wrong without it |
 | `scope`, `repo` | `global`, or `repo` with `repo: "owner/name"` |
@@ -39,8 +39,9 @@ Overmind adds two fields of its own: `origin` (`manual`, `mined`, `imported`) an
 - `mined`: session id → transcript bytes already mined, so a resumed session is mined only for
   what it added.
 
-Writes take a file lock and replace the file atomically. One store per host: `-H <host>` reaches
-another host's.
+Writes take a file lock and replace the file atomically. One store per host: `lesson` commands
+act on this host's store even when `OVERMIND_HOST` is set (the hook injected from it); `-H <host>`
+reaches another host's.
 
 ## Getting them in
 
@@ -50,15 +51,16 @@ another host's.
 - **Mined at close:** the `SessionEnd` hook starts `overmind lesson mine` in the background. It
   compacts the transcript (prompts, replies, tool errors; from where the last mine stopped), asks
   `claude -p` (`lessons.mineModel`, default `sonnet`) for at most 3 lessons, and queues them as
-  proposals. A proposal is dropped when its evidence quote is not in the transcript (no invented
-  evidence), or when it looks like a rejected or retired lesson. One that looks like an active
+  proposals. A proposal is dropped when its evidence quote is not in one message of the transcript,
+  or is shorter than 20 characters / 4 words (no invented or empty evidence), or when it looks like a rejected or retired lesson. One that looks like an active
   lesson confirms that lesson instead (occurrences + 1). Sessions with fewer than 3 prompts are
   not mined.
 - **Accepted by you:** `overmind lesson proposals`, then `accept <pid>` (optionally changing
   tier, kind, scope, …) or `reject <pid> --reason …`.
 - **Imported:** `overmind lesson import <file.jsonl>…` adopts active lessons scoped `global` or to
   a repo you work in (a repo under `repos.roots`, a repo one of your lessons names, or `--repo`),
-  at confidence 0.3 and never tier 0, never twice by id.
+  at confidence 0.3 and never tier 0, never twice by id. A line with one of your own ids or a
+  scope other than `global`/`repo` is reported and skipped.
 
 ## Getting them back
 
@@ -66,7 +68,8 @@ another host's.
 nothing on any error):
 
 - `SessionStart` → up to **5** lessons as `additionalContext`: every tier-0 lesson in scope first,
-  then tier-1 lessons by score. A lesson is in scope when it is `global` or its repo is the
+  then tier-1 lessons by score. A `resume` gets only lessons the session was not given yet; after
+  `compact` or `clear` it starts over. A lesson is in scope when it is `global` or its repo is the
   session's repo (from the cwd's `origin`).
 - `UserPromptSubmit` (optional) → on the session's first prompt only, up to 3 more lessons that
   fit the prompt, never one already injected.
@@ -105,7 +108,7 @@ secrets or personal data (tokens, keys, emails, private IPs) are left out and ho
 merge it into the hooks you have. Leave `UserPromptSubmit` out for start-time lessons only, and
 `SessionEnd` out (or set `lessons.mine: false`) for no mining.
 
-Config (`lessons` in `config.json`, all optional): `handle`, `persona` (default `claude`),
+Config (`lessons` in `config.json`, all optional): `handle` (default `$USER-<self name>`), `persona` (default `claude`),
 `mineModel` (default `sonnet`), `mine` (default `true`; `false` keeps the `SessionEnd` hook
 from mining).
 
