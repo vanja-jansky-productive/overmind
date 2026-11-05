@@ -202,7 +202,7 @@ function FloatingPanel({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  const begin = (mode: 'move' | 'resize') => (e: ReactPointerEvent<HTMLElement>) => {
+  const begin = (mode: 'move' | 'resize', e: ReactPointerEvent<HTMLElement>) => {
     if (e.button !== 0) return
     if (mode === 'move' && (e.target as HTMLElement).closest('button')) return
     if (mode === 'move' && !(e.target as HTMLElement).closest('[data-drag-handle]')) return
@@ -230,7 +230,7 @@ function FloatingPanel({ children }: { children: ReactNode }) {
       aria-label="Scratchpad"
       style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
       className="fixed z-40 flex flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-2xl ring-1 ring-foreground/5"
-      onPointerDown={begin('move')}
+      onPointerDown={(e) => begin('move', e)}
       onPointerMove={move}
       onPointerUp={end}
       onPointerCancel={end}
@@ -240,7 +240,7 @@ function FloatingPanel({ children }: { children: ReactNode }) {
         aria-hidden
         onPointerDown={(e) => {
           e.stopPropagation()
-          begin('resize')(e)
+          begin('resize', e)
         }}
         className="absolute right-0 bottom-0 size-4 cursor-nwse-resize"
       />

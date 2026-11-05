@@ -21,8 +21,22 @@ overmind web serve --port 7796 --bind 127.0.0.1     # an API to talk to (any run
 OVERMIND_WEB_URL=http://127.0.0.1:7796 npm run dev  # Vite on :5173, /api proxied (default target :7878)
 ```
 
-Checks (all must be clean): `npm run typecheck`, `npm run lint` (oxlint), `npm test` (vitest),
-`npm run build`.
+Checks (all must be clean): `npm run typecheck`, `npm run lint` (oxlint, then ESLint with only the
+React Compiler's rules), `npm test` (vitest), `npm run build`.
+
+### React Compiler
+
+The build runs [React Compiler](https://react.dev/learn/react-compiler) 1.0 (`infer` mode, through
+`@rolldown/plugin-babel` + plugin-react's `reactCompilerPreset`; see `vite.config.ts`): it memoizes
+components and hooks, so most hand-written `useMemo` / `useCallback` / `memo` is no longer needed in
+new code. `REACT_COMPILER_REPORT=1 npm run build` lists every function it compiled or skipped, and why.
+
+- The compiler assumes render is pure. A call with no reactive inputs (`tickerNow(1000)`, a helper
+  that defaults `now = Date.now()`) is computed once and cached for the component's life. Pass time
+  in from `useNow` / `useAgoNow`, or mark the function `'use no memo'` (`useAgoNow`, `useSessionTitle`).
+- It skips (leaves as plain React, still correct) a function with `try … finally`, with `?.` / `||` /
+  `??` / `? :` inside a `try`, or with an `eslint-disable` of a react-hooks rule. Keep `try` blocks to
+  the awaited call and do the rest after it (`SessionScreen`'s `pollChat`).
 
 ## Structure
 

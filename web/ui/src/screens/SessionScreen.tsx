@@ -215,43 +215,47 @@ export function SessionScreen({
 
   const pollChat = useCallback(
     async (signal: AbortSignal) => {
+      // No `finally`, and only the fetch inside `try`: the React Compiler skips a component whose
+      // code has either (a `finally`, or `||` / `??` / `?.` within a try) (#39).
+      let data: Awaited<ReturnType<typeof api.messages>>
       try {
-        const data = await api.messages(host, id, chatLimit, { signal })
-        chatStamp.set(data.capturedAt || Date.now())
-        setChat((prev) => nextChat(prev, data))
-        if (data.backend) setMsgBackend(String(data.backend))
-        const q = data.queue ?? null
-        setQueue((prev) => (JSON.stringify(prev) === JSON.stringify(q) ? prev : q))
-        setChatErr(null)
-        setGone(false)
+        data = await api.messages(host, id, chatLimit, { signal })
       } catch (err) {
+        if (!signal.aborted) setLoadingOlder(false)
         if (isAbortError(err)) throw err
         // 404 is usually "no transcript on disk yet"; "unknown session" means it is gone.
         setChatErr(err as Error)
         if (isSessionGone(err)) setGone(true)
-      } finally {
-        if (!signal.aborted) setLoadingOlder(false)
+        return
       }
+      chatStamp.set(data.capturedAt || Date.now())
+      setChat((prev) => nextChat(prev, data))
+      if (data.backend) setMsgBackend(String(data.backend))
+      const q = data.queue ?? null
+      setQueue((prev) => (JSON.stringify(prev) === JSON.stringify(q) ? prev : q))
+      setChatErr(null)
+      setGone(false)
+      if (!signal.aborted) setLoadingOlder(false)
     },
     [host, id, chatLimit, chatStamp],
   )
 
   const pollPeek = useCallback(
     async (signal: AbortSignal) => {
-      try {
-        const data = await api.peek(host, id, termLines, { signal })
-        const text = typeof data.text === 'string' ? data.text : ''
-        peekStamp.set(data.capturedAt || Date.now())
-        setPeek((prev) => (prev?.text === text ? prev : { text }))
-        setPeekBackend(String(data.backend || 'unknown'))
-        setPeekErr(null)
-        setGone(false)
-      } catch (err) {
+      const data = await api.peek(host, id, termLines, { signal }).catch((err) => {
         if (isAbortError(err)) throw err
         setPeekErr(err as Error)
         if (err instanceof ApiError && err.status === 404) setGone(true)
         if (err instanceof ApiError && err.status === 409) setPeekBackend('unknown')
-      }
+        return null
+      })
+      if (!data) return
+      const text = typeof data.text === 'string' ? data.text : ''
+      peekStamp.set(data.capturedAt || Date.now())
+      setPeek((prev) => (prev?.text === text ? prev : { text }))
+      setPeekBackend(String(data.backend || 'unknown'))
+      setPeekErr(null)
+      setGone(false)
     },
     [host, id, termLines, peekStamp],
   )
@@ -453,12 +457,12 @@ export function SessionScreen({
         dismiss: async () => {
           try {
             await api.keys(host, id, 'Escape')
-            afterSteer()
-            composerRef.current?.focus()
           } catch (err) {
             steerError(err)
             throw err
           }
+          afterSteer()
+          composerRef.current?.focus()
         },
       }
 
@@ -542,14 +546,15 @@ export function SessionScreen({
   // Close from the Done card at the end of the chat: like Close in the details panel.
   const done = gone ? null : sessionDone(session)
   const closeDone = async () => {
+    let res: Awaited<ReturnType<typeof api.kill>>
     try {
-      const res = await api.kill(host, id)
-      toast.success(`Closed ${res.name || id.slice(0, 8)}`, { description: String(res.terminal || 'done').replace(/-/g, ' ') })
-      menuProps.onClosed()
+      res = await api.kill(host, id)
     } catch (err) {
       toast.error('Close failed', { description: sessionErrorMessage(err) })
       throw err
     }
+    toast.success(`Closed ${res.name || id.slice(0, 8)}`, { description: String(res.terminal || 'done').replace(/-/g, ' ') })
+    menuProps.onClosed()
   }
 
   const NewSession = pane ? NewSessionDialog : NewSessionDrawer

@@ -87,6 +87,9 @@ export function agoEvery(now: number, ...ats: (number | null | undefined)[]): nu
  * goes back.
  */
 export function useAgoNow(...ats: (number | null | undefined)[]): number {
+  // Not for the React Compiler: `tickerNow(AGO_FAST_MS)` has no reactive inputs, so it would be
+  // cached at the first render and pin every label that mounted young to the 1 s clock (#39).
+  'use no memo'
   // The 1 s clock's tick, read without subscribing: it picks the cadence, and it keeps the value
   // from going back when the 30 s clock (cached tick up to 30 s old) takes over.
   const fast = tickerNow(AGO_FAST_MS)

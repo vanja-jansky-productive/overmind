@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "oxlint && eslint src",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -b"
@@ -26,11 +26,17 @@
     "wouter": "^3.11.0"
   },
   "devDependencies": {
+    "@babel/core": "7.29.13",
+    "@rolldown/plugin-babel": "0.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "@typescript-eslint/parser": "8.72.1",
     "@vitejs/plugin-react": "^6.1.1",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
     "oxlint": "^1.81.0",
     "shadcn": "^4.21.0",
     "tailwindcss": "^4.3.3",

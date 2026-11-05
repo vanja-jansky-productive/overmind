@@ -65,6 +65,9 @@ export function useEditing(scope: TitleScope, key: string): boolean {
 
 /** The title to draw for `s` — optimistic while a rename is in flight — and whether it's saving. */
 export function useSessionTitle(s: Session | null | undefined, fallbackKey?: string): { title: string; saving: boolean } {
+  // Not for the React Compiler: `sessionTitle` reads Date.now() to expire an optimistic title, so a
+  // result cached on (s, entry) would outlive PENDING_TTL_MS (#39).
+  'use no memo'
   const key = s ? sessionKey(s) : (fallbackKey ?? '')
   const entry = useSyncExternalStore(subscribe, () => getState().pending.get(key) ?? null)
   return { title: sessionTitle(s, entry), saving: !!entry?.saving }
