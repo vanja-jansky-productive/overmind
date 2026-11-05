@@ -113,7 +113,7 @@ executable, or — Codex — `never run here (no <its home>) — run \`codex log
 default `~/.codex`) / `not logged in — run \`codex login\`` (no `auth.json` there; a config that keeps
 credentials in the OS keyring, `cli_auth_credentials_store = "keyring"` or `"auto"`, counts as logged
 in — unverified, since overmind can't read the keyring, and `"auto"` without a keyring falls back to
-`auth.json`). A Codex that is not logged in is still `installed` and offered.
+`auth.json`; the text list notes `credentials in keyring, unverified`). A Codex that is not logged in is still `installed` and offered.
 
 Codex's sandbox and approval mode are part of its launcher, not a per-spawn pick: set
 `harnesses.codex.command` to e.g. `"codex -a on-request -s workspace-write"` (or
@@ -534,7 +534,7 @@ JSON shapes:
 | --- | --- |
 | `overmind exec [-C <dir>] [-t] -- <cmd…>` | run a command on the host, outside tmux (cwd defaults to `$HOME`; `-t` allocates a tty) |
 | `overmind ssh [cmd…]` | plain shell on the host, no tmux |
-| `overmind doctor` | reachability, dispatch mode and why, tools and versions on both ends, config sanity. Per harness: `claude` and `codex` always, `pi` only when installed — each with its version and live sessions. Fails (exit 1) when no harness can run on a host: no Claude, no pi, and no Codex that has run there and is logged in. Then `claude: missing` is ✘, and so is a Codex that is `never run here` / `not logged in`; on a host where another harness runs, those are info (·) and `codex: missing` is info with the install command. A keyring login (`cli_auth_credentials_store`) shows `(credentials in keyring, unverified)`. Other failures: tmux, a bot, the config, a host |
+| `overmind doctor` | reachability, dispatch mode and why, tools and versions on both ends, config sanity. Per harness: `claude` and `codex` always, `pi` only when installed — each with its version (`?` when the launcher is there but `--version` fails or hangs; Claude's is `OVERMIND_CMD` / config `claude`, else `claude`) and live sessions. Fails (exit 1) when no harness can run on a host: no Claude, no pi, and no Codex that has run there and is logged in. Then `claude: missing` is ✘, and so is a Codex that is `never run here` / `not logged in` — each counts, so a Codex-only host that isn't logged in reports 2 problems; on a host where another harness runs, those are info (·) and `codex: missing` is info with the install command. A keyring login (`cli_auth_credentials_store`) shows `(credentials in keyring, unverified)`, here and in `harness list`. A host whose overmind predates harness reporting shows the old uncounted ✘ `claude: missing` with a hint to update it. Other failures: tmux, a bot, the config, a host |
 
 ## Setup
 
