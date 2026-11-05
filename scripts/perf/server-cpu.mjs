@@ -1,6 +1,6 @@
 // Web server CPU and `overmind list` runs while a UI watches — the #38 harness.
 //
-//   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency|codex|idle [--watch 0|1] [--seconds 300]
+//   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency|codex|exec|idle [--watch 0|1] [--seconds 300]
 //                                    [--interval 5] [--port 7897] [--list-delay 0.5] [--json]
 //
 // Starts `web/server.mjs` under `/usr/bin/time -l` (its user+sys include reaped children: every
@@ -34,6 +34,8 @@
 //            its turn ends or starts (`task_complete` / `task_started`), and every third time a
 //            new rollout appears for a session no list has shown (started in a terminal). The
 //            fake list reports what the files say. Reports write → list start for each kind.
+// - exec     idle, plus a headless `codex exec` rollout streaming (a line every 200 ms): never a
+//            row, so it should cost what idle costs.
 //
 // Run modes interleaved (0, 1, 0, 1) — the fleet changes under you.
 import { execFileSync, spawn } from 'node:child_process';
@@ -241,6 +243,14 @@ async function main() {
     }
     return null;
   };
+  if (fixture && opts.scenario === 'exec') {
+    const dir = path.join(fixture.home, '.codex', 'sessions', '2026', '11', '05');
+    fs.mkdirSync(dir, { recursive: true });
+    const id = 'e0000000-0000-4000-8000-000000000001';
+    const file = path.join(dir, `rollout-2026-11-05T10-00-00-${id}.jsonl`);
+    fs.writeFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: { id, cwd: '/x', originator: 'codex_exec', source: 'exec' } })}\n`);
+    timers.push(setInterval(() => fs.appendFileSync(file, `{"type":"response_item","payload":{"type":"message","t":${Date.now()}}}\n`), 200));
+  }
   if (fixture && opts.scenario === 'codex') {
     const writeRows = () => fs.writeFileSync(fixture.rowsFile, JSON.stringify(fixture.rows));
     const main = codexRollout(fixture, 'c0000000-0000-4000-8000-000000000001');
@@ -266,7 +276,7 @@ async function main() {
       latencies.push(await listAfter(wroteAt));
     }, 10_700)); // not a multiple of the 5 s gap: the writes land at every phase of it
   }
-  if (fixture && !['idle', 'codex'].includes(opts.scenario)) {
+  if (fixture && !['idle', 'codex', 'exec'].includes(opts.scenario)) {
     if (opts.scenario === 'burst' || opts['burst-latency']) {
       timers.push(setInterval(() => {
         for (const r of fixture.rows) fs.appendFileSync(path.join(fixture.proj, `${r.session_id}.jsonl`), `{"type":"assistant","t":${Date.now()}}\n`);

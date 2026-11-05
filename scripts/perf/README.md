@@ -37,6 +37,7 @@ node scripts/perf/server-cpu.mjs --scenario burst --watch 1 --seconds 300 --list
 node scripts/perf/server-cpu.mjs --scenario idle --watch 1 --seconds 300 --list-delay 0.2 --json
 node scripts/perf/server-cpu.mjs --scenario latency --watch 1 --seconds 120 --json [--burst-latency]
 node scripts/perf/server-cpu.mjs --scenario codex --watch 1 --seconds 130 --json
+node scripts/perf/server-cpu.mjs --scenario exec --watch 1 --seconds 130 --json
 ```
 
 - `fleet`: this machine's real sessions, read-only whatever the config says. Bound to 127.0.0.1 on
@@ -66,4 +67,6 @@ node scripts/perf/server-cpu.mjs --scenario codex --watch 1 --seconds 130 --json
   its turn ends or starts (`task_complete` / `task_started`; `latencyMs`), and every third time a
   rollout appears for a session no list has shown yet, as when `codex` starts in a terminal
   (`newSessionLatencyMs`). Both are write → list start. The fake list reports what the files say.
+- `exec`: `idle` plus a headless `codex exec` rollout streaming a line every 200 ms. It is never a
+  row, so it should cost what `idle` costs.
 - Run modes interleaved (0, 1, 0, 1): the fleet's busy rows change under you.

@@ -229,8 +229,24 @@ reads a scrubbed config.
   The extra lists are one per boundary or new session (fast instead of waiting out the slow
   gap); a streaming turn still lists at most every 5 s. Each Codex / pi rollout event now costs
   one 16 KB tail read.
+- Headless Codex (review of #38, round 2): `codex exec` / `codex review` and sub-agents write
+  rollouts that never become rows. The first fix let an unknown rollout through once per list, so
+  a headless run kept an otherwise idle host listing every 5 s for as long as it streamed. Now
+  the watcher reads an unknown rollout's first line once: an exec run (`source: "exec"`,
+  `originator: "codex_exec"`) or a sub-agent is dropped. Any other unknown rollout (a `pi -p`) is
+  fast once, slow once on a later list, then dropped while no row owns it, so it costs at most two
+  lists. `--scenario exec` (`idle` plus an exec rollout streaming a line every 200 ms, 130 s):
 
-Reproduce: `node scripts/perf/server-cpu.mjs --scenario fleet|burst|idle|latency|codex --watch 0|1 [--seconds 300] [--list-delay 0.5]`
+  | | lists / 130 s | CPU (node + fake CLI) |
+  | --- | --- | --- |
+  | round 1 (b3a2572) | 27 | 0.50 s |
+  | now | 5 (the idle level) | 0.26 s |
+
+  `--scenario codex` is unchanged (two runs): 36–37 lists / 130 s, turn boundary 73–902 ms, new session
+  264–595 ms. A streaming listed rollout already lists every 5 s, so an exec run beside it
+  costs nothing extra in either version.
+
+Reproduce: `node scripts/perf/server-cpu.mjs --scenario fleet|burst|idle|latency|codex|exec --watch 0|1 [--seconds 300] [--list-delay 0.5]`
 (scripts/perf/README.md).
 
 ## Caveats
