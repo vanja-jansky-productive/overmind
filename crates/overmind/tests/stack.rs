@@ -777,6 +777,44 @@ fn spawn_on_another_host_under_dry_run_shows_the_ssh_line_and_the_remote_context
 }
 
 #[test]
+fn spawn_on_another_host_carries_the_effort_and_checks_its_shape_first() {
+    let t = T::new();
+    let run = |effort: &str| {
+        t.cmd()
+            .env("OVERMIND_DRY_RUN", "1")
+            .args([
+                "stack",
+                "spawn",
+                "login-redirect",
+                "--on",
+                "workstation",
+                "--harness",
+                "codex",
+                "--effort",
+                effort,
+                "--no-llm",
+            ])
+            .output()
+            .unwrap()
+    };
+    // The remote `spawn` checks the level against that host's models; here it only travels.
+    let out = run("ultra");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("--effort ultra"), "{text}");
+    // Not a level at all: refused here, before a stack is made or ssh runs.
+    let out = run("Max!");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("effort"), "{}", stderr(&out));
+    assert!(
+        !stdout(&out).contains("would create stack"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(t.stack_files(), Vec::<String>::new(), "nothing written");
+}
+
+#[test]
 fn a_host_with_a_web_url_and_no_ssh_is_reached_over_its_web_server() {
     let t = T::new();
     // The sheds know each other by web url only: `-H` goes to that server's stack routes.

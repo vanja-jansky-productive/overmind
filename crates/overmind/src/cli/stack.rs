@@ -1477,6 +1477,17 @@ fn spawn_on(c: &Ctx, src: &Session, host: &str, a: SpawnArgs) -> Result<()> {
         .map(commands::clean_model)
         .transpose()?
         .flatten();
+    // Which levels the model takes is that host's to check (its own model cache); the shape
+    // is checked here, before a stack is made.
+    let effort = opts.effort().map(str::to_string);
+    if let Some(e) = effort
+        .as_deref()
+        .filter(|e| !crate::core::harness::is_level(e))
+    {
+        return Err(Error::Other(format!(
+            "effort \"{e}\" is not a level — a lowercase word like \"high\""
+        )));
+    }
     let e = ensure_for(c, src, a.label.as_deref(), a.no_llm)?;
     let id = e.stack.id();
     let line = stack::remote_context_line(&id, &e.stack.home(&c.me));
@@ -1490,6 +1501,9 @@ fn spawn_on(c: &Ctx, src: &Session, host: &str, a: SpawnArgs) -> Result<()> {
     }
     if opts.harness != Default::default() {
         args.extend(["--harness".into(), opts.harness.id().to_string()]);
+    }
+    if let Some(e) = &effort {
+        args.extend(["--effort".into(), e.clone()]);
     }
     if let Some(b) = opts.backend {
         args.extend(["--backend".into(), b.label().to_string()]);
