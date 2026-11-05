@@ -158,6 +158,10 @@ pub fn harness_list(json: bool, with_models: bool) -> Result<()> {
             r.command.dimmed(),
             models.dimmed()
         );
+        if let Some(p) = &r.problem {
+            let p = if r.installed { p.yellow() } else { p.red() };
+            println!("{:<7} {p}", "");
+        }
     }
     Ok(())
 }

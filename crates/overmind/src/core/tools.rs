@@ -47,7 +47,10 @@ fn nvm_bins(dir: &Path) -> Vec<PathBuf> {
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().into_string().ok())
         .map(|name| {
-            let mut parts = name.trim_start_matches('v').split('.').map(str::parse::<u32>);
+            let mut parts = name
+                .trim_start_matches('v')
+                .split('.')
+                .map(str::parse::<u32>);
             let v = match (parts.next(), parts.next(), parts.next(), parts.next()) {
                 (Some(Ok(a)), Some(Ok(b)), Some(Ok(c)), None) => Some((a, b, c)),
                 _ => None,
@@ -285,7 +288,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
         // only the per-user dirs: this machine's Homebrew may hold a real codex
-        let user_dirs = || fallback_dirs_in(Some(h)).into_iter().filter(|d| d.starts_with(h));
+        let user_dirs = || {
+            fallback_dirs_in(Some(h))
+                .into_iter()
+                .filter(|d| d.starts_with(h))
+        };
         exe(&h.join(".nvm/versions/node/v20.0.0/bin/codex"));
         exe(&h.join(".nvm/versions/node/v22.0.0/bin/codex"));
         assert_eq!(

@@ -117,6 +117,81 @@ fn harness_list_codex_default_reads_plain_default() {
     assert_eq!(codex["models"][1]["label"], "GPT-6.1 Sol");
 }
 
+// `harness list` (text) says why Codex can't be used here, with the fix: a configured launcher
+// that isn't there, and an installed Codex with no login.
+#[test]
+fn harness_list_says_why_codex_is_unavailable() {
+    let env = common::Env::new();
+    env.write_config(&serde_json::json!({
+        "version": 1,
+        "harnesses": { "codex": { "command": env.path("nope/codex").to_str().unwrap() } }
+    }));
+    let out = env
+        .cmd()
+        .args(["--local", "harness", "list", "--no-models"])
+        .env("CODEX_HOME", env.path("no-codex-home"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let s = common::stdout(&out);
+    let codex = s
+        .lines()
+        .skip_while(|l| !l.starts_with("codex"))
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(codex.contains("not found"), "{s}");
+    assert!(
+        codex.contains("nope/codex is not an executable — fix harnesses.codex.command"),
+        "{s}"
+    );
+
+    let stub = env.path("bin/codex");
+    std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
+    std::fs::write(&stub, "#!/bin/sh\necho codex-cli 9.9.9\n").unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let codex_home = env.path("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    env.write_config(&serde_json::json!({
+        "version": 1,
+        "harnesses": { "codex": { "command": stub.to_str().unwrap() } }
+    }));
+    let run = || {
+        env.cmd()
+            .args(["--local", "harness", "list", "--no-models"])
+            .env("CODEX_HOME", &codex_home)
+            .output()
+            .unwrap()
+    };
+    let s = common::stdout(&run());
+    assert!(s.contains("not logged in — run `codex login`"), "{s}");
+    std::fs::write(codex_home.join("auth.json"), "{}").unwrap();
+    let s = common::stdout(&run());
+    assert!(!s.contains("codex login"), "{s}");
+
+    let out = env
+        .cmd()
+        .args(["--local", "harness", "list", "--json", "--no-models"])
+        .env("CODEX_HOME", env.path("elsewhere"))
+        .output()
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    let codex = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "codex")
+        .unwrap();
+    assert_eq!(codex["installed"], true);
+    assert!(
+        codex["problem"]
+            .as_str()
+            .unwrap_or("")
+            .contains("never run here"),
+        "{codex}"
+    );
+}
+
 // Bare `overmind` opens the TUI on a terminal, but a piped stdout (this test, a
 // script, an agent) must get the one-shot list and *exit* — not the watch loop.
 // Enforced with a timeout so a regression fails the suite instead of hanging it.

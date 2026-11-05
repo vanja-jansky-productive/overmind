@@ -622,6 +622,9 @@ pub struct HarnessInfo {
     pub command: String,
     /// Its first word resolves to an executable (PATH, the usual install dirs).
     pub installed: bool,
+    /// Why it can't be used here, with the fix: not found (and where overmind looked), or —
+    /// Codex — never run / not logged in. `null` when nothing is known to be wrong.
+    pub problem: Option<String>,
     pub models: Vec<ModelOption>,
     /// Reasoning-effort levels it takes (`--effort`, `-c model_reasoning_effort=`, `--thinking`).
     pub efforts: Vec<String>,
@@ -634,28 +637,108 @@ pub struct HarnessInfo {
 
 pub fn info(h: Harness, with_models: bool) -> HarnessInfo {
     let command = h.command();
-    let bin = command.split_whitespace().next().unwrap_or(h.id());
-    let installed = if bin.contains('/') {
-        crate::core::tools::is_executable(Path::new(&crate::core::tools::expand_tilde(bin)))
-    } else {
-        crate::core::tools::find_binary(bin).is_some()
-    };
+    let installed = binary(&command).is_some();
     let models = match (with_models && installed, h) {
         (false, _) => Vec::new(),
         (true, Harness::Claude) => claude_models(),
         (true, Harness::Codex) => codex_models(&codex_home()),
         (true, Harness::Pi) => pi_models(&pi_home(), &command),
     };
+    let problem = problem(
+        h,
+        &command,
+        installed,
+        &crate::core::tools::fallback_dirs(),
+        &codex_home(),
+    );
     HarnessInfo {
         id: h.id(),
         label: h.label(),
         command,
         installed,
+        problem,
         models,
         efforts: h.efforts(),
         default_model: h.default_model(),
         default_effort: h.default_effort(),
     }
+}
+
+/// The executable a launch command's first word resolves to: a path (`~` allowed) as given,
+/// a bare name on `$PATH` and in the usual install dirs ([`crate::core::tools::find_binary`]).
+pub fn binary(command: &str) -> Option<PathBuf> {
+    let bin = command.split_whitespace().next()?;
+    if bin.contains('/') {
+        let p = PathBuf::from(crate::core::tools::expand_tilde(bin));
+        crate::core::tools::is_executable(&p).then_some(p)
+    } else {
+        crate::core::tools::find_binary(bin)
+    }
+}
+
+/// Whether Codex has a login in `home` (`$CODEX_HOME`): its `auth.json`, or a `config.toml`
+/// that keeps credentials in the OS keyring (`cli_auth_credentials_store = "keyring"` /
+/// `"auto"`), where overmind can't look and takes them as there.
+pub fn codex_logged_in(home: &Path) -> bool {
+    if home.join("auth.json").is_file() {
+        return true;
+    }
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    config
+        .lines()
+        .map(str::trim)
+        .take_while(|l| !l.starts_with('['))
+        .filter_map(|l| l.split_once('='))
+        .any(|(k, v)| {
+            k.trim() == "cli_auth_credentials_store"
+                && matches!(v.trim().trim_matches('"'), "keyring" | "auto")
+        })
+}
+
+/// Why `h` can't be used here, with the fix — `None` when nothing is known to be wrong.
+/// `installed` is [`binary`]`(command).is_some()`; `looked_in` the dirs searched after
+/// `$PATH`; `codex_home` Codex's home (only read for Codex).
+pub fn problem(
+    h: Harness,
+    command: &str,
+    installed: bool,
+    looked_in: &[PathBuf],
+    codex_home: &Path,
+) -> Option<String> {
+    use crate::core::tools::tildify;
+    let setting = match h {
+        Harness::Claude => "OVERMIND_CMD / config `claude`".to_string(),
+        _ => format!("harnesses.{}.command", h.id()),
+    };
+    if !installed {
+        let bin = command.split_whitespace().next().unwrap_or(h.id());
+        if bin.contains('/') {
+            return Some(format!("{bin} is not an executable — fix {setting}"));
+        }
+        let install = match h {
+            Harness::Claude => "install Claude Code",
+            Harness::Codex => "install it (brew install codex, or npm i -g @openai/codex)",
+            Harness::Pi => "install it",
+        };
+        let dirs: Vec<String> = looked_in
+            .iter()
+            .map(|d| tildify(&d.display().to_string()))
+            .collect();
+        return Some(format!(
+            "not found — looked in $PATH, {}; {install}, or set {setting}",
+            dirs.join(", ")
+        ));
+    }
+    if h != Harness::Codex {
+        return None;
+    }
+    if !codex_home.is_dir() {
+        return Some(format!(
+            "never run here (no {}) — run `codex login`",
+            tildify(&codex_home.display().to_string())
+        ));
+    }
+    (!codex_logged_in(codex_home)).then(|| "not logged in — run `codex login`".to_string())
 }
 
 // --- processes ----------------------------------------------------------------
@@ -1648,6 +1731,89 @@ mod tests {
         ] {
             assert_eq!(l(verbatim), verbatim);
         }
+    }
+
+    #[test]
+    fn codex_is_logged_in_with_an_auth_json_or_a_keyring_store() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        assert!(!codex_logged_in(h));
+        std::fs::write(h.join("config.toml"), "model = \"gpt-6.1-sol\"\n").unwrap();
+        assert!(!codex_logged_in(h));
+        // credentials in the OS keyring: overmind can't look, so it takes them as there
+        std::fs::write(
+            h.join("config.toml"),
+            "cli_auth_credentials_store = \"keyring\"\n",
+        )
+        .unwrap();
+        assert!(codex_logged_in(h));
+        std::fs::write(
+            h.join("config.toml"),
+            "cli_auth_credentials_store = \"file\"\n",
+        )
+        .unwrap();
+        assert!(!codex_logged_in(h));
+        std::fs::write(h.join("auth.json"), "{}").unwrap();
+        assert!(codex_logged_in(h));
+    }
+
+    #[test]
+    fn a_harness_that_cannot_run_says_why_and_the_fix() {
+        let dirs = [
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/x/.volta/bin"),
+        ];
+        let home = tempfile::tempdir().unwrap();
+        let none = home.path().join("absent");
+
+        let p = problem(Harness::Codex, "codex", false, &dirs, &none).unwrap();
+        assert!(p.starts_with("not found"), "{p}");
+        for want in [
+            "$PATH",
+            "/opt/homebrew/bin",
+            "/x/.volta/bin",
+            "npm i -g @openai/codex",
+            "harnesses.codex.command",
+        ] {
+            assert!(p.contains(want), "{want}: {p}");
+        }
+        let p = problem(
+            Harness::Codex,
+            "~/wrap/codex -a on-request",
+            false,
+            &dirs,
+            &none,
+        )
+        .unwrap();
+        assert!(
+            p.contains("~/wrap/codex") && p.contains("not an executable"),
+            "{p}"
+        );
+        assert!(!p.contains("/opt/homebrew/bin"), "{p}");
+        let p = problem(Harness::Claude, "claude", false, &dirs, &none).unwrap();
+        assert!(
+            p.contains("OVERMIND_CMD") && p.contains("config `claude`"),
+            "{p}"
+        );
+        let p = problem(Harness::Pi, "pi", false, &dirs, &none).unwrap();
+        assert!(p.contains("harnesses.pi.command"), "{p}");
+
+        // installed Codex: never run here, then not logged in, then fine
+        let p = problem(Harness::Codex, "codex", true, &dirs, &none).unwrap();
+        assert!(
+            p.contains("never run here") && p.contains("codex login"),
+            "{p}"
+        );
+        let p = problem(Harness::Codex, "codex", true, &dirs, home.path()).unwrap();
+        assert_eq!(p, "not logged in — run `codex login`");
+        std::fs::write(home.path().join("auth.json"), "{}").unwrap();
+        assert_eq!(
+            problem(Harness::Codex, "codex", true, &dirs, home.path()),
+            None
+        );
+        // the others have no login overmind can see
+        assert_eq!(problem(Harness::Claude, "claude", true, &dirs, &none), None);
+        assert_eq!(problem(Harness::Pi, "pi", true, &dirs, &none), None);
     }
 
     #[test]
