@@ -43,7 +43,8 @@ fn nvm_bins(dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut versions: Vec<(Option<(u32, u32, u32)>, String)> = rd
+    type NodeVersion = Option<(u32, u32, u32)>;
+    let mut versions: Vec<(NodeVersion, String)> = rd
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().into_string().ok())
         .map(|name| {
