@@ -1117,16 +1117,17 @@ free text; any other `## ` section is kept as is
   `stack`, `host`, `cwd`, `created`, `updated` (last write of any kind), `generatedAt` (the model
   wrote Summary/Resources), `editedAt` (last human edit), `members` — are never taken from an
   edited body; `label` is (from the submitted frontmatter). Unknown keys are preserved.
-- `members[]`: `{ session, host, name, added, closed, cwd?, firstPrompt? }` — `host` is where
+- `members[]`: `{ session, host, name, added, closed, cwd?, firstPrompt?, transcript? }` — `host` is where
   the session runs (the stack's home when absent), `name` is the
   display title at the last sync, `closed` `null` while live and an ISO time once the session was
   seen gone (members are never removed automatically; `overmind stack remove` does), `cwd` (`~/…`,
   or absolute on another host) and `firstPrompt` (≤ 160 chars) are kept so the Sessions line
-  survives the session. Unknown member keys are preserved.
+  survives the session; `transcript` (`~/…`, Codex / pi members only) is the rollout discovery
+  named, since theirs can't be derived from cwd + id. Unknown member keys are preserved.
 - Body: the header blockquote and `## Sessions` are **regenerated** on every machine write
   (Sessions from `members`: `live` / `closed <date>`, `, on <host>` for a member on another host
   than the home (its paths are paths there), the brief path whether or not it exists, the
-  transcript path for the member's cwd, `first prompt:` when known; dates UTC). `Summary`,
+  transcript path (a Codex / pi member's `transcript`, else Claude's for its cwd), `first prompt:` when known; dates UTC). `Summary`,
   `Resources`, `Notes` and any other section, and text above the first heading, are a human's
   and kept verbatim. Parsing is tolerant like briefs (case-insensitive headings, any order,
   missing sections); Resources bullets parse like a brief's (`parse_resource_line`; `Folder:`
@@ -1159,7 +1160,8 @@ stamps `stack: { id, label, host } | null` on each row (read-only; `host` = the 
 call (`-p --model <m> --strict-mcp-config`, tools disallowed, prompt on stdin, neutral cwd, 120 s)
 with the source session's display title, cwd, host, its Git line (`git rev-parse` in the cwd),
 first prompt, its session brief's body when there is one, and the last ~6000 characters of its
-conversation (user prompts and turn-ending assistant text, main thread, tool blocks skipped).
+conversation (user prompts and turn-ending assistant text, main thread, tool blocks skipped; a
+Codex source's from its rollout, its own context messages skipped).
 The answer must be `Label: <2–5 words>`, `## Summary` (≤ 1000 chars, generalised to the stack)
 and `## Resources` (`- Kind: value` bullets of things really in the input); the Git line and a
 Folder line are added when missing. Anything unparseable, a failed call, `--no-llm`,

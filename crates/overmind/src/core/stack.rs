@@ -25,6 +25,7 @@ use serde_json::{Map, Value, json};
 
 use crate::core::brief::{self, Extra};
 use crate::core::discovery::{self, Session};
+use crate::core::harness::Harness;
 use crate::error::{Error, Result};
 
 /// Exit code: two stacks (or sessions) match the query on the same rung.
@@ -232,6 +233,10 @@ pub struct Member {
         skip_serializing_if = "Option::is_none"
     )]
     pub first_prompt: Option<String>,
+    /// A Codex / pi member's transcript (`~/…`): theirs is not derived from cwd + id like
+    /// Claude's, so it is kept from the row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
     /// Keys added later (or by another writer) are kept.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -538,12 +543,12 @@ pub fn sessions_section(stack: &Stack, paths: &Paths) -> String {
             "brief `{}`",
             paths.tilde(&brief_path.display().to_string())
         ));
-        if let Some(t) = m
-            .cwd
-            .as_deref()
-            .or(stack_cwd.as_deref())
-            .and_then(|c| paths.transcript_path(c, &m.session))
-        {
+        if let Some(t) = m.transcript.as_deref().map(PathBuf::from).or_else(|| {
+            m.cwd
+                .as_deref()
+                .or(stack_cwd.as_deref())
+                .and_then(|c| paths.transcript_path(c, &m.session))
+        }) {
             parts.push(format!(
                 "transcript `{}`",
                 paths.tilde(&t.display().to_string())
@@ -648,8 +653,17 @@ pub fn member_for(s: &Session, host: &str, now: &str, paths: &Paths) -> Option<M
             .as_deref()
             .map(|t| clip(t, FIRST_PROMPT_CAP))
             .filter(|t| !t.is_empty()),
+        transcript: own_transcript(s, paths),
         extra: Map::new(),
     })
+}
+
+/// A non-Claude row's transcript (`~/…`), which discovery names; `None` for Claude.
+fn own_transcript(s: &Session, paths: &Paths) -> Option<String> {
+    s.transcript
+        .as_deref()
+        .filter(|t| s.harness != Harness::Claude && !t.is_empty())
+        .map(|t| paths.tilde(t))
 }
 
 /// What a new stack is made of.
@@ -862,6 +876,9 @@ pub fn sync_stack(stack: &mut Stack, obs: &Observed, now: &str, paths: &Paths) -
                     m.name = Some(s.headline());
                     if m.cwd.is_none() {
                         m.cwd = s.cwd.as_deref().map(|c| paths.tilde(c));
+                    }
+                    if m.transcript.is_none() {
+                        m.transcript = own_transcript(s, paths);
                     }
                     if m.first_prompt.is_none() {
                         m.first_prompt = s
@@ -1388,7 +1405,21 @@ fn entry_text(v: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// The conversation from a transcript's tail, newest kept: user prompts and turn-ending
+/// Text of a Codex message's `input_text` / `output_text` parts.
+fn codex_text(content: &Value) -> String {
+    content
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|b| matches!(b["type"].as_str(), Some("input_text" | "output_text")))
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// The conversation from a transcript's tail (Claude's or a Codex rollout), newest kept: user prompts and turn-ending
 /// assistant text (main thread only, tool calls and results skipped), each clipped, at most
 /// `max_chars` in all.
 pub fn conversation_tail(path: &Path, max_chars: usize) -> String {
@@ -1426,25 +1457,29 @@ pub fn conversation_from(jsonl: &str, max_chars: usize) -> String {
         if v["isSidechain"] == true {
             continue;
         }
-        match v["type"].as_str() {
-            Some("user") => {
-                let t = entry_text(&v);
-                let t = t.trim();
-                if t.is_empty() || t.starts_with('<') {
-                    continue;
-                }
-                if let Some(a) = pending.take() {
-                    turns.push(("Assistant", a));
-                }
-                turns.push(("User", t.to_string()));
-            }
-            Some("assistant") => {
-                let t = entry_text(&v);
-                if !t.trim().is_empty() {
-                    pending = Some(t.trim().to_string());
+        // Claude: `type: user|assistant`; Codex: a `response_item` message with its `role`.
+        let (role, t) = match v["type"].as_str() {
+            Some(r @ ("user" | "assistant")) => (r, entry_text(&v)),
+            Some("response_item") if v["payload"]["type"] == "message" => {
+                match v["payload"]["role"].as_str() {
+                    Some(r @ ("user" | "assistant")) => (r, codex_text(&v["payload"]["content"])),
+                    _ => continue,
                 }
             }
-            _ => {}
+            _ => continue,
+        };
+        let t = t.trim();
+        if role == "user" {
+            // Harness context: Claude's tags, Codex's `<environment_context>` / AGENTS.md.
+            if t.is_empty() || t.starts_with('<') || t.starts_with("# AGENTS.md") {
+                continue;
+            }
+            if let Some(a) = pending.take() {
+                turns.push(("Assistant", a));
+            }
+            turns.push(("User", t.to_string()));
+        } else if !t.is_empty() {
+            pending = Some(t.to_string());
         }
     }
     if let Some(a) = pending {
@@ -2014,6 +2049,81 @@ mod tests {
         );
         // Newest kept under the cap.
         assert_eq!(conversation_from(&text, 20), "User: second ask");
+    }
+
+    #[test]
+    fn conversation_reads_a_codex_rollout() {
+        let msg = |role: &str, kind: &str, text: &str| json!({"type":"response_item","payload":{"type":"message","role":role,"content":[{"type":kind,"text":text}]}});
+        let lines = [
+            json!({"type":"session_meta","payload":{"id":SID,"cwd":"/w"}}),
+            msg("developer", "input_text", "<permissions instructions>"),
+            msg("user", "input_text", "# AGENTS.md instructions for /w"),
+            msg(
+                "user",
+                "input_text",
+                "<environment_context>x</environment_context>",
+            ),
+            msg("user", "input_text", "first ask"),
+            msg("assistant", "output_text", "looking around"),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"exec_command"}}),
+            msg("assistant", "output_text", "done with it"),
+            json!({"type":"event_msg","payload":{"type":"task_complete"}}),
+            msg("user", "input_text", "second ask"),
+        ];
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            conversation_from(&text, 6000),
+            "User: first ask\n\nAssistant: done with it\n\nUser: second ask"
+        );
+    }
+
+    #[test]
+    fn a_codex_members_transcript_is_its_rollout() {
+        let p = paths();
+        let rollout = "/home/u/.codex/sessions/2026/09/29/rollout-2026-09-29T10-00-00-x.jsonl";
+        let mut r = row(SID2, "codex-row");
+        r.harness = Harness::Codex;
+        r.transcript = Some(rollout.into());
+        let m = member_for(&r, "laptop", NOW, &p).unwrap();
+        assert_eq!(
+            m.transcript.as_deref(),
+            Some("~/.codex/sessions/2026/09/29/rollout-2026-09-29T10-00-00-x.jsonl")
+        );
+        let mut s = sample();
+        s.members.push(m);
+        let text = serialize_stack(&s, &p);
+        assert!(
+            text.contains("- **codex-row** (`bbbbbbbb`, live) — added 2026-09-29 10:00 · brief `~/.local/state/overmind/briefs/bbbbbbbb-1111-2222-3333-444444444444.md` · transcript `~/.codex/sessions/2026/09/29/rollout-2026-09-29T10-00-00-x.jsonl`"),
+            "{text}"
+        );
+        assert_eq!(parse_stack(&text), s, "the rollout path round-trips");
+        // A Claude member stores none: its path is derived as before.
+        assert_eq!(
+            member_for(&row(SID, "c"), "laptop", NOW, &p)
+                .unwrap()
+                .transcript,
+            None
+        );
+        // A member added before the field existed learns it on the next sync.
+        let mut s = sample();
+        let mut old = member_for(&r, "laptop", NOW, &p).unwrap();
+        old.transcript = None;
+        s.members.push(old);
+        let rows = [r];
+        let ok: HashSet<String> = ["laptop".to_string()].into();
+        let none = HashSet::new();
+        let obs = Observed {
+            rows: &rows,
+            hosts_ok: &ok,
+            dormant: &none,
+            local: "laptop",
+        };
+        assert!(sync_stack(&mut s, &obs, LATER, &p));
+        assert!(s.members[1].transcript.is_some());
     }
 
     #[test]

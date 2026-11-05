@@ -408,11 +408,16 @@ fn create_around(c: &Ctx, s: &Session, label: Option<&str>, no_llm: bool) -> Res
                 .ok()
                 .and_then(|d| brief::read(&d, &sid).ok().flatten())
                 .map(|t| brief::parse_frontmatter(&t).1),
-            conversation: crate::core::context::locate_transcript(
-                &c.paths.claude_home,
-                s.cwd.as_deref(),
-                &sid,
-            )
+            // Claude's transcript is found from cwd + id; Codex / pi rows name theirs.
+            conversation: if s.harness == crate::core::harness::Harness::Claude {
+                crate::core::context::locate_transcript(
+                    &c.paths.claude_home,
+                    s.cwd.as_deref(),
+                    &sid,
+                )
+            } else {
+                s.transcript.as_deref().map(std::path::PathBuf::from)
+            }
             .map(|p| stack::conversation_tail(&p, stack::TAIL_CHARS))
             .unwrap_or_default(),
         };
