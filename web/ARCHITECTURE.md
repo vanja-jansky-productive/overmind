@@ -279,7 +279,7 @@ Last `limit` messages, oldest first; `truncated` when older ones exist.
 previous answer's `cursor`; `after=` empty = "I speak deltas, none yet") gets only what changed:
 `full: true` → replace the list with `messages` (the last `limit`); `full: false` → keep the
 messages before the absolute index `from` and append `messages` (`from === total` and `messages:
-[]` = nothing changed, ~250 B). The cursor is opaque (`gen:stable:total:tailHash:limit`): `stable`
+[]` = nothing changed, ~340 B). The cursor is opaque (`gen:stable:total:tailHash:limit`): `stable`
 is the first index a later transcript line could still change (the last bubble while it streams,
 an open question within 20 messages, the queued suffix), `tailHash` a hash of the messages from
 there, `gen` the server cache's index space — a transcript shrunk / replaced / rewritten, a grown

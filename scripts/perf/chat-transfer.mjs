@@ -5,8 +5,8 @@
 //                                       [--via-peer] [--verify] [--json]
 //
 // Builds a temp HOME with one fake Claude session (a fake `overmind` printing its row) and a
-// real-sized synthetic transcript (~300 turns with tool calls and results, ~3 MB; the last 60
-// messages ≈ 30 KB of JSON, the figure #35 measured), starts `web/server.mjs` on 127.0.0.1 (never
+// real-sized synthetic transcript (300 turns with tool calls and results, 3.46 MB; the last 60
+// messages ≈ 35 KB of JSON, near the ~30 KB #35 measured), starts `web/server.mjs` on 127.0.0.1 (never
 // 7878) under `/usr/bin/time -l`, and polls `…/messages?limit=60` every `--interval` s like the
 // chat pane:
 // - `--mode full`  no cursor (today's UI, or any UI against an older server): the whole window;
@@ -19,7 +19,7 @@
 //
 // Prints one JSON line: requests, body bytes (total, per minute, max), approx. header bytes, the
 // answers by kind (legacy / full / delta / same), the session server's CPU (node + children) and,
-// with --verify, mismatches.
+// with --verify, the polls verified, raced (skipped) and mismatched.
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -211,7 +211,7 @@ async function main() {
 async function measure({ servers, session, fx, entry }) {
 
   const url = (after) => `${entry}/api/hosts/workstation/sessions/${SID}/messages?limit=${LIMIT}${after == null ? '' : `&after=${encodeURIComponent(after)}`}`;
-  const stats = { requests: 0, bodyBytes: 0, headerBytes: 0, maxBody: 0, kinds: { legacy: 0, full: 0, delta: 0, same: 0 }, mismatches: 0, verified: 0, bodies: [] };
+  const stats = { requests: 0, bodyBytes: 0, headerBytes: 0, maxBody: 0, kinds: { legacy: 0, full: 0, delta: 0, same: 0 }, mismatches: 0, verified: 0, raced: 0, bodies: [] };
   let cursor = '';
   let held = null;
   const poll = async () => {
@@ -230,19 +230,20 @@ async function measure({ servers, session, fx, entry }) {
     cursor = typeof body.cursor === 'string' ? body.cursor : '';
     held = merge(held, body);
     if (opts.verify) {
-      // Only against the same server state: the writer may append between the two requests.
+      // Only against the same server state: the writer may append between the two requests (a
+      // new cursor) — compared anyway, that differs by what was appended (`raced`, not checked).
       const ref = await (await fetch(url(null))).json();
       if (ref.cursor === body.cursor) {
         const want = ref.messages.filter((m) => !String(m.id ?? '').startsWith('screen:'));
         stats.verified += 1;
         if (JSON.stringify(want) !== JSON.stringify(held.list)) stats.mismatches += 1;
-      }
+      } else stats.raced += 1;
     }
   };
 
   await poll(); // the open: one full answer, then the steady state is what is measured
   const open = { bytes: stats.bodyBytes, kind: Object.keys(stats.kinds).find((k) => stats.kinds[k]) };
-  Object.assign(stats, { requests: 0, bodyBytes: 0, headerBytes: 0, maxBody: 0, kinds: { legacy: 0, full: 0, delta: 0, same: 0 }, mismatches: 0, verified: 0, bodies: [] });
+  Object.assign(stats, { requests: 0, bodyBytes: 0, headerBytes: 0, maxBody: 0, kinds: { legacy: 0, full: 0, delta: 0, same: 0 }, mismatches: 0, verified: 0, raced: 0, bodies: [] });
   const writer = opts.scenario === 'busy' ? busyWriter(fx.file) : null;
   const t0 = Date.now();
   const end = t0 + Number(opts.seconds) * 1000;
@@ -272,7 +273,7 @@ async function measure({ servers, session, fx, entry }) {
     headerBytesPerMin: perMin(stats.headerBytes),
     kinds: stats.kinds,
     serverCpuS: cpu == null ? null : Number(cpu.toFixed(2)),
-    ...(opts.verify ? { verified: stats.verified, mismatches: stats.mismatches } : {}),
+    ...(opts.verify ? { verified: stats.verified, raced: stats.raced, mismatches: stats.mismatches } : {}),
   };
   console.log(opts.json ? JSON.stringify(result) : result);
   fs.rmSync(tmp, { recursive: true, force: true });

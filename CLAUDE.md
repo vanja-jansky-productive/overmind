@@ -19,8 +19,9 @@ web/                   web server (server.mjs, lib/), Node >= 22, no npm deps
 docs/                  setup, architecture, CLI reference, migration, desktop, operator; research
                        and live findings (perf-research.md, codex-findings.md)
 scripts/guide/         feature guide: demo API + headless-Chrome screenshots → one HTML page
-scripts/perf/          idle-CPU harness for the web UI (headless WebKit on the frozen demo API) and the
-                       web server's CPU / `overmind list` runs (server-cpu.mjs) — see its README
+scripts/perf/          idle-CPU harness for the web UI (headless WebKit on the frozen demo API), the
+                       web server's CPU / `overmind list` runs (server-cpu.mjs) and the chat poll's
+                       bytes on the wire (chat-transfer.mjs) — see its README
 ```
 
 Keep logic in `core`; the CLI, the TUI and any future UI (a second web UI, another TUI) are views

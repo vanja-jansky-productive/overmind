@@ -347,7 +347,7 @@ src/
     and — in a browser tab — the 20px left edge (the browser's own back swipe);
   - **Chat** polls `messages` every 3s (60 → 200 → 500 with "Load older", which keeps the same
     message under the thumb), sending the last answer's `cursor` as `after` so an unchanged poll
-    is a ~250 B "same" and a new message a small delta (`lib/chat.ts` `mergeChat`; a server
+    is a ~340 B "same" and a new message a small delta (`lib/chat.ts` `mergeChat`; a server
     without cursors still answers whole lists); bubbles for user / Claude, quiet progress notes (hideable), centred
     command / system lines, time captions per burst, "Claude is working…" / "Needs you" footer;
     markdown via `lib/markdown.ts` (AST, pure) + `components/Markdown.tsx` (React elements only,

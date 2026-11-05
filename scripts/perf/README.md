@@ -95,5 +95,7 @@ node scripts/perf/chat-transfer.mjs --server ../main/web/server.mjs --mode full 
   (node + children) over the run.
 - `--via-peer` starts a second server (`laptop`, port + 1) and polls through its proxy;
   `--verify` also fetches the full window after each poll (not counted, but it adds server CPU)
-  and counts polls where the merged list differs (`mismatches`, should be 0).
+  and compares it with the merged list when both answers carry the same cursor (`verified`;
+  `mismatches` should be 0). A different cursor means the busy writer appended in between: that
+  poll is `raced` and not compared (compared anyway, it differs by the append — not a bug).
 - Ports: `--port` (default 7896) and the next one; never 7878/7999. The temp dir is removed after.

@@ -18,7 +18,7 @@ real session data (9 sessions, one host).
 - **Push (SSE) instead of polling** barely helps client CPU once renders are fixed. Its value is
   latency, server CPU (the server re-runs `overmind list` every 3 s while anyone watches) and
   bandwidth (each chat poll re-downloads the whole conversation: ~750 KB/min per open session —
-  since #37 a poll sends only what changed: ~7 KB/min idle, ~23 KB/min busy, see Chat deltas).
+  since #37 a poll sends only what changed: ~7 KB/min idle, ~22 KB/min busy, see Chat deltas).
 
 ## What runs today
 
@@ -263,35 +263,40 @@ the transcript whole on a change, but from a fixed anchor, so indices hold while
 Measured with `scripts/perf/chat-transfer.mjs`: a temp HOME with one Claude session whose synthetic
 transcript is 300 turns with tool calls and results (3.46 MB; the 60-message window is 35 KB of
 JSON), `web/server.mjs` under `/usr/bin/time -l`, `…/messages?limit=60` polled every 3 s for 60 s
-after the open (20 polls). `before` is `main` at `53fa03a`, `after` the branch. Body bytes only;
+after the open (20 polls). `before` is `main` at `53fa03a`, `after` the branch (re-run after review,
+once `stable` left the body and the generation became a 64-bit process nonce + a counter). Body bytes only;
 response + request headers add ~7.5 KB/min in every row (the HTTP floor #40's push removes).
 
 | Scenario | server / client | body bytes / min | median body | max body | answers (20 polls) | server CPU s / 60 s |
 | --- | --- | --- | --- | --- | --- | --- |
 | idle, nothing writes | before (no cursor) | 700,575 | 35,048 | 35,048 | 20 full | 0.13 |
-| idle | after, old UI (no `after`) | 702,369 | 35,136 | 35,136 | 20 full | 0.16 |
-| idle | after, new UI | **6,836** | 342 | 342 | 20 same | 0.14 |
-| idle, through a peer proxy | after, new UI | 6,816 | 341 | 341 | 20 same | 0.14 |
+| idle | after, old UI (no `after`) | 702,195 | 35,132 | 35,132 | 20 full | 0.13 |
+| idle | after, new UI | **6,758** | 338 | 338 | 20 same | 0.12 |
+| idle, through a peer proxy | after, new UI | 6,756 | 338 | 338 | 20 same | 0.13 |
 | busy¹ | before | 735,760 / 736,174 | 36,925 | 38,971 | 20 full | 0.68 / 0.62 |
-| busy | after, old UI | 737,533 | 37,013 | 39,059 | 20 full | 0.69 |
-| busy | after, new UI | **22,269 / 23,187** | 342 | 3,216 | 8–9 delta, 11–12 same | 0.65 / 0.62 |
-| busy, through a peer proxy | after, new UI (`--verify`) | 22,272 | 342 | 3,216 | 8 delta, 12 same | 0.82² |
+| busy | after, old UI | 737,549 | 37,009 | 39,055 | 20 full | 0.69 |
+| busy | after, new UI | **22,187 / 22,186** | 338 | 3,212 | 8 delta, 12 same | 0.70 / 0.75 |
+| busy, through a peer proxy | after, new UI (`--verify`) | 22,190 | 338 | 3,212 | 8 delta, 12 same | 0.73² |
 
 ¹ busy: a tool call + a 2 KB result every 1 s, a reply streamed in three blocks every 10 s, a user
 prompt every 30 s (the transcript grows ~150 KB in the minute).
 ² `--verify` fetches the full window after each poll as well (it doubles the parse work it causes);
 it found the merged list equal to the full answer on every poll with the same server state
-(17/17 direct, 18/18 through the peer; the others raced the writer and were skipped).
+(19/19 direct, 18/18 through the peer, and 300+ more over nine 90 s runs at 1 and 3 s intervals).
+A poll whose full answer carries another cursor raced the writer (it appended between the two
+requests) and is counted `raced`, not compared. The first `--verify` run, before the harness had
+that guard, reported `"mismatches": 1`: compared anyway, a raced poll differs by the append (in
+every one dumped since, the streaming reply had grown or new messages had landed), not a reader bug.
 
-- **Idle: 700 KB/min → 6.8 KB/min** of chat body per open session (−99 %), each poll one ~340 B
+- **Idle: 700 KB/min → 6.8 KB/min** of chat body per open session (−99 %), each poll one 338 B
   "same" (status, queue, cursor and the empty list). The plan's < 6 KB/min assumed ~300 B; the
   remaining bytes are the fields every answer keeps (host, id, name, limit, timestamps).
-- **Busy: 736 KB/min → 22–23 KB/min (3 %)**; a changed poll costs 0.3–3.2 KB (the growing reply,
+- **Busy: 736 KB/min → 22 KB/min (3 %)**; a changed poll costs 0.3–3.2 KB (the growing reply,
   or the settled reply re-sent once with the new prompt). Tool-call / tool-result lines change no
   message and answer "same".
-- **An older client** (no `after`) gets today's body plus four fields (+88 B); an older server
+- **An older client** (no `after`) gets today's body plus three fields (+84 B); an older server
   gets `after=` and ignores it (the new UI then merges whole lists, as before).
-- **Server CPU unchanged**: busy 0.62–0.69 s / 60 s in every mode, before and after. The anchored
+- **Server CPU unchanged**: busy 0.62–0.75 s / 60 s in every mode, before and after. The anchored
   re-parse costs what today's 6 MB re-slice did, and the prefix / tail hashes (a `JSON.stringify`
   per message per file change) are within noise. So no incremental (line-by-line) parser: the
   optional fifth commit of the plan is not written.
