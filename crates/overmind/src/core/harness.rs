@@ -19,7 +19,8 @@
 //!
 //! A process is matched to a transcript by an id on its command line (`codex resume <id>`,
 //! `pi --session <id>`), else by cwd and start time: the newest transcript in its cwd that
-//! was created after it started, then the newest one written to since — never a `codex exec`
+//! was created after it started (one an older candidate kept writing past is a closed
+//! sibling's, not this process's `/new`), then the newest one written to since — never a `codex exec`
 //! / `codex review` rollout (`source: "exec"`, `originator: "codex_exec"`): one run in the
 //! same cwd would take the TUI's row. A fresh Codex
 //! session has no transcript until its first prompt — it is listed without a session id.
@@ -1321,6 +1322,10 @@ fn subdirs(p: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// How long an old transcript may still be written after a newer one appeared and the
+/// newer one still counts as the same process's `/new`.
+const SUPERSEDE_SLACK_MS: i64 = 5_000;
+
 /// Pair each process with its transcript (see the module docs). Later-started
 /// processes choose first, so two sessions in one cwd each get their own. A headless
 /// `codex exec` run is matched only by an id on the command line, never by cwd.
@@ -1349,7 +1354,7 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
             let Some(cwd) = p.cwd.as_deref() else {
                 continue;
             };
-            let pick = ts
+            let cands: Vec<&TranscriptRef> = ts
                 .iter()
                 .filter(|t| t.cwd == cwd && !t.headless && !taken.contains(t.path.as_path()))
                 .filter(|t| {
@@ -1359,7 +1364,20 @@ pub fn assign(procs: &[&Proc], ts: &[TranscriptRef]) -> HashMap<i64, TranscriptR
                         t.mtime_ms >= p.start_ms
                     }
                 })
-                .max_by_key(|t| t.mtime_ms);
+                .collect();
+            // A newer transcript is this process's `/new` only if its older candidates went
+            // quiet when it appeared; one an older candidate kept writing past is another
+            // process's (one closed since, whose leftover would else take this row).
+            let pick = cands
+                .iter()
+                .filter(|t| {
+                    !cands.iter().any(|o| {
+                        o.created_ms < t.created_ms
+                            && o.mtime_ms > t.created_ms + SUPERSEDE_SLACK_MS
+                    })
+                })
+                .max_by_key(|t| t.mtime_ms)
+                .copied();
             if let Some(t) = pick {
                 taken.insert(&t.path);
                 out.insert(p.pid, t.clone());
@@ -2372,6 +2390,31 @@ mod tests {
         let got = assign(&[&a, &b], &ts);
         assert_eq!(got[&1].session_id, "a");
         assert_eq!(got[&2].session_id, "b");
+    }
+
+    #[test]
+    fn a_closed_sessions_transcript_is_not_the_survivors_new_thread() {
+        // a (started first) and b share a cwd; b is closed. a kept writing after b's
+        // transcript appeared, so b's is another process's thread — not a `/new` of a's.
+        let a = proc_(1, "/w", 1_000_000);
+        let ts = vec![
+            tref("a", "/w", 1_000_500, 2_500_000),
+            tref("b", "/w", 2_000_400, 2_600_000),
+        ];
+        assert_eq!(assign(&[&a], &ts)[&1].session_id, "a");
+        // A `/new` in a: its old transcript stopped when the new one was created.
+        let ts = vec![
+            tref("a", "/w", 1_000_500, 2_000_100),
+            tref("a-new", "/w", 2_000_400, 2_600_000),
+        ];
+        assert_eq!(assign(&[&a], &ts)[&1].session_id, "a-new");
+        // Several `/new`s: the newest wins, the older ones were each superseded in turn.
+        let ts = vec![
+            tref("a", "/w", 1_000_500, 1_500_000),
+            tref("a2", "/w", 1_500_100, 2_000_000),
+            tref("a3", "/w", 2_000_100, 2_100_000),
+        ];
+        assert_eq!(assign(&[&a], &ts)[&1].session_id, "a3");
     }
 
     #[test]

@@ -240,7 +240,12 @@ name `config.toml`'s `model` (pi's does, `Default (x)`).
 
 Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) wins; otherwise,
 later-started processes first, the newest transcript in the process's cwd created after it
-started (3 s slack), then the newest written to since it started. A `codex exec` / `codex review`
+started (3 s slack), then the newest written to since it started. A newer candidate counts as the
+process's `/new` only if the older ones went quiet when it appeared (5 s slack): one an older
+candidate kept writing past belongs to a sibling in the same cwd, and when that sibling closes, its
+leftover transcript must not take the survivor's row (the survivor's id would change and the
+closed one would read live). A survivor that stayed silent since the sibling started can't be told
+apart from a `/new` and still takes it. A `codex exec` / `codex review`
 rollout (`session_meta` `source: "exec"` or `originator: "codex_exec"`, the markers the web
 watcher drops) is only ever matched by id: by cwd, one run beside an open TUI would take its row.
 A Codex session before its first prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`.
