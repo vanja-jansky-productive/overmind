@@ -103,18 +103,23 @@ Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are c
 `harnesses.<id>.command` (default the bare name). A bare name is looked for on `$PATH`, then in
 `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.cargo/bin`, `~/bin`, `~/.npm-global/bin`,
 `~/.volta/bin`, fnm's default alias and each nvm Node's `bin` (newest first) — so an
-`npm i -g @openai/codex` is found from an ssh shell whose PATH lacks it. `installed` says whether the
+`npm i -g @openai/codex` is found from an ssh shell whose PATH lacks it. nvm's order is newest
+version first, not nvm's default: a Codex installed only under a non-default Node is found here but
+is not on a pane's `PATH` (its shell loads the default Node), so install it under the default Node or
+set `harnesses.codex.command` to its full path. `installed` says whether the
 first word resolves; `problem` says why the harness can't run here, with the fix, or is `null`: not
 found (where overmind looked, how to install, which setting), a configured path that is not an
 executable, or — Codex — `never run here (no <its home>) — run \`codex login\`` (`$CODEX_HOME`,
 default `~/.codex`) / `not logged in — run \`codex login\`` (no `auth.json` there; a config that keeps
 credentials in the OS keyring, `cli_auth_credentials_store = "keyring"` or `"auto"`, counts as logged
-in). A Codex that is not logged in is still `installed` and offered.
+in — unverified, since overmind can't read the keyring, and `"auto"` without a keyring falls back to
+`auth.json`). A Codex that is not logged in is still `installed` and offered.
 
 Codex's sandbox and approval mode are part of its launcher, not a per-spawn pick: set
-`harnesses.codex.command` to e.g. `"codex -a on-request -s workspace-write"` (Codex's own default
-when bare; `--approve-for-me` routes approvals through Codex's automatic review instead) and every spawn, branch, bot and
-stack sibling starts that way; a restored session runs `<launcher> resume <id>`, so it keeps the mode.
+`harnesses.codex.command` to e.g. `"codex -a on-request -s workspace-write"` (or
+`--approve-for-me`, which routes approvals through Codex's automatic review) and every spawn,
+branch, bot and stack sibling starts that way; a restored session runs `<launcher> resume <id>`, so
+it keeps the mode.
 
 `overmind harness list --json`:
 
@@ -529,7 +534,7 @@ JSON shapes:
 | --- | --- |
 | `overmind exec [-C <dir>] [-t] -- <cmd…>` | run a command on the host, outside tmux (cwd defaults to `$HOME`; `-t` allocates a tty) |
 | `overmind ssh [cmd…]` | plain shell on the host, no tmux |
-| `overmind doctor` | reachability, dispatch mode and why, tools and versions on both ends, config sanity. Per harness: `claude`, `codex` and `pi` (when installed) with their version and live sessions. Codex adds `never run here` (info) or `not logged in` (✘) with `codex login`, and `codex: missing` is info with the install command. `claude: missing` is ✘ only when no other harness is installed — a Codex- or pi-only host is fine. Neither line counts as a failure (exit 1 is tmux, a bot, the config or a host) |
+| `overmind doctor` | reachability, dispatch mode and why, tools and versions on both ends, config sanity. Per harness: `claude` and `codex` always, `pi` only when installed — each with its version and live sessions. Fails (exit 1) when no harness can run on a host: no Claude, no pi, and no Codex that has run there and is logged in. Then `claude: missing` is ✘, and so is a Codex that is `never run here` / `not logged in`; on a host where another harness runs, those are info (·) and `codex: missing` is info with the install command. A keyring login (`cli_auth_credentials_store`) shows `(credentials in keyring, unverified)`. Other failures: tmux, a bot, the config, a host |
 
 ## Setup
 

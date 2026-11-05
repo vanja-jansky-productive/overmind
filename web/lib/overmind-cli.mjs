@@ -343,7 +343,8 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
 
   /**
    * The harnesses this machine can spawn (claude, codex, pi) and their model pickers:
-   * `overmind --local harness list --json` → `[{ id, label, command, installed, models }]`.
+   * `overmind --local harness list --json` → `[{ id, label, command, installed, problem, models,
+   * efforts, defaultModel, defaultEffort }]` (`HarnessInfo` in web/ui/src/api/types.ts).
    */
   async function harnesses({ timeoutMs: t = 30 * 1000 } = {}) {
     let stdout;

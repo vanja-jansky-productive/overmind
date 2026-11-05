@@ -235,7 +235,8 @@ Claude Code at all — and still lists, spawns and drives Codex sessions. Instal
 host, the same way as Claude Code (log in inside tmux, open the printed URL on your laptop):
 
 ```sh
-brew install codex                    # or: npm i -g @openai/codex (nvm, Volta, fnm and ~/.npm-global bins are found too)
+brew install codex                    # or: npm i -g @openai/codex (nvm, Volta, fnm and ~/.npm-global bins are found too;
+                                      #   with nvm, install it under the default Node so panes find it)
 codex login                           # ChatGPT sign-in (--device-auth over ssh); `codex login status` checks it
 overmind harness list                 # codex: installed — or what is missing and the fix
 overmind doctor                       # codex <version> — N live session(s)
@@ -299,7 +300,8 @@ changes), builds the CLI into `~/.local/bin/overmind`, runs `overmind web build`
 | symptom | fix |
 | --- | --- |
 | `codex: missing` / Codex not offered in New session | `overmind harness list` says where it looked; install it, or set `harnesses.codex.command` to its path |
-| `codex …: not logged in` in `overmind doctor` | `codex login` on that host (inside tmux over ssh) |
+| `codex …: not logged in` in `overmind doctor` (✘ and exit 1 on a Codex-only host) | `codex login` on that host (inside tmux over ssh) |
+| `harness list` says Codex is installed, but a spawned pane says `codex: command not found` | it was found in a non-default nvm Node; install it under nvm's default Node, or set `harnesses.codex.command` to its full path |
 | `tmux: command not found` over ssh | PATH in `~/.zshenv`, not `~/.zprofile` (step 1.6) |
 | `overmind: command not found` on the remote | `overmind install --host <name>`; ensure `~/.local/bin` is on the remote PATH |
 | remote commands hang ~5 s then fail | host asleep/offline or Tailscale down; `overmind doctor`, `tailscale status` |
