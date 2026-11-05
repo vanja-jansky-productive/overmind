@@ -893,7 +893,7 @@ overmind mcp --http [--bind 127.0.0.1] [--port 7778] --token-file ~/.config/over
 | `OVERMIND_TMUX` | tmux binary (over config `tmux`) |
 | `OVERMIND_CMD` | command that launches Claude in spawned sessions (over config `claude`; default `claude`). Codex / pi: config `harnesses.<id>.command` |
 | `CODEX_HOME` / `PI_CODING_AGENT_DIR` | where Codex / pi keep their state (default `~/.codex`, `~/.pi/agent`) — discovery reads transcripts from there |
-| `OVERMIND_CODEX_HOOKS_DIR` | where the [Codex approval hook](#harnesses) writes its sidecars and discovery reads them (default `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks`) |
+| `OVERMIND_CODEX_HOOKS_DIR` | where the [Codex approval hook](#harnesses) writes its sidecars and discovery reads them (default `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks`). An absolute path or `~/…`; a relative value is ignored (the default is used): the hook, `list` and the web server each run in another cwd |
 | `OVERMIND_BIN` | `overmind` binary the web server calls |
 | `OVERMIND_NODE` | `node` binary for `overmind web serve` (over config `web.node`; set by the launchd agent) |
 | `OVERMIND_WEB_PORT`, `OVERMIND_WEB_BIND`, `OVERMIND_WEB_UI` | web server listen address / UI directory (over config `web.*`) |

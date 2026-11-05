@@ -95,6 +95,11 @@ test('discoveryRoots follows the CLI: HOME, CODEX_HOME, PI_CODING_AGENT_DIR, XDG
   assert.equal(e.done.dir, '/d');
   assert.equal(e.done.file, 'marks.json');
   assert.equal(e['codex-hooks'].dir, '/h');
+  // OVERMIND_CODEX_HOOKS_DIR as the CLI reads it (hooks_dir_override): `~/…` expanded, relative ignored.
+  const hooks = (v) => discoveryRoots({ env: { OVERMIND_CODEX_HOOKS_DIR: v }, home: HOME }).find((x) => x.id === 'codex-hooks').dir;
+  assert.equal(hooks('~/hooks'), path.join(HOME, 'hooks'));
+  assert.equal(hooks('hooks'), path.join(HOME, '.local/state/overmind/codex-hooks'));
+  assert.equal(hooks('./x'), path.join(HOME, '.local/state/overmind/codex-hooks'));
 });
 
 test('arms the roots that exist (recursive only for transcripts), skips missing ones, rearm() picks them up later', () => {

@@ -254,7 +254,7 @@ menu. Two things only *trigger* a look at the screen:
 - a **sidecar** from the opt-in hook (`overmind codex hooks install`, see [cli.md](cli.md#harnesses)):
   `PermissionRequest` runs `overmind _codex-hook` (async: it never blocks or decides), which writes
   `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks/<session_id>.json` (`$OVERMIND_CODEX_HOOKS_DIR`
-  overrides; 0600, a per-process tmp file + rename) — `{ v: 1, thread_id, turn_id, transcript_path, state:
+  overrides: absolute or `~/…`, a relative value ignored; 0600, a per-process tmp file + rename) — `{ v: 1, thread_id, turn_id, transcript_path, state:
   "waiting"|"clear", event, tool, command, reason, cwd, at }`; `Stop` and `UserPromptSubmit` write
   `clear`. A `waiting` sidecar counts when `at` is no older than the process (2 s slack) and no
   `task_started` / `task_complete` / `turn_aborted` follows it. A sub-agent's approval carries the

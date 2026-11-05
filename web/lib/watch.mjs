@@ -39,7 +39,7 @@ const REGISTRY_RE = /^[^.]+\.json$/; // `<pid>.json`, not `<pid>.<hash>.key` or 
  * The directories to watch, as the CLI resolves them: `~/.claude` (HOME, not CLAUDE_CONFIG_DIR —
  * `claude_home()`), `$CODEX_HOME`, `$PI_CODING_AGENT_DIR`, the state dir (`done.json`,
  * `$OVERMIND_DONE_STATE`), `$OVERMIND_STACKS_DIR`, `$OVERMIND_CODEX_HOOKS_DIR` (`sidecar_dir()` in
- * core/codex_hooks.rs: used as given, no `~`). `required`: without it there is no signal
+ * core/codex_hooks.rs: absolute or `~/…`, a relative value ignored). `required`: without it there is no signal
  * for new rows, so the watcher reports `degraded` (and the caller falls back to its TTL).
  */
 export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) {
@@ -49,7 +49,9 @@ export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) 
   const state = overmindStateDir(env, home);
   const done = env.OVERMIND_DONE_STATE ? path.resolve(expandHome(env.OVERMIND_DONE_STATE, home)) : path.join(state, 'done.json');
   const stacks = env.OVERMIND_STACKS_DIR ? path.resolve(expandHome(env.OVERMIND_STACKS_DIR, home)) : path.join(state, 'stacks');
-  const codexHooks = env.OVERMIND_CODEX_HOOKS_DIR ? path.resolve(env.OVERMIND_CODEX_HOOKS_DIR) : path.join(state, 'codex-hooks');
+  // Absolute or `~/…`; a relative value is ignored, as `hooks_dir_override` does (core/codex_hooks.rs).
+  const hooksOverride = env.OVERMIND_CODEX_HOOKS_DIR ? expandHome(env.OVERMIND_CODEX_HOOKS_DIR, home) : null;
+  const codexHooks = hooksOverride && path.isAbsolute(hooksOverride) ? hooksOverride : path.join(state, 'codex-hooks');
   return [
     { id: 'sessions', dir: path.join(claude, 'sessions'), kind: 'registry', required: true },
     { id: 'claude', dir: claude, kind: 'file', file: 'overmind-names.json', compare: true },

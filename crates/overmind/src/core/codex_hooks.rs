@@ -7,7 +7,7 @@
 //! an unknown subcommand, i.e. an overmind without `_codex-hook` at that path) or prints a
 //! `decision` denies for the user — `docs/codex-findings.md` §4.
 //!
-//! Sidecar (`$OVERMIND_CODEX_HOOKS_DIR`, else
+//! Sidecar (`$OVERMIND_CODEX_HOOKS_DIR`, absolute or `~/…`, else
 //! `${XDG_STATE_HOME:-~/.local/state}/overmind/codex-hooks/<session_id>.json`, v1):
 //! `{ v, thread_id, turn_id, transcript_path, state: "waiting"|"clear", event, tool,
 //! command, reason, cwd, at }`. Written 0600 to a per-process `<id>.json.<pid>.<nonce>.tmp`,
@@ -42,15 +42,23 @@ pub const SIDECAR_VERSION: u64 = 1;
 
 // ------------------------------------------------------------------ paths
 
-/// Where sidecars live: `$OVERMIND_CODEX_HOOKS_DIR` (as given, like the web watcher reads
-/// it), else `<state dir>/codex-hooks`. The hook resolves it in *Codex's* environment — in
-/// daemon mode the app-server daemon's — so a daemon started without the shell's
-/// `XDG_STATE_HOME` / `OVERMIND_CODEX_HOOKS_DIR` writes where `list` does not read.
+/// Where sidecars live: `$OVERMIND_CODEX_HOOKS_DIR` ([`hooks_dir_override`]), else
+/// `<state dir>/codex-hooks`. The hook resolves it in *Codex's* environment — in daemon mode
+/// the app-server daemon's — so a daemon started without the shell's `XDG_STATE_HOME` /
+/// `OVERMIND_CODEX_HOOKS_DIR` writes where `list` does not read.
 pub fn sidecar_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("OVERMIND_CODEX_HOOKS_DIR").filter(|d| !d.is_empty()) {
-        return PathBuf::from(d);
-    }
-    crate::core::tools::state_dir().join("codex-hooks")
+    std::env::var_os("OVERMIND_CODEX_HOOKS_DIR")
+        .and_then(|d| hooks_dir_override(&d.to_string_lossy()))
+        .unwrap_or_else(|| crate::core::tools::state_dir().join("codex-hooks"))
+}
+
+/// `$OVERMIND_CODEX_HOOKS_DIR` as the hook, `list` and the web watcher all read it: absolute,
+/// or `~/…`; a relative value is ignored (the default dir is used) — the hook runs in Codex's
+/// cwd, `list` in the caller's and the web server in its own, so it would name three dirs.
+/// web/lib/watch.mjs `discoveryRoots` mirrors this.
+pub fn hooks_dir_override(v: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(crate::core::tools::expand_tilde(v));
+    p.is_absolute().then_some(p)
 }
 
 /// `install`'s record, beside the sidecars (a dotfile: the watcher and prune skip it).
@@ -1179,6 +1187,19 @@ mod tests {
         // Garbage, oversize: no panic, no output (handle_hook returns ()).
         handle_hook(&b"{not json"[..]);
         handle_hook(std::io::repeat(b' ').take(MAX_PAYLOAD + 10));
+    }
+
+    #[test]
+    fn the_hooks_dir_override_is_absolute_or_home_relative_never_cwd_relative() {
+        assert_eq!(
+            hooks_dir_override("/srv/hooks"),
+            Some(PathBuf::from("/srv/hooks"))
+        );
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(hooks_dir_override("~/hooks"), Some(home.join("hooks")));
+        assert_eq!(hooks_dir_override("hooks"), None);
+        assert_eq!(hooks_dir_override("./hooks"), None);
+        assert_eq!(hooks_dir_override(""), None);
     }
 
     #[test]
