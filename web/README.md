@@ -37,8 +37,9 @@ watcher looks for them (default `${XDG_STATE_HOME:-~/.local/state}/overmind/code
 
 `web.discovery` (default `{ "watch": true, "safetySeconds": 30, "fastGapMs": 1000, "slowGapMs": 5000 }`)
 decides when the server runs `overmind list` for its own sessions: when a watched file changes
-(the Claude registry, names cache, `done.json`, stacks, Codex hook sidecars: at most every `fastGapMs`; transcripts of
-live sessions, Codex/pi rollouts: at most every `slowGapMs`), and at least every `safetySeconds`
+(the Claude registry, names cache, `done.json`, stacks, Codex hook sidecars, a Codex/pi turn starting or
+ending, a Codex/pi session's first rollout: at most every `fastGapMs`; other writes to transcripts of
+live sessions and Codex/pi rollouts: at most every `slowGapMs`), and at least every `safetySeconds`
 while someone is asking (tmux/iTerm tab names and branches have no file to watch). Kill-switch:
 `OVERMIND_WEB_WATCH=0` (or `"watch": false`) lists on every 3 s refresh with a 2 s cache, as before
 (except that a mutation asked during an older in-flight list now gets a newer one, not that list).

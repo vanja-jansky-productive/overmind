@@ -214,7 +214,23 @@ reads a scrubbed config.
   round 1 measured 259–267 ms quiet and before 69–2238 ms (the 3 s tick). The UI shows it on
   its next poll (≤ 5 s) either way.
 
-Reproduce: `node scripts/perf/server-cpu.mjs --scenario fleet|burst|idle|latency --watch 0|1 [--seconds 300] [--list-delay 0.5]`
+- Codex / pi status (review of #38): their busy / idle is read from the rollout only, and every
+  rollout write was slow (≤ 1 list per 5 s), so a turn ending showed after up to ~5 s; a session
+  started in a terminal (no row owned its rollout yet) waited for the 30 s bound. Now a rollout
+  whose 16 KB tail ends in another turn state than the listed row is fast, and so is an unknown
+  rollout the first time it is seen. `--scenario codex` (a rollout streaming 10 lines/s, a turn
+  boundary every 10.7 s, a new session every third time; write → list start, 130 s each):
+
+  | | turn boundary | new session | lists / 130 s |
+  | --- | --- | --- | --- |
+  | before | 102–4405 ms, 2 of 8 not within 8 s | 802–3706 ms | 21 |
+  | after | 84–868 ms | 262–569 ms | 36 |
+
+  The extra lists are one per boundary or new session (fast instead of waiting out the slow
+  gap); a streaming turn still lists at most every 5 s. Each Codex / pi rollout event now costs
+  one 16 KB tail read.
+
+Reproduce: `node scripts/perf/server-cpu.mjs --scenario fleet|burst|idle|latency|codex --watch 0|1 [--seconds 300] [--list-delay 0.5]`
 (scripts/perf/README.md).
 
 ## Caveats

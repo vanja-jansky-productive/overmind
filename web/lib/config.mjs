@@ -671,7 +671,7 @@ export function normalizeConfig(
   const stacks = { sync: stacksSync, syncMinutes, generate: st.enabled !== false, model: stacksModel };
 
   // web.discovery: when local discovery (`overmind list`) runs — on a watched file change, at most
-  // fastGapMs (registry, names, done, stacks) / slowGapMs (transcripts) after the last run, and at
+  // fastGapMs (registry, names, done, stacks, Codex/pi turn boundaries) / slowGapMs (transcripts) after the last run, and at
   // least every safetySeconds while someone is asking. OVERMIND_WEB_WATCH=0: no watcher, the 2 s TTL.
   const wd = web.discovery == null ? {} : web.discovery;
   if (!isObject(wd)) throw new Error('config.web.discovery must be an object { watch, safetySeconds, fastGapMs, slowGapMs }');

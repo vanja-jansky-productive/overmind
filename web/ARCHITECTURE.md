@@ -429,17 +429,23 @@ and classifies each event: **fast** — `~/.claude/sessions/<pid>.json` (a row a
 busy/idle/waiting; headless `claude -p` registrations and `.key` files ignored),
 `~/.claude/overmind-names.json` (only when its content changed: `list` rewrites it), `done.json`,
 the stacks dir, the Codex hook sidecars (`<state>/codex-hooks/<thread>.json`, the hook's `*.tmp` before
-its rename ignored; armed by `rearm()` once `codex hooks install` made the dir); **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
-and `<sid>/…`), Codex rollouts and `session_index.jsonl`, pi sessions (any new one while a session of
-that harness has no transcript yet). `snapshot.json*` and its lock (written by `list`) never signal.
+its rename ignored), a Codex / pi rollout whose tail ends in another turn state than its row shows
+(`task_started` / `task_complete` / `turn_aborted`, pi's last message: busy ↔ idle), and a rollout no
+listed row owns, the first time it is seen (a session started in a terminal: its row appears after
+its first prompt); **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
+and `<sid>/…`), the other Codex / pi rollout writes of listed rows, `session_index.jsonl`, and an
+unknown rollout already seen, once per list (a sub-agent's). `snapshot.json*` and its lock (written
+by `list`) never signal. A root that does not exist yet (the first `~/.codex/sessions`, `codex-hooks`
+right after `codex hooks install`) is armed as it appears: its parent is watched meanwhile, when
+that exists (else the next run's `rearm()`).
 Each class is coalesced 250 ms, then marks the list dirty with `dueAt` = last run start +
 `web.discovery.fastGapMs` (1 s) / `slowGapMs` (5 s) and pokes the snapshot to rebuild then. The gap
 always counts from the latest run's start: a `dueAt` set before that run is spent, so a change
 during every list still means at most one list per gap (not back to back).
 `overmind.localHost()` — the tick, a peer's `?local=1`, briefs, peek/send — runs the CLI only when
 dirty and due, or when the last list is `safetySeconds` (30) old: what has no file signal (tmux/iTerm
-tab names, branches, a SIGKILLed process, a Codex session before its first prompt) shows within
-30 s. A list with a `waiting` Codex row is reused for the TTL (`ttlMs`, 2 s) only: that state is
+tab names, branches, a SIGKILLed process, any Codex or pi exit — only Claude's clean exit deletes a
+watched file — and a Codex session before its first prompt) shows within 30 s. A list with a `waiting` Codex row is reused for the TTL (`ttlMs`, 2 s) only: that state is
 read off the screen, and answering the menu in the TUI writes nothing until the command ends — so a
 TUI answer reads `busy` on the web ~3.5 s later (the 3 s refresh plus one list), not within the TTL. Otherwise it returns the last list with `fetchedAt` = now ("checked just now"). A run that
 started before a change cannot clear `dirty` (a generation counter). `force` (mutations,

@@ -1,6 +1,6 @@
 // Web server CPU and `overmind list` runs while a UI watches — the #38 harness.
 //
-//   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency|idle [--watch 0|1] [--seconds 300]
+//   node scripts/perf/server-cpu.mjs --scenario fleet|burst|latency|codex|idle [--watch 0|1] [--seconds 300]
 //                                    [--interval 5] [--port 7897] [--list-delay 0.5] [--json]
 //
 // Starts `web/server.mjs` under `/usr/bin/time -l` (its user+sys include reaped children: every
@@ -30,6 +30,10 @@
 //            the age bound only; CPU ≈ node + the fake CLI, scale lists by the fleet's per-list cost).
 // - latency  the same temp HOME, quiet: a registry rewrite every 10 s; reports write → list start
 //            (polls /api/health every 100 ms). With --burst-latency the appenders run too.
+// - codex    the same temp HOME plus a streaming Codex rollout (a line every 100 ms): every 10.7 s
+//            its turn ends or starts (`task_complete` / `task_started`), and every third time a
+//            new rollout appears for a session no list has shown (started in a terminal). The
+//            fake list reports what the files say. Reports write → list start for each kind.
 //
 // Run modes interleaved (0, 1, 0, 1) — the fleet changes under you.
 import { execFileSync, spawn } from 'node:child_process';
@@ -128,6 +132,7 @@ function fixtureHome(n = 3) {
   const proj = path.join(home, '.claude', 'projects', '-x');
   fs.mkdirSync(sessions, { recursive: true });
   fs.mkdirSync(proj, { recursive: true });
+  fs.mkdirSync(path.join(home, '.codex', 'sessions'), { recursive: true }); // as on a host that ran Codex before
   const rows = [];
   for (let i = 1; i <= n; i++) {
     const sid = `b${i}-0000-4000-8000-000000000000`;
@@ -138,6 +143,17 @@ function fixtureHome(n = 3) {
   const rowsFile = path.join(tmp, 'rows.json');
   fs.writeFileSync(rowsFile, JSON.stringify(rows));
   return { home, sessions, proj, rows, rowsFile };
+}
+
+const codexEvent = (type) => `${JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type } })}\n`;
+
+/** A Codex rollout under the fixture HOME, mid-turn, and its row. */
+function codexRollout(fixture, id) {
+  const dir = path.join(fixture.home, '.codex', 'sessions', '2026', '11', '05');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `rollout-2026-11-05T10-00-00-${id}.jsonl`);
+  fs.writeFileSync(file, codexEvent('task_started'));
+  return { file, row: { pid: 80000 + fixture.rows.length, session_id: id, harness: 'codex', status: 'busy', cwd: '/x', backend: 'tmux', handle: `%c${fixture.rows.length}` } };
 }
 
 const lists = () => (fs.existsSync(listLog) ? fs.readFileSync(listLog, 'utf8').split('\n').filter(Boolean).length : 0);
@@ -214,7 +230,43 @@ async function main() {
 
   // Burst / latency drivers.
   const latencies = [];
-  if (fixture && opts.scenario !== 'idle') {
+  const newLatencies = [];
+  /** write → the first list that started at or after it (null: none within 8 s). */
+  const listAfter = async (wroteAt) => {
+    for (let i = 0; i < 80; i++) {
+      await sleep(100);
+      const h = await getJson('/api/health').catch(() => null);
+      const at = h?.discovery?.lastListAt;
+      if (at != null && at >= wroteAt) return at - wroteAt;
+    }
+    return null;
+  };
+  if (fixture && opts.scenario === 'codex') {
+    const writeRows = () => fs.writeFileSync(fixture.rowsFile, JSON.stringify(fixture.rows));
+    const main = codexRollout(fixture, 'c0000000-0000-4000-8000-000000000001');
+    fixture.rows.push(main.row);
+    writeRows();
+    timers.push(setInterval(() => fs.appendFileSync(main.file, `{"type":"response_item","payload":{"type":"message","t":${Date.now()}}}\n`), 100));
+    let k = 0;
+    timers.push(setInterval(async () => {
+      k += 1;
+      if (k % 3 === 0) {
+        const id = `c0000000-0000-4000-8000-${String(k).padStart(12, '0')}`;
+        const wroteAt = Date.now();
+        const added = codexRollout(fixture, id); // its first prompt
+        fixture.rows.push(added.row); // what the next list will find
+        writeRows();
+        newLatencies.push(await listAfter(wroteAt));
+        return;
+      }
+      main.row.status = main.row.status === 'busy' ? 'idle' : 'busy';
+      writeRows();
+      const wroteAt = Date.now();
+      fs.appendFileSync(main.file, codexEvent(main.row.status === 'idle' ? 'task_complete' : 'task_started'));
+      latencies.push(await listAfter(wroteAt));
+    }, 10_700)); // not a multiple of the 5 s gap: the writes land at every phase of it
+  }
+  if (fixture && !['idle', 'codex'].includes(opts.scenario)) {
     if (opts.scenario === 'burst' || opts['burst-latency']) {
       timers.push(setInterval(() => {
         for (const r of fixture.rows) fs.appendFileSync(path.join(fixture.proj, `${r.session_id}.jsonl`), `{"type":"assistant","t":${Date.now()}}\n`);
@@ -227,16 +279,7 @@ async function main() {
       const wroteAt = Date.now();
       fs.writeFileSync(path.join(fixture.sessions, `${r.pid}.json`), JSON.stringify({ pid: r.pid, sessionId: r.session_id, kind: 'interactive', entrypoint: 'cli', status: k % 2 ? 'idle' : 'busy', updatedAt: wroteAt }));
       if (opts.scenario !== 'latency') return;
-      for (let i = 0; i < 80; i++) {
-        await sleep(100);
-        const h = await getJson('/api/health').catch(() => null);
-        const at = h?.discovery?.lastListAt;
-        if (at != null && at >= wroteAt) {
-          latencies.push(at - wroteAt);
-          return;
-        }
-      }
-      latencies.push(null);
+      latencies.push(await listAfter(wroteAt));
     }, rewriteEvery));
   }
 
@@ -267,6 +310,7 @@ async function main() {
     ...(snapshots ? { snapshot: { tempWritten: mtime(snapshots.temp) !== snapshots.tempAt, realChanged: mtime(snapshots.real) !== snapshots.realAt } } : {}),
     refused: fs.existsSync(refusedLog) ? fs.readFileSync(refusedLog, 'utf8').split('\n').filter(Boolean) : [],
     ...(latencies.length ? { latencyMs: latencies, latencyMaxMs: Math.max(...latencies.filter((x) => x != null)), latencyMissed: latencies.filter((x) => x == null).length } : {}),
+    ...(newLatencies.length ? { newSessionLatencyMs: newLatencies } : {}),
   };
   if (!result.lists && !result.listRuns) process.stderr.write(serverLog);
   console.log(opts.json ? JSON.stringify(result) : result);

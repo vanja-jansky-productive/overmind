@@ -36,6 +36,7 @@ node scripts/perf/server-cpu.mjs --scenario fleet --watch 1 --seconds 300 --json
 node scripts/perf/server-cpu.mjs --scenario burst --watch 1 --seconds 300 --list-delay 0.5 --json
 node scripts/perf/server-cpu.mjs --scenario idle --watch 1 --seconds 300 --list-delay 0.2 --json
 node scripts/perf/server-cpu.mjs --scenario latency --watch 1 --seconds 120 --json [--burst-latency]
+node scripts/perf/server-cpu.mjs --scenario codex --watch 1 --seconds 130 --json
 ```
 
 - `fleet`: this machine's real sessions, read-only whatever the config says. Bound to 127.0.0.1 on
@@ -61,4 +62,8 @@ node scripts/perf/server-cpu.mjs --scenario latency --watch 1 --seconds 120 --js
 - `idle`: the same temp `HOME`, nothing writes: what a host with no busy session costs.
 - `latency`: the same temp `HOME`, a registry rewrite every 10 s; reports write → list start
   (`/api/health` polled every 100 ms). `--burst-latency` keeps the appenders running.
+- `codex`: the same temp `HOME` plus a Codex rollout streaming a line every 100 ms. Every 10.7 s
+  its turn ends or starts (`task_complete` / `task_started`; `latencyMs`), and every third time a
+  rollout appears for a session no list has shown yet, as when `codex` starts in a terminal
+  (`newSessionLatencyMs`). Both are write → list start. The fake list reports what the files say.
 - Run modes interleaved (0, 1, 0, 1): the fleet's busy rows change under you.
