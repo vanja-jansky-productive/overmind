@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronLeftIcon,
   CircleAlertIcon,
@@ -50,7 +50,7 @@ import { useSettings } from '@/hooks/useSettings'
 import { openStackLink, openStackSheet, type SiblingTarget } from '@/hooks/useStackUi'
 import { useSwipeBack } from '@/hooks/useSwipeBack'
 import { useSessionTitle } from '@/hooks/useTitles'
-import { CHAT_LIMITS, CHAT_POLL_MS, PEEK_POLL_MS, TERM_LINES, nextChat, nextChatLimit, parseMode, parseSize, type ChatState, type DetailMode } from '@/lib/chat'
+import { CHAT_LIMITS, CHAT_POLL_MS, PEEK_POLL_MS, TERM_LINES, cursorFor, mergeChat, nextChatLimit, nextCursor, parseMode, parseSize, type ChatState, type CursorRef, type DetailMode } from '@/lib/chat'
 import { continueDraft } from '@/lib/brief'
 import { canBranchSession } from '@/lib/branch'
 import { modelLabel, shortCwd } from '@/lib/format'
@@ -213,12 +213,17 @@ export function SessionScreen({
   // The server's prompt queue for this session (lib/queue.mjs): carried by every chat poll.
   const [queue, setQueue] = useState<PromptQueue | null>(null)
 
+  // The last answer's cursor (#37): the next poll asks only for what changed since. Keyed by what
+  // invalidates it — another host, session or limit sends '' and gets a full answer.
+  const cursorRef = useRef<CursorRef>(null)
   const pollChat = useCallback(
     async (signal: AbortSignal) => {
+      const key = `${host}/${id}/${chatLimit}`
       try {
-        const data = await api.messages(host, id, chatLimit, { signal })
+        const data = await api.messages(host, id, chatLimit, { signal, after: cursorFor(cursorRef.current, key) })
         chatStamp.set(data.capturedAt || Date.now())
-        setChat((prev) => nextChat(prev, data))
+        setChat((prev) => mergeChat(prev, data, chatLimit))
+        cursorRef.current = nextCursor(key, data)
         if (data.backend) setMsgBackend(String(data.backend))
         const q = data.queue ?? null
         setQueue((prev) => (JSON.stringify(prev) === JSON.stringify(q) ? prev : q))
@@ -226,6 +231,7 @@ export function SessionScreen({
         setGone(false)
       } catch (err) {
         if (isAbortError(err)) throw err
+        cursorRef.current = null // whatever failed (no transcript, gone, a peer down), start over
         // 404 is usually "no transcript on disk yet"; "unknown session" means it is gone.
         setChatErr(err as Error)
         if (isSessionGone(err)) setGone(true)
@@ -362,9 +368,11 @@ export function SessionScreen({
     },
   })
   // The real message arrived → drop its optimistic bubble.
+  // What the chat shows: the transcript window, then the prompt the terminal shows (if any).
+  const chatMessages = useMemo(() => (chat ? (chat.screen ? [...chat.messages, chat.screen] : chat.messages) : null), [chat])
   useEffect(() => {
-    if (chat) box.reconcile(chat.messages)
-  }, [chat, box])
+    if (chatMessages) box.reconcile(chatMessages)
+  }, [chatMessages, box])
   const hasPending = outbox.some((it) => it.state === 'pending')
 
   const send = (text: string): boolean => {
@@ -681,7 +689,7 @@ export function SessionScreen({
       <main className="relative flex min-h-0 flex-1 flex-col">
         {mode === 'chat' ? (
           <ChatView
-            messages={chat?.messages ?? null}
+            messages={chatMessages}
             noTranscript={noTranscript}
             gone={gone}
             hideNotes={hideNotes}

@@ -169,8 +169,9 @@ export const api = {
   /** Raw terminal input (keys, escape sequences, mouse reports) written to the pane as is. */
   input: (host: string, id: string, data: string, o: Opts = {}) =>
     request<{ ok: true }>(sessionPath(host, id, 'input'), { ...o, method: 'POST', body: { data } }),
-  messages: (host: string, id: string, limit = 60, o: Opts = {}) =>
-    request<MessagesResponse>(`${sessionPath(host, id, 'messages')}?limit=${limit}`, o),
+  /** `after`: the previous answer's cursor ('' = none yet) — asks for only what changed (lib/chat.ts mergeChat). */
+  messages: (host: string, id: string, limit = 60, { after, ...o }: Opts & { after?: string } = {}) =>
+    request<MessagesResponse>(`${sessionPath(host, id, 'messages')}?limit=${limit}${after === undefined ? '' : `&after=${encodeURIComponent(after)}`}`, o),
 
   /** The session's worktree against the merge-base with `base` (default branch); `since` = the last fingerprint. */
   diff: (host: string, id: string, { base, since }: { base?: string | null; since?: string | null } = {}, o: Opts = {}) => {

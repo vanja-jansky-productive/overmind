@@ -598,6 +598,15 @@ export interface MessagesResponse {
   capturedAt: number
   /** Prompts waiting for the run to end (the server's prompt queue); null / absent = none. */
   queue?: PromptQueue | null
+  /** Deltas (#37; absent from older servers): `true` = `messages` replaces the list. */
+  full?: boolean
+  /** `full: false`: keep the messages before this absolute index, then append `messages`. */
+  from?: number
+  stable?: number
+  /** Opaque: sent back as `after` on the next poll. */
+  cursor?: string
+  /** With `after`: the prompt the terminal shows (never inside `messages`), null when none. */
+  screen?: Message | null
 }
 
 export interface QueuedPrompt {
