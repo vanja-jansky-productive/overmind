@@ -106,10 +106,10 @@ Launch commands: Claude's is `OVERMIND_CMD` / config `claude`; the others' are c
 `npm i -g @openai/codex` is found from an ssh shell whose PATH lacks it. `installed` says whether the
 first word resolves; `problem` says why the harness can't run here, with the fix, or is `null`: not
 found (where overmind looked, how to install, which setting), a configured path that is not an
-executable, or — Codex — `never run here (no ~/.codex) — run \`codex login\`` / `not logged in — run
-\`codex login\`` (no `auth.json` in `$CODEX_HOME`; a config that keeps credentials in the OS keyring,
-`cli_auth_credentials_store = "keyring"` or `"auto"`, counts as logged in). A Codex that is not
-logged in is still `installed` and offered.
+executable, or — Codex — `never run here (no <its home>) — run \`codex login\`` (`$CODEX_HOME`,
+default `~/.codex`) / `not logged in — run \`codex login\`` (no `auth.json` there; a config that keeps
+credentials in the OS keyring, `cli_auth_credentials_store = "keyring"` or `"auto"`, counts as logged
+in). A Codex that is not logged in is still `installed` and offered.
 
 Codex's sandbox and approval mode are part of its launcher, not a per-spawn pick: set
 `harnesses.codex.command` to e.g. `"codex -a on-request -s workspace-write"` (Codex's own default

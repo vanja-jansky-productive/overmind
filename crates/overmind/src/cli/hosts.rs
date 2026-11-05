@@ -324,7 +324,7 @@ fn probe_lines(p: &Probe, compare: Option<&str>) -> (Vec<(Mark, String)>, usize)
     }
     match &p.codex {
         Some(v) if !p.codex_home => l.info(&format!(
-                "{} {}: never run here (no ~/.codex) — run `codex login`",
+                "{} {}: never run here (no $CODEX_HOME, default ~/.codex) — run `codex login`",
                 "·".dimmed(),
                 codex_version(v)
             ),
