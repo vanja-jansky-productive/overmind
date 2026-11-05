@@ -367,6 +367,17 @@ test('extract: a Codex row reads its rollout (not a Claude lookup) — files it 
   assert.equal(r.offset, fs.statSync(fx.file).size);
 });
 
+test('extract: a pi row is never parsed as a Claude transcript — no resources, its size still read', async (t) => {
+  const fx = codexFixture(t);
+  const file = path.join(fx.root, 'pi.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: path.join(fx.cwd, 'x.md') } }] } }) + '\n');
+  const ex = createBriefExtractor({ locate: async () => assert.fail('a pi row names its transcript'), userHome: fx.home, skipPath: /^\/nowhere\// });
+  const r = await ex.refresh({ session_id: SID, cwd: fx.cwd, harness: 'pi', transcript: file });
+  assert.equal(r.harness, 'pi');
+  assert.deepEqual(r.resources, []);
+  assert.equal(r.offset, fs.statSync(file).size);
+});
+
 test('readDelta: a Codex rollout — its prompts and replies, without its own context messages', async (t) => {
   const fx = codexFixture(t);
   const d = await readDelta(fx.file, 0, { maxChars: 12000, harness: 'codex' });

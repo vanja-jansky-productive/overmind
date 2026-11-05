@@ -6,6 +6,7 @@
 // relative mention ("Updated docs/x.md") that is relative to another repo than the cwd.
 // A Codex row reads its rollout (the path discovery puts on the row) instead: the files its
 // completed `FileChange` items changed and its `CommandExecution` commands (run in their own cwd).
+// A pi row has no index yet.
 // Parsed incrementally: each call reads only what the transcript grew by since the last one.
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -117,24 +118,35 @@ export function codexCommand(item) {
   return { script, text: cwd ? `cd '${cwd}' && ${script}` : script };
 }
 
-/** Feed one Codex rollout line. */
-export function ingestCodexLine(state, line, home = os.homedir()) {
-  const item = codexItem(line);
-  if (!item) return;
-  if (item.type === 'FileChange' && item.changes && typeof item.changes === 'object') {
-    for (const [p, c] of Object.entries(item.changes)) if (c?.type !== 'delete') add(state, p, 2);
-  } else if (item.type === 'CommandExecution') {
+/**
+ * The paths a completed Codex item touched → [{ path, tier }]: its `FileChange` targets (not
+ * deletes) and the files its `CommandExecution` command wrote (tier 2), other absolute paths in
+ * that command and its output (tier 1). One walk of the rollout's item shapes, shared with
+ * lib/brief-extract.mjs (which keeps tier 2: what the session made).
+ */
+export function codexTouchedPaths(item, home = os.homedir()) {
+  const st = { paths: new Map(), seq: 0 };
+  if (item?.type === 'FileChange' && item.changes && typeof item.changes === 'object') {
+    for (const [p, c] of Object.entries(item.changes)) if (c?.type !== 'delete') add(st, p, 2);
+  } else if (item?.type === 'CommandExecution') {
     const cmd = codexCommand(item);
-    if (cmd) ingestCommand(state, cmd.text, home);
+    if (cmd) ingestCommand(st, cmd.text, home);
     const out = typeof item.aggregated_output === 'string' ? item.aggregated_output : '';
     let n = 0;
     if (out.includes('/')) {
       for (const m of out.matchAll(ABS_IN_TEXT)) {
-        add(state, m[1].replace(/[.:]+$/, ''), 1);
+        add(st, m[1].replace(/[.:]+$/, ''), 1);
         if (++n >= MAX_RESULT_PATHS) break;
       }
     }
   }
+  return [...st.paths].map(([p, v]) => ({ path: p, tier: v.tier }));
+}
+
+/** Feed one Codex rollout line. */
+export function ingestCodexLine(state, line, home = os.homedir()) {
+  const item = codexItem(line);
+  if (item) for (const t of codexTouchedPaths(item, home)) add(state, t.path, t.tier);
 }
 
 /** Feed one JSONL line. */
@@ -192,10 +204,11 @@ export function createTouchedIndex({ home = claudeHome(), maxBytes = MAX_SCAN_BY
     const id = session?.session_id;
     if (!id) return null;
     let st = states.get(id);
-    // Codex / pi: discovery names the file; Claude's is found from cwd + id.
+    // Codex: discovery names the file; Claude's is found from cwd + id. pi: no parser for its
+    // tool calls yet, so no index (not its file read as a Claude one).
+    if (session.harness === 'pi') return null;
     const codex = session.harness === 'codex';
-    const own = session.harness && session.harness !== 'claude';
-    const file = st?.file ?? (own ? (typeof session.transcript === 'string' && session.transcript) || null : await findTranscript(session.cwd ?? null, id));
+    const file = st?.file ?? (codex ? (typeof session.transcript === 'string' && session.transcript) || null : await findTranscript(session.cwd ?? null, id));
     if (!file) return null;
     let stat;
     try {

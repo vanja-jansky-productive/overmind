@@ -1405,18 +1405,30 @@ fn entry_text(v: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// Text of a Codex message's `input_text` / `output_text` parts.
-fn codex_text(content: &Value) -> String {
-    content
+/// Text of a Codex `message` payload: a user's `input_text` parts, an assistant's
+/// `output_text` ones. Mirrors web/lib/transcript.mjs `codexMessageText`: change them together.
+fn codex_text(payload: &Value) -> String {
+    let want = if payload["role"] == "user" {
+        "input_text"
+    } else {
+        "output_text"
+    };
+    payload["content"]
         .as_array()
         .map(|a| {
             a.iter()
-                .filter(|b| matches!(b["type"].as_str(), Some("input_text" | "output_text")))
+                .filter(|b| b["type"] == want)
                 .filter_map(|b| b["text"].as_str())
                 .collect::<Vec<_>>()
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+/// A Codex user message that is harness context (`<environment_context>`, AGENTS.md), not a
+/// prompt. Mirrors web/lib/transcript.mjs `isCodexContext`: change them together.
+fn is_codex_context(t: &str) -> bool {
+    t.starts_with('<') || t.starts_with("# AGENTS.md")
 }
 
 /// The conversation from a transcript's tail (Claude's or a Codex rollout), newest kept: user prompts and turn-ending
@@ -1458,11 +1470,11 @@ pub fn conversation_from(jsonl: &str, max_chars: usize) -> String {
             continue;
         }
         // Claude: `type: user|assistant`; Codex: a `response_item` message with its `role`.
-        let (role, t) = match v["type"].as_str() {
-            Some(r @ ("user" | "assistant")) => (r, entry_text(&v)),
+        let (role, t, codex) = match v["type"].as_str() {
+            Some(r @ ("user" | "assistant")) => (r, entry_text(&v), false),
             Some("response_item") if v["payload"]["type"] == "message" => {
                 match v["payload"]["role"].as_str() {
-                    Some(r @ ("user" | "assistant")) => (r, codex_text(&v["payload"]["content"])),
+                    Some(r @ ("user" | "assistant")) => (r, codex_text(&v["payload"]), true),
                     _ => continue,
                 }
             }
@@ -1470,8 +1482,13 @@ pub fn conversation_from(jsonl: &str, max_chars: usize) -> String {
         };
         let t = t.trim();
         if role == "user" {
-            // Harness context: Claude's tags, Codex's `<environment_context>` / AGENTS.md.
-            if t.is_empty() || t.starts_with('<') || t.starts_with("# AGENTS.md") {
+            // Harness context: Claude's tags; Codex's `<environment_context>` / AGENTS.md.
+            let context = if codex {
+                is_codex_context(t)
+            } else {
+                t.starts_with('<')
+            };
+            if t.is_empty() || context {
                 continue;
             }
             if let Some(a) = pending.take() {
@@ -2049,6 +2066,12 @@ mod tests {
         );
         // Newest kept under the cap.
         assert_eq!(conversation_from(&text, 20), "User: second ask");
+        // Codex's AGENTS.md context skip is Codex's only: a Claude prompt may start so.
+        let ask = json!({"type":"user","message":{"role":"user","content":"# AGENTS.md needs a section"}});
+        assert_eq!(
+            conversation_from(&ask.to_string(), 6000),
+            "User: # AGENTS.md needs a section"
+        );
     }
 
     #[test]

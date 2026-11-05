@@ -222,7 +222,18 @@ export function codexRef(line) {
   return `c-${createHash('sha1').update(line).digest('hex').slice(0, 16)}`;
 }
 
-/** Codex wraps its own context (AGENTS.md, environment, permissions) in user messages. */
+/**
+ * Text of a Codex `message` payload: a user's `input_text` parts, an assistant's `output_text`
+ * ones. crates/overmind/src/core/stack.rs `codex_text` mirrors it: change them together.
+ */
+export function codexMessageText(payload) {
+  return textOfContent(payload?.content, payload?.role === 'user' ? 'input_text' : 'output_text');
+}
+
+/**
+ * Codex wraps its own context (AGENTS.md, environment, permissions) in user messages.
+ * crates/overmind/src/core/stack.rs `is_codex_context` mirrors it: change them together.
+ */
 export function isCodexContext(text) {
   return text.startsWith('<') || text.startsWith('# AGENTS.md');
 }
@@ -246,7 +257,7 @@ export function parseCodexTranscript(text) {
     if (!p || typeof p !== 'object') continue;
     const ts = entry.timestamp ? Date.parse(entry.timestamp) || null : null;
     if (entry.type === 'response_item' && p.type === 'message') {
-      const body = textOfContent(p.content, p.role === 'user' ? 'input_text' : 'output_text').trim();
+      const body = codexMessageText(p).trim();
       if (!body) continue;
       if (p.role === 'user') {
         if (isCodexContext(body)) continue;

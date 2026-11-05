@@ -17,13 +17,13 @@
 // A Codex row reads its rollout (the path discovery puts on the row): its prompts and replies
 // (`response_item` messages, its own context skipped), files its `FileChange` items changed or
 // its `CommandExecution` commands wrote, and the output of `gh pr|issue create`; no todos (the
-// model writes them). Dirs: `session_meta` / `turn_context` cwd.
+// model writes them). Dirs: `session_meta` / `turn_context` cwd. A pi row: no resources yet.
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { classifyUserText, isCodexContext, parserFor } from './transcript.mjs';
-import { codexCommand, codexItem, ingestCommand } from './touched.mjs';
+import { classifyUserText, codexMessageText, isCodexContext, parserFor } from './transcript.mjs';
+import { codexCommand, codexItem, codexTouchedPaths, ingestCommand } from './touched.mjs';
 import { CONTINUE_SEPARATOR, classifyUrl, cleanUrl, resourceKey } from './brief-format.mjs';
 
 /** On the first read of a transcript, only its last this-many bytes are scanned. */
@@ -136,7 +136,6 @@ function addFile(state, abs) {
   addItem(state, { kind: SPEC_RE.test(p) ? 'Spec' : 'File', path: p });
 }
 
-/** Feed one JSONL line. */
 /** A working directory the session's entries record, first-seen order. */
 function addDir(state, cwd) {
   if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.includes('\0') || (state.skipPath ?? TEMP_PATH_RE).test(`${cwd}/`)) return;
@@ -146,32 +145,15 @@ function addDir(state, cwd) {
   if (state.dirs.size > MAX_DIRS) state.dirs.delete(state.dirs.values().next().value);
 }
 
-/** Text of a Codex message's `input_text` / `output_text` parts. */
-function codexText(content) {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((b) => b && (b.type === 'input_text' || b.type === 'output_text') && typeof b.text === 'string')
-    .map((b) => b.text)
-    .join('\n')
-    .trim();
-}
-
 /** Feed one Codex rollout line (see the header). */
 export function ingestCodexLine(state, line, home = os.homedir()) {
   if (!line || !line.trim()) return;
   const item = codexItem(line);
   if (item) {
-    if (item.type === 'FileChange' && item.changes && typeof item.changes === 'object') {
-      for (const [p, c] of Object.entries(item.changes)) if (c?.type !== 'delete') addFile(state, p);
-    } else if (item.type === 'CommandExecution') {
-      const cmd = codexCommand(item);
-      if (!cmd) return;
-      const tmp = { paths: new Map(), seq: 0 };
-      ingestCommand(tmp, cmd.text, home);
-      for (const [p, v] of tmp.paths) if (v.tier === 2) addFile(state, p);
-      if (GH_CREATE_RE.test(cmd.script) && typeof item.aggregated_output === 'string') {
-        for (const u of extractUrls(item.aggregated_output, ['PR', 'Issue'])) addItem(state, u);
-      }
+    for (const t of codexTouchedPaths(item, home)) if (t.tier === 2) addFile(state, t.path);
+    const cmd = item.type === 'CommandExecution' ? codexCommand(item) : null;
+    if (cmd && GH_CREATE_RE.test(cmd.script) && typeof item.aggregated_output === 'string') {
+      for (const u of extractUrls(item.aggregated_output, ['PR', 'Issue'])) addItem(state, u);
     }
     return;
   }
@@ -185,7 +167,7 @@ export function ingestCodexLine(state, line, home = os.homedir()) {
   if (!p || typeof p !== 'object') return;
   if (entry.type === 'session_meta' || entry.type === 'turn_context') return addDir(state, p.cwd);
   if (entry.type !== 'response_item' || p.type !== 'message') return;
-  const text = codexText(p.content);
+  const text = codexMessageText(p).trim();
   if (!text) return;
   if (p.role === 'user' && !isCodexContext(text)) ingestUserText(state, text);
   else if (p.role === 'assistant') for (const u of extractUrls(text)) addItem(state, u);
@@ -361,8 +343,9 @@ export function createBriefExtractor({ locate, maxBytes = MAX_SCAN_BYTES, userHo
         }
         const lastNl = buf.lastIndexOf(0x0a);
         const upto = lastNl >= from ? lastNl + 1 : from;
-        const ingest = harness === 'codex' ? ingestCodexLine : ingestLine;
-        for (const line of buf.subarray(from, upto).toString('utf8').split('\n')) ingest(st, line, userHome);
+        // pi: no parser for its resources yet — its size still drives the Summary's delta.
+        const ingest = harness === 'codex' ? ingestCodexLine : harness === 'pi' ? null : ingestLine;
+        if (ingest) for (const line of buf.subarray(from, upto).toString('utf8').split('\n')) ingest(st, line, userHome);
         st.offset = start + upto;
       }
       st.size = stat.size;

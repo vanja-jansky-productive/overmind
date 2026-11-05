@@ -164,6 +164,16 @@ test('a Codex row: the files its rollout says it changed or wrote resolve a bare
   assert.equal((await stat('made.md')).resolvedVia, 'touched');
 });
 
+test('a pi row has no touched index (its transcript is not a Claude one)', async (t) => {
+  const fx = fixture(t);
+  const file = path.join(fx.root, 'pi', 'x.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // A line that would read as a Claude tool call: a pi transcript is never parsed as one.
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: path.join(fx.cwd, 'x.md') } }] } }) + '\n');
+  const touched = createTouchedIndex({ locate: async () => assert.fail('a pi row names its transcript') });
+  assert.equal(await touched.get({ ...SESSION, harness: 'pi', transcript: file }), null);
+});
+
 test('sandbox holds: touched paths / roots outside $HOME are ignored, secrets refused', async (t) => {
   const { fx, append, statOne } = setup(t);
   append(toolUse('Read', { file_path: path.join(fx.outside, 'knowledge', 'notes', 'only-out.md') }));

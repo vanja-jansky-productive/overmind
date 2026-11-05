@@ -47,9 +47,9 @@ lib/reviews.mjs       the diff reviewer's comment threads: prompts with `[review
 lib/asks.mjs          the diff reviewer's side questions: a read-only `claude -p` fork of the session (--resume --fork-session --no-session-persistence), streamed (stream-json) into an in-memory ask the UI polls; never typed into the session
 lib/pr-notes.mjs      the diff reviewer over a PR without a session: notes kept per PR under <state>/overmind/pr-notes (thread-shaped), one posted to GitHub as a review comment via gh, or all handed to a session as its first prompt
 lib/complete.mjs      composer autocomplete: skills/commands (built-in, user, project, enabled plugins), the cwd's .md/.plain files, brain notes (~/.brainrc)
-lib/touched.mjs       absolute paths a session's tool calls touched, parsed incrementally from its transcript (for lib/files.mjs)
+lib/touched.mjs       absolute paths a session's tool calls touched, parsed incrementally from its transcript — a Codex row: its rollout's FileChange / CommandExecution items (`codexTouchedPaths`); pi: none yet (for lib/files.mjs)
 lib/brief-format.mjs  session brief file format: parse/serialise, resource + Git-line merge, model-output check, continue prompt (pure)
-lib/brief-extract.mjs brief resources + todos from a transcript (incremental, no model); the conversation delta for the model
+lib/brief-extract.mjs brief resources + todos from a transcript (incremental, no model) — a Codex row: its rollout (no todos); pi: none yet; the conversation delta for the model
 lib/briefs.mjs        brief store (atomic files), budgeted `claude -p` generation, background pass (see Session briefs)
 lib/dormant.mjs       dormant + recently closed sessions (session recovery): `overmind --local restore [--closed] … --json` errors → HTTP, restore.onBoot
 lib/stacks.mjs        session stacks: `overmind stack` errors → HTTP, sibling spawn dir rule, post-spawn `stack add`, background `stack sync`
@@ -448,7 +448,7 @@ the stacks dir, the Codex hook sidecars (`<state>/codex-hooks/<thread>.json`, th
 its rename ignored), a Codex / pi rollout whose tail ends in another turn state than its row shows
 (`task_started` / `task_complete` / `turn_aborted`, pi's last message: busy ↔ idle), and a rollout no
 listed row owns, the first time it is seen (a session started in a terminal: its row appears after
-its first prompt); **slow** — transcripts of sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
+its first prompt); **slow** — transcripts of Claude sessions in the last list (`~/.claude/projects/<enc>/<sid>.jsonl`
 and `<sid>/…`), the other Codex / pi rollout writes of listed rows, `session_index.jsonl`, and an
 unknown rollout once more on a later list (a row that list was too early for) — after that it is
 dropped while no row owns it, so a headless `pi -p` costs at most two lists however long it
