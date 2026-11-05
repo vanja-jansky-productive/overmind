@@ -39,6 +39,12 @@ pub const TIMEOUT_SECS: u64 = 5;
 /// The most of stdin the hook reads; a bigger payload is dropped.
 const MAX_PAYLOAD: u64 = 1024 * 1024;
 pub const SIDECAR_VERSION: u64 = 1;
+/// The biggest sidecar the hook can write: a payload's command and description (≤ the payload
+/// each, together ≤ it; the description's first line again when there is no command), plus
+/// its ids and paths. `is_ours` reads nothing bigger — a shared dir may hold anything.
+const OURS_MAX: u64 = 2 * MAX_PAYLOAD + 64 * 1024;
+/// The biggest install record: a version, a stamp, our hook command and a few flags.
+const RECORD_MAX: u64 = 64 * 1024;
 
 // ------------------------------------------------------------------ paths
 
@@ -156,6 +162,26 @@ pub fn write_sidecar(dir: &Path, id: &str, sidecar: &Value) -> Result<()> {
     crate::core::brief::write_private(&dir.join(format!("{id}.json")), &sidecar.to_string())
 }
 
+/// A file that may be one we wrote, as text: at most `max` bytes and starting as
+/// `serde_json` writes ours (`{"v":1,` — keys in insertion order). Anything else is not read
+/// on: a shared dir's big or unrelated file costs one small read, not a full parse per list.
+fn read_ours(path: &Path, max: u64) -> Option<String> {
+    const HEAD: &[u8] = br#"{"v":1,"#;
+    let f = std::fs::File::open(path).ok()?;
+    if f.metadata().ok()?.len() > max {
+        return None;
+    }
+    let mut f = f.take(max);
+    let mut head = [0u8; HEAD.len()];
+    f.read_exact(&mut head).ok()?;
+    if head != HEAD {
+        return None;
+    }
+    let mut rest = String::new();
+    f.read_to_string(&mut rest).ok()?;
+    Some(format!("{}{rest}", std::str::from_utf8(&head).ok()?))
+}
+
 /// A file `uninstall` and prune may delete — provably ours, since the dir may be one the user
 /// chose (`OVERMIND_CODEX_HOOKS_DIR`) and hold anything:
 /// - `<thread>.json` holding a v1 sidecar of that thread;
@@ -163,16 +189,13 @@ pub fn write_sidecar(dir: &Path, id: &str, sidecar: &Value) -> Result<()> {
 /// - `<thread>.json.<pid>.<8 hex>.tmp` / `.install.json.<pid>.<8 hex>.tmp`, the temp file
 ///   `write_private` makes (a killed hook's leftover).
 fn is_ours(dir: &Path, name: &str) -> bool {
-    let read = || std::fs::read_to_string(dir.join(name)).ok();
     if name == INSTALL_RECORD {
-        return read()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .is_some_and(|r| {
-                r.get("v").and_then(Value::as_u64) == Some(1)
-                    && r.get("command")
-                        .and_then(Value::as_str)
-                        .is_some_and(|c| our_binary(c).is_some())
-            });
+        return read_record(dir).is_some_and(|r| {
+            r.get("v").and_then(Value::as_u64) == Some(1)
+                && r.get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| our_binary(c).is_some())
+        });
     }
     if let Some(stem) = name.strip_suffix(".tmp") {
         let mut parts = stem.rsplitn(3, '.');
@@ -188,7 +211,7 @@ fn is_ours(dir: &Path, name: &str) -> bool {
     }
     name.strip_suffix(".json").is_some_and(|id| {
         safe_id(id)
-            && read()
+            && read_ours(&dir.join(name), OURS_MAX)
                 .and_then(|t| parse_sidecar(&t))
                 .is_some_and(|sc| sc.thread_id == id)
     })
@@ -792,7 +815,7 @@ fn remove_guarded(path: &Path, before: Option<&[u8]>) -> Result<()> {
 
 /// `install`'s record in `sidecars`, if any.
 fn read_record(sidecars: &Path) -> Option<Value> {
-    let text = std::fs::read_to_string(sidecars.join(INSTALL_RECORD)).ok()?;
+    let text = read_ours(&sidecars.join(INSTALL_RECORD), RECORD_MAX)?;
     serde_json::from_str(&text).ok()
 }
 
@@ -1046,14 +1069,11 @@ pub fn status(codex_home: &Path, exe: &Path, sidecars: &Path) -> Result<Status> 
     let path = hooks_path(codex_home);
     let (_, doc) = read_doc(&path)?;
     let config = std::fs::read_to_string(codex_home.join("config.toml")).unwrap_or_default();
-    let record = std::fs::read_to_string(sidecars.join(INSTALL_RECORD))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .filter(|r| {
-            r.get("command").and_then(Value::as_str).is_some_and(|c| {
-                installed_binary(&doc).is_some_and(|b| our_binary(c).as_deref() == Some(&*b))
-            })
-        });
+    let record = read_record(sidecars).filter(|r| {
+        r.get("command").and_then(Value::as_str).is_some_and(|c| {
+            installed_binary(&doc).is_some_and(|b| our_binary(c).as_deref() == Some(&*b))
+        })
+    });
     let keys: std::collections::HashMap<_, _> = our_keys(&path, &doc).into_iter().collect();
     let mut events = Map::new();
     let mut all = true;
@@ -1244,6 +1264,39 @@ mod tests {
         ] {
             assert!(dir.path().join(kept).exists(), "{kept}");
         }
+    }
+
+    #[test]
+    fn prune_never_reads_a_file_too_big_or_not_starting_like_ours() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar = |id: &str, command: &str| {
+            let p = json!({ "session_id": id, "hook_event_name": "PermissionRequest",
+                "tool_input": { "command": command, "description": command } });
+            sidecar_from_payload(&p, 1).unwrap().1.to_string()
+        };
+        // The biggest sidecar a payload the hook accepts can make: still ours.
+        let max = sidecar("max", &"c".repeat(MAX_PAYLOAD as usize / 2 - 200));
+        std::fs::write(dir.path().join("max.json"), &max).unwrap();
+        // A shared dir's big file: past the cap it is never read, whatever it holds — here a
+        // sidecar padded past it, which reading would prove ours.
+        let big = format!("{}{}", sidecar("big", "ls"), " ".repeat(OURS_MAX as usize));
+        std::fs::write(dir.path().join("big.json"), big).unwrap();
+        // Not starting as we write a sidecar (`{"v":1,`, keys in insertion order): not read on.
+        let other = format!(" {}", sidecar("other", "ls"));
+        std::fs::write(dir.path().join("other.json"), other).unwrap();
+        let record = format!(
+            r#"{{"v":1,"command":"/x/overmind _codex-hook","pad":"{}"}}"#,
+            "p".repeat(RECORD_MAX as usize)
+        );
+        std::fs::write(dir.path().join(INSTALL_RECORD), &record).unwrap();
+        assert!(
+            !is_ours(dir.path(), INSTALL_RECORD),
+            "a record past its cap"
+        );
+        prune_sidecars(dir.path(), &[], -1, now_ms() + 10);
+        assert!(!dir.path().join("max.json").exists());
+        assert!(dir.path().join("big.json").exists());
+        assert!(dir.path().join("other.json").exists());
     }
 
     #[test]
