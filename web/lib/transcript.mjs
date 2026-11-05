@@ -320,7 +320,7 @@ export const QUESTION_CAP = 20;
 export const REANCHOR_FACTOR = 1.5;
 /** Raw bytes before the cached size, compared on the next read: a mismatch = truncated and regrown, or rewritten. */
 const PROBE_BYTES = 8 * 1024;
-const CURSOR_RE = /^([0-9a-f]{8}):(\d+):(\d+):([0-9a-f]{16}):(\d+)$/;
+const CURSOR_RE = /^([0-9a-z.]{1,40}):(\d+):(\d+):([0-9a-f]{16}):(\d+)$/;
 
 /**
  * The index of the first message a later transcript line could still change (`all.length` when
@@ -351,12 +351,11 @@ const feed = (h, all, from, to) => {
 };
 const digest16 = (h) => h.digest('hex').slice(0, 16);
 
-function newGen(old) {
-  for (;;) {
-    const gen = randomBytes(4).toString('hex');
-    if (gen !== old) return gen;
-  }
-}
+// A generation is this process's nonce + a counter: never reused in-process (no A→B→A), and a
+// restarted server cannot answer an old cursor as its own (the cursor is a resume token, #40).
+const GEN_NONCE = randomBytes(8).toString('hex');
+let genSeq = 0;
+const newGen = () => `${GEN_NONCE}.${(++genSeq).toString(36)}`;
 
 /**
  * A parsed message list → its delta bookkeeping: `stable`, the hash of what is below it
@@ -385,7 +384,7 @@ export function snapshotEntry(messages, { harness = 'claude', gen = null, trunca
   return {
     messages,
     truncated,
-    gen: keep ? prev.gen : (gen ?? newGen(prev?.gen)),
+    gen: keep ? prev.gen : (gen ?? newGen()),
     stable,
     prefixHash: digest16(h),
     tailHash: digest16(tail),
@@ -492,7 +491,6 @@ export function createTranscriptReader({ home = claudeHome(), maxBytes = MAX_TAI
         skip = nl === -1 ? read.buf.length : nl + 1; // drop the leading partial line
       }
       const fresh = build(harness, file, read, { startOffset: read.start + skip, bytes, prev: null });
-      if (fresh.gen === cached?.gen) fresh.gen = newGen(cached.gen);
       if (enough(fresh, limit)) return fresh;
       bytes = Math.min(bytes * 2, maxGrownBytes);
     }

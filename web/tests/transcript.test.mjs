@@ -460,6 +460,23 @@ test('reader deltas: an anchored reload that falls below the limit (a queued pro
   assert.deepEqual([c.full, c.messages], [false, []], 'and the next poll is "same", not a second full');
 });
 
+test('generations: a per-process nonce + a counter — never reused in-process, not shared with a restarted server', async () => {
+  const gens = Array.from({ length: 2000 }, () => snapshotEntry([]).gen);
+  assert.equal(new Set(gens).size, gens.length, 'no A→B→A');
+  const nonce = (g) => g.split('.')[0];
+  assert.match(nonce(gens[0]), /^[0-9a-f]{16}$/, '64 bits');
+  assert.equal(new Set(gens.map(nonce)).size, 1);
+  const { execFileSync } = await import('node:child_process');
+  const lib = new URL('../lib/transcript.mjs', import.meta.url).href;
+  const other = execFileSync(process.execPath, ['--input-type=module', '-e', `import { snapshotEntry } from '${lib}'; console.log(snapshotEntry([]).gen)`], { encoding: 'utf8' }).trim();
+  assert.notEqual(nonce(other), nonce(gens[0]), 'another process');
+  // An old process's cursor is well-formed but of another generation here: answered full.
+  const e = snapshotEntry([said('a')]);
+  const old = `${other}:${e.stable}:1:${e.tailHash}:60`;
+  assert.equal(sliceDelta(e, { limit: 60, after: old }).full, true);
+  assert.equal(sliceDelta(e, { limit: 60, after: sliceDelta(e, { limit: 60, after: '' }).cursor }).full, false);
+});
+
 test('reader deltas: concurrent polls after an append coalesce into one read', async () => {
   const f = claudeFixture();
   f.add(user('one'));
