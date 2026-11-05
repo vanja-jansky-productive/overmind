@@ -16,10 +16,10 @@ import { useOvermind } from '@/hooks/useOvermind'
 import { useHarnesses } from '@/hooks/useHarnesses'
 import { useSettings } from '@/hooks/useSettings'
 import { branchTargets, branchesFromPrompt } from '@/lib/branch'
-import { harnessLabel, offeredHarnesses } from '@/lib/harness'
+import { defaultEffortLabel, effortLabel, effortsFor, harnessLabel, offeredHarnesses, pickEffort } from '@/lib/harness'
 import { sessionHref } from '@/lib/sessions'
 
-// Radix ToggleGroup treats '' as "nothing selected": the default model needs a stand-in.
+// Radix ToggleGroup treats '' as "nothing selected": the default model / effort needs a stand-in.
 const DEFAULT_MODEL_VALUE = '__default'
 const CHIP = 'h-9 shrink-0 rounded-full border border-border bg-card px-3.5 text-sm data-[state=on]:border-primary/50 data-[state=on]:bg-accent'
 
@@ -55,12 +55,18 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
   const isPrompt = branchesFromPrompt(from)
   const [harness, setHarness] = useState(source)
   const [model, setModel] = useState('')
+  // Not remembered, like the model: a branch starts from Default.
+  const [effortChoice, setEffortChoice] = useState('')
   const [prompt, setPrompt] = useState(isPrompt ? from.text : '')
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const models = targets.find((h) => h.id === harness)?.models ?? [{ id: '', label: 'Default' }]
+  const target = targets.find((h) => h.id === harness)
+  const models = target?.models ?? [{ id: '', label: 'Default' }]
+  // The levels the picked model takes; a pick it doesn't take reads Default (and comes back with one that does).
+  const efforts = effortsFor(target, model)
+  const effort = pickEffort(efforts, effortChoice)
   const who = harnessLabel(harness)
   const crossAgent = harness !== source
 
@@ -73,6 +79,7 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
         ref: from.ref,
         harness,
         model: model || undefined,
+        effort: effort || undefined,
         prompt: isPrompt || prompt.trim() ? prompt : undefined,
         title: title.trim() || undefined,
       })
@@ -129,6 +136,7 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
                 if (!v) return
                 setHarness(v)
                 setModel('')
+                setEffortChoice('')
               }}
               aria-label="Agent"
               className="justify-start"
@@ -163,6 +171,28 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
                   className={CHIP}
                 >
                   {m.label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
+        ) : null}
+
+        {efforts.length ? (
+          <div className="flex flex-col gap-1.5">
+            <Label>Effort</Label>
+            <ToggleGroup
+              type="single"
+              value={effort || DEFAULT_MODEL_VALUE}
+              onValueChange={(v) => v && setEffortChoice(v === DEFAULT_MODEL_VALUE ? '' : v)}
+              aria-label="Effort"
+              className="no-scrollbar flex-wrap justify-start"
+            >
+              <ToggleGroupItem value={DEFAULT_MODEL_VALUE} title={`${who}'s default effort`} className={CHIP}>
+                {target ? defaultEffortLabel(target) : 'Default'}
+              </ToggleGroupItem>
+              {efforts.map((l) => (
+                <ToggleGroupItem key={l} value={l} title={l} className={CHIP}>
+                  {effortLabel(l)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>

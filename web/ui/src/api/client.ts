@@ -418,7 +418,7 @@ export const api = {
     request<PrSpawnResponse>(`${prPath(host, pr)}/notes/handoff`, { ...o, method: 'POST', body: { summary } }),
   prAsk: (host: string, pr: PrKey, body: Partial<ReviewAnchor> & { question: string; head?: string | null; base?: string | null }, o: Opts = {}) =>
     request<{ host: string; ask: SideAsk }>(`${prPath(host, pr)}/ask`, { ...o, method: 'POST', body }),
-  prSpawn: (host: string, body: { pr: string; prompt?: string; name?: string; model?: string; harness?: string }, o: Opts = {}) =>
+  prSpawn: (host: string, body: { pr: string; prompt?: string; name?: string; model?: string; effort?: string; harness?: string }, o: Opts = {}) =>
     request<PrSpawnResponse>(`${hostPath(host)}/prs/spawn`, { ...o, method: 'POST', body }),
 
   /** Your open Productive tasks, as that host's token sees them (`refresh` skips its cache). */
@@ -428,7 +428,7 @@ export const api = {
   taskStatus: (host: string, task: string, status: string, o: Opts = {}) =>
     request<{ host: string; task: Task | null }>(`${hostPath(host)}/tasks/status`, { ...o, method: 'POST', body: { task, status } }),
   /** A new session in `dir` (a spawn dir) whose first prompt says what the task is. */
-  taskSpawn: (host: string, body: { task: string; dir: string; prompt?: string; name?: string; model?: string; harness?: string }, o: Opts = {}) =>
+  taskSpawn: (host: string, body: { task: string; dir: string; prompt?: string; name?: string; model?: string; effort?: string; harness?: string }, o: Opts = {}) =>
     request<TaskSpawnResponse>(`${hostPath(host)}/tasks/spawn`, { ...o, method: 'POST', body }),
 
   /** Sessions a reboot left dormant on `host` (404 / 501 on servers or CLIs that predate session recovery). */

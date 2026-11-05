@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { HarnessInfo } from '@/api/types'
 
 import { pickModel } from './models'
-import { overmindDefaultLabel, harnessLabel, modelKey, offeredHarnesses, pickHarness, sessionHarness, withOvermindDefault } from './harness'
+import { defaultEffortLabel, effortKey, effortLabel, effortsFor, overmindDefaultLabel, harnessLabel, modelKey, offeredHarnesses, pickEffort, pickHarness, sessionHarness, withOvermindDefault } from './harness'
 
 const claudeModels = [
   { id: '', label: 'Default' },
@@ -92,5 +92,50 @@ describe('Codex models (the host lists the newest of each family)', () => {
   it('a remembered older version the list no longer offers falls back to Default', () => {
     expect(pickModel(codex.models, 'gpt-5.6-sol')).toBe('')
     expect(pickModel(codex.models, 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
+  })
+})
+
+describe('effort chips (per harness, per model)', () => {
+  const six = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+  const five = ['low', 'medium', 'high', 'xhigh', 'max']
+  const codex: HarnessInfo = {
+    id: 'codex',
+    label: 'Codex',
+    command: 'codex',
+    installed: true,
+    efforts: six,
+    models: [
+      { id: '', label: 'Default', efforts: five },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: six },
+      { id: 'gpt-6-luna', label: 'GPT-6 Luna', efforts: five },
+    ],
+  }
+  const claude: HarnessInfo = { id: 'claude', label: 'Claude Code', command: 'claude', installed: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], models: claudeModels }
+  it("offers the picked model's own levels (Codex), else the harness's (Claude)", () => {
+    const [cl, cx] = offeredHarnesses([claude, codex], claudeModels)
+    expect(effortsFor(cx, 'gpt-6.1-sol')).toEqual(six)
+    expect(effortsFor(cx, 'gpt-6-luna')).toEqual(five)
+    expect(effortsFor(cx, ''), 'Default: the levels of the model it starts').toEqual(five)
+    expect(effortsFor(cx, 'gpt-unknown')).toEqual(six)
+    expect(effortsFor(cl, 'claude-opus-5-5')).toEqual(claude.efforts)
+    expect(effortsFor({ ...claude, efforts: undefined }, ''), 'an older server: no row').toEqual([])
+    expect(effortsFor(undefined, '')).toEqual([])
+  })
+  it('a remembered effort the model does not take falls back to Default, and comes back with a model that does', () => {
+    expect(pickEffort(effortsFor(codex, 'gpt-6.1-sol'), 'ultra')).toBe('ultra')
+    expect(pickEffort(effortsFor(codex, 'gpt-6-luna'), 'ultra')).toBe('')
+    expect(pickEffort(five, null)).toBe('')
+    expect(pickEffort(five, 'high')).toBe('high')
+  })
+  it('is remembered per harness; chips read like the model chips', () => {
+    expect(effortKey('claude')).toBe('overmind.spawnEffort.claude')
+    expect(effortKey('codex')).toBe('overmind.spawnEffort.codex')
+    expect(['minimal', 'low', 'xhigh', 'max', 'ultra', 'off', 'weird'].map(effortLabel)).toEqual(['Minimal', 'Low', 'XHigh', 'Max', 'Ultra', 'Off', 'weird'])
+    expect(defaultEffortLabel({ defaultEffort: 'xhigh' })).toBe('Default · XHigh')
+    expect(defaultEffortLabel({})).toBe('Default')
+  })
+  it("keeps each model's levels through offeredHarnesses (normalizeModels)", () => {
+    const got = offeredHarnesses([codex], claudeModels).find((h) => h.id === 'codex')
+    expect(got?.models.map((m) => m.efforts)).toEqual([five, six, five])
   })
 })

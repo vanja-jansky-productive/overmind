@@ -259,6 +259,8 @@ export interface QuickReply {
 export interface ModelOption {
   id: string
   label: string
+  /** The reasoning-effort levels this model takes (Codex: per model); absent = the harness's `efforts`. */
+  efforts?: string[]
 }
 
 /** GET /api/settings */
@@ -636,6 +638,8 @@ export interface SpawnRequest {
   prompt?: string
   /** A `models` id; '' / absent = the harness's default. */
   model?: string
+  /** Reasoning effort, one the model takes (`efforts`); absent = the default (Settings → Models, else the harness's). */
+  effort?: string
   /** Which coding agent to start; absent = claude. */
   harness?: HarnessId | string
   /** Act on GitHub as this identity (Claude only); absent = the user's own. */
@@ -664,6 +668,8 @@ export interface BranchRequest {
   /** Agent of the new session; absent = the source's. */
   harness?: HarnessId | string
   model?: string
+  /** As in SpawnRequest. */
+  effort?: string
   /** A prompt branched from is re-sent (this replaces it when given); after a reply, the first message. */
   prompt?: string
   name?: string
@@ -854,6 +860,8 @@ export interface StackSpawnRequest {
   /** As in SpawnRequest. */
   title?: string
   model?: string
+  /** As in SpawnRequest. */
+  effort?: string
   harness?: HarnessId | string
   /** Act on GitHub as this identity (Claude only); absent = the user's own. */
   ghIdentity?: string
@@ -1397,6 +1405,7 @@ export interface ScheduleAddBody {
   prompt?: string
   name?: string
   model?: string
+  effort?: string
   harness?: string
   ghIdentity?: string
 }

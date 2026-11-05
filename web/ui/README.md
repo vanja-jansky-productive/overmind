@@ -291,7 +291,12 @@ src/
   `/api/overmind` (`api/spawnWatch.ts`, 1.5s for up to 45s) for `tmux_session === tmuxSession` and
   opens the session. ⌘/Ctrl+Enter starts it from any field (the prompt included — plain Enter
   there is a newline; the dialog's button shows `⌘↵`). Remembers `overmind.spawnHost` / `overmind.spawnDirLabel.<host>`
-  and `overmind.spawnModel` (a model id no longer offered falls back to the first option). The unsent
+  and `overmind.spawnModel` (a model id no longer offered falls back to the first option). Under Model,
+  an Effort row of the same chips: the levels the picked model takes (`harnesses` → `models[].efforts`,
+  else the harness's `efforts`; no row when the host lists none), Default first (no `effort`: the
+  Settings → Models default, else the harness's); remembered per harness in `overmind.spawnEffort.<harness>`,
+  a remembered level the picked model doesn't take reads Default. Branch from here has the same row
+  (its chips, not remembered, like its model). The unsent
   first prompt is kept as a draft (`overmind.spawnDraft`, a week) across closing the form and reloads,
   and cleared once the session starts; a prefilled "Continue in new session" never touches it.
 - **Session stacks** (docs/architecture.md / ../ARCHITECTURE.md → stacks): N sibling sessions sharing one

@@ -27,7 +27,7 @@ import type { SiblingTarget } from '@/hooks/useStackUi'
 import { withContinueTask } from '@/lib/brief'
 import { copyText } from '@/lib/clipboard'
 import { shortCwd } from '@/lib/format'
-import { harnessLabel, modelKey, offeredHarnesses, pickHarness } from '@/lib/harness'
+import { defaultEffortLabel, effortKey, effortLabel, effortsFor, harnessLabel, modelKey, offeredHarnesses, pickEffort, pickHarness } from '@/lib/harness'
 import { pickModel } from '@/lib/models'
 import { localInputValue, scheduleWhen } from '@/lib/schedule'
 import { storage } from '@/lib/storage'
@@ -88,6 +88,7 @@ function notShownUp(name: string, id: string | number, sent: string) {
 
 // Radix ToggleGroup treats '' as "nothing selected": the default model ('' = no --model) needs a stand-in.
 const DEFAULT_MODEL_VALUE = '__default'
+const DEFAULT_EFFORT_VALUE = '__default'
 
 // The extra directory row a prefill adds when its dir is not one of the host's spawnDirs.
 const PREFILL_DIR_LABEL = 'Same as the session'
@@ -221,9 +222,14 @@ function NewSessionForm({
   const [harnessChoice, setHarnessChoice] = useState<string | null>(() => storage.get(HARNESS_KEY))
   const harness = pickHarness(offered, harnessChoice)
   const who = harnessLabel(harness)
-  const models = offered.find((h) => h.id === harness)?.models ?? claudeModels
+  const harnessInfo = offered.find((h) => h.id === harness)
+  const models = harnessInfo?.models ?? claudeModels
   const [modelChoices, setModelChoices] = useState<Record<string, string | null>>({})
   const model = pickModel(models, modelChoices[harness] ?? storage.get(modelKey(harness)))
+  // Reasoning effort: the levels the picked model takes; a remembered one it doesn't take reads Default.
+  const efforts = effortsFor(harnessInfo, model)
+  const [effortChoices, setEffortChoices] = useState<Record<string, string | null>>({})
+  const effort = pickEffort(efforts, effortChoices[harness] ?? storage.get(effortKey(harness)))
   const [prompt, setPrompt] = useState(() => prefill?.prompt ?? (sibling ? '' : loadDraft()))
   // Blank = the agent / auto-namer names it.
   const [title, setTitle] = useState('')
@@ -288,6 +294,10 @@ function NewSessionForm({
     setModelChoices((m) => ({ ...m, [harness]: id }))
     storage.set(modelKey(harness), id)
   }
+  const chooseEffort = (level: string) => {
+    setEffortChoices((m) => ({ ...m, [harness]: level }))
+    storage.set(effortKey(harness), level)
+  }
   const chooseHarness = (id: string) => {
     setHarnessChoice(id)
     storage.set(HARNESS_KEY, id)
@@ -309,6 +319,7 @@ function NewSessionForm({
         prompt: sent.trim() ? sent : undefined,
         title: title.trim() || undefined,
         model: model || undefined,
+        effort: effort || undefined,
         harness: harness === 'claude' ? undefined : harness,
         // Another host than the source's: say where, and in which of its directories.
         ...(siblingSameHost ? {} : { host, dir: dir?.path }),
@@ -356,6 +367,7 @@ function NewSessionForm({
         prompt: sent.trim() ? sent : undefined,
         title: title.trim() || undefined,
         model: model || undefined,
+        effort: effort || undefined,
         harness: harness === 'claude' ? undefined : harness,
         embed: prefill?.embed || undefined,
         ...(linkTo ? { slack: { url: linkTo, minutes: slackMinutes, mode: slackMode } } : {}),
@@ -392,6 +404,7 @@ function NewSessionForm({
         dir: dirPath,
         prompt: sent.trim() ? sent : undefined,
         model: model || undefined,
+        effort: effort || undefined,
         harness: harness === 'claude' ? undefined : harness,
       })
       clearDraftIf(sent)
@@ -548,6 +561,29 @@ function NewSessionForm({
       </ToggleGroup>
     </Field>
   )
+  // Under Model, the same chips; no row for a harness the host lists no levels for (an older server).
+  const effortField = harnessesLoading ? (
+    <Field label="Effort">{loadingChips(['w-24', 'w-14', 'w-20', 'w-16'], 'Loading effort levels')}</Field>
+  ) : efforts.length ? (
+    <Field label="Effort">
+      <ToggleGroup
+        type="single"
+        value={effort || DEFAULT_EFFORT_VALUE}
+        onValueChange={(v) => v && chooseEffort(v === DEFAULT_EFFORT_VALUE ? '' : v)}
+        aria-label="Effort"
+        className="no-scrollbar w-full justify-start overflow-x-auto"
+      >
+        <ToggleGroupItem value={DEFAULT_EFFORT_VALUE} title={`${who}'s default effort`} className={chipClass}>
+          {harnessInfo ? defaultEffortLabel(harnessInfo) : 'Default'}
+        </ToggleGroupItem>
+        {efforts.map((l) => (
+          <ToggleGroupItem key={l} value={l} title={l} className={chipClass}>
+            {effortLabel(l)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </Field>
+  ) : null
   const promptField = (
     <Field label="First prompt" hint="optional">
       <Textarea
@@ -776,6 +812,7 @@ function NewSessionForm({
           {siblingSameHost ? null : dirField}
           {harnessField}
           {modelField}
+          {effortField}
           {titleField}
           {promptField}
           {errorBox}
@@ -794,6 +831,8 @@ function NewSessionForm({
           {harnessField}
 
           {modelField}
+
+          {effortField}
 
           {titleField}
 

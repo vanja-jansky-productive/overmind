@@ -53,6 +53,39 @@ export function pickHarness(offered: HarnessInfo[], remembered: string | null): 
   return offered[0]?.id ?? 'claude'
 }
 
+/**
+ * The effort levels a spawn of `modelId` ('' = Default) may pick, lowest first: the model's own when
+ * the host lists them (Codex: per model; Default = the model it starts), else the harness's. Empty
+ * (an older server) = no effort row.
+ */
+export function effortsFor(h: Pick<HarnessInfo, 'efforts' | 'models'> | undefined, modelId: string): string[] {
+  if (!h) return []
+  const own = h.models.find((m) => m.id === modelId)?.efforts
+  return own?.length ? own : (h.efforts ?? [])
+}
+
+/** The remembered effort while the model takes it, else Default (''): it comes back with a model that does. */
+export function pickEffort(levels: string[], remembered: string | null): string {
+  return remembered && levels.includes(remembered) ? remembered : ''
+}
+
+/** Where the picked effort is remembered, per harness (beside the model's `modelKey`). */
+export function effortKey(harness: string): string {
+  return `overmind.spawnEffort.${harness}`
+}
+
+const EFFORT_LABELS: Record<string, string> = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' }
+
+/** A chip's label: `xhigh` → `XHigh`; an unknown level shows as itself. */
+export function effortLabel(level: string): string {
+  return EFFORT_LABELS[level] ?? level
+}
+
+/** The effort row's Default chip: names the host's overmind default (Settings → Models) when one is set. */
+export function defaultEffortLabel(h: Pick<HarnessInfo, 'defaultEffort'>): string {
+  return h.defaultEffort ? `Default · ${effortLabel(h.defaultEffort)}` : 'Default'
+}
+
 /** Where the picked model is remembered: Claude keeps the old key. */
 export function modelKey(harness: string): string {
   return harness === 'claude' ? 'overmind.spawnModel' : `overmind.spawnModel.${harness}`

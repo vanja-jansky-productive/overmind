@@ -19,10 +19,11 @@ export function normalizeModels(raw: unknown): ModelOption[] {
   const out: ModelOption[] = []
   for (const m of raw) {
     if (!m || typeof m !== 'object') continue
-    const { id, label } = m as Partial<ModelOption>
+    const { id, label, efforts } = m as Partial<ModelOption>
     if (typeof id !== 'string' || seen.has(id)) continue
     seen.add(id)
-    out.push({ id, label: typeof label === 'string' && label ? label : id || 'Default' })
+    const levels = Array.isArray(efforts) ? efforts.filter((e): e is string => typeof e === 'string' && /^[a-z]{1,20}$/.test(e)) : []
+    out.push({ id, label: typeof label === 'string' && label ? label : id || 'Default', ...(levels.length ? { efforts: levels } : {}) })
   }
   return out.length ? out : DEFAULT_MODELS
 }
