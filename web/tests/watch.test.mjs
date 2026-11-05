@@ -118,13 +118,26 @@ test('arms the roots that exist (recursive only for transcripts), skips missing 
   assert.equal(fs.open().length, 7, 'start() is idempotent');
 });
 
-test('no registry dir → degraded until it exists', () => {
-  const { fs, w } = setup({ missing: ['sessions'] });
+test('no session root at all (Claude registry, Codex, pi) → degraded until one exists', () => {
+  const { fs, w } = setup({ missing: ['sessions', 'codex', 'pi'] });
   assert.equal(w.status().mode, 'idle');
   w.start();
   assert.equal(w.status().mode, 'degraded');
   fs.dirs.add(dir('sessions'));
   w.rearm();
+  assert.equal(w.status().mode, 'watch');
+});
+
+test('a Codex-only host (no ~/.claude/sessions, $CODEX_HOME/sessions there) is watched; the registry is armed when it appears', () => {
+  const { fs, w } = setup({ missing: ['sessions', 'pi'] });
+  w.start();
+  const st = w.status();
+  assert.equal(st.mode, 'watch');
+  assert.equal(st.roots.find((r) => r.id === 'sessions').armed, false);
+  assert.equal(st.roots.find((r) => r.id === 'codex').armed, true);
+  fs.dirs.add(dir('sessions'));
+  w.rearm();
+  assert.equal(w.status().roots.find((r) => r.id === 'sessions').armed, true);
   assert.equal(w.status().mode, 'watch');
 });
 
@@ -212,7 +225,8 @@ test('codex-hooks sidecars: the hook\'s temp write is dropped, its rename is one
 });
 
 test('review-38 N3: a root created after start is armed as it appears (its parent is watched meanwhile), and signals fast', () => {
-  const { fs, clock, changes, w } = setup({ missing: ['codex-hooks', 'sessions'] });
+  // no session root yet either (no Claude, Codex or pi has run here)
+  const { fs, clock, changes, w } = setup({ missing: ['codex-hooks', 'sessions', 'codex', 'pi'] });
   w.start();
   const h = dir('codex-hooks');
   const parentWatchers = () => fs.open().filter((x) => x.dir === path.dirname(h) && x !== fs.open().find((y) => y.dir === dir('done')));
@@ -522,7 +536,7 @@ test('a watcher error → that watcher closed, degraded; rearm() restores watch'
 });
 
 test('the watched root itself removed (rm -rf ~/.claude/sessions) → fast, degraded, re-armed when it is back (test NIT-1)', () => {
-  const { fs, clock, changes, w } = setup();
+  const { fs, clock, changes, w } = setup({ missing: ['codex', 'pi'] }); // the registry is the only session root
   w.start();
   assert.equal(w.status().mode, 'watch');
   const before = fs.open().find((x) => x.dir === dir('sessions'));
@@ -532,7 +546,7 @@ test('the watched root itself removed (rm -rf ~/.claude/sessions) → fast, degr
   clock.flush();
   assert.deepEqual(changes, ['fast']);
   const st = w.status();
-  assert.equal(st.mode, 'degraded', 'a required root that is gone is not trusted');
+  assert.equal(st.mode, 'degraded', 'the only session root gone is not trusted');
   assert.equal(st.roots.find((r) => r.id === 'sessions').armed, false);
   w.rearm(); // still gone: stays degraded, no watcher on a missing dir
   assert.equal(w.status().mode, 'degraded');

@@ -43,8 +43,10 @@ const REGISTRY_RE = /^[^.]+\.json$/; // `<pid>.json`, not `<pid>.<hash>.key` or 
  * The directories to watch, as the CLI resolves them: `~/.claude` (HOME, not CLAUDE_CONFIG_DIR —
  * `claude_home()`), `$CODEX_HOME`, `$PI_CODING_AGENT_DIR`, the state dir (`done.json`,
  * `$OVERMIND_DONE_STATE`), `$OVERMIND_STACKS_DIR`, `$OVERMIND_CODEX_HOOKS_DIR` (`sidecar_dir()` in
- * core/codex_hooks.rs: absolute or `~/…`, a relative value ignored). `required`: without it there is no signal
- * for new rows, so the watcher reports `degraded` (and the caller falls back to its TTL).
+ * core/codex_hooks.rs: absolute or `~/…`, a relative value ignored). `signals`: a root that announces new
+ * rows (Claude's registry, Codex's and pi's sessions). With none of them armed there is no signal for new
+ * rows, so the watcher reports `degraded` (and the caller falls back to its TTL); any one is enough — a
+ * host that never ran Claude has no registry.
  */
 export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) {
   const claude = path.join(home, '.claude');
@@ -57,16 +59,16 @@ export function discoveryRoots({ env = process.env, home = os.homedir() } = {}) 
   const hooksOverride = env.OVERMIND_CODEX_HOOKS_DIR ? expandHome(env.OVERMIND_CODEX_HOOKS_DIR, home) : null;
   const codexHooks = hooksOverride && path.isAbsolute(hooksOverride) ? hooksOverride : path.join(state, 'codex-hooks');
   return [
-    { id: 'sessions', dir: path.join(claude, 'sessions'), kind: 'registry', required: true },
+    { id: 'sessions', dir: path.join(claude, 'sessions'), kind: 'registry', signals: true },
     { id: 'claude', dir: claude, kind: 'file', file: 'overmind-names.json', compare: true },
     { id: 'projects', dir: path.join(claude, 'projects'), kind: 'transcripts', recursive: true, harness: 'claude' },
     { id: 'done', dir: path.dirname(done), kind: 'file', file: path.basename(done) },
     { id: 'stacks', dir: stacks, kind: 'dir' },
-    { id: 'codex', dir: path.join(codex, 'sessions'), kind: 'transcripts', recursive: true, harness: 'codex' },
+    { id: 'codex', dir: path.join(codex, 'sessions'), kind: 'transcripts', recursive: true, harness: 'codex', signals: true },
     { id: 'codex-index', dir: codex, kind: 'file', file: 'session_index.jsonl', cls: 'slow' },
     // `<id>.json.tmp` then a rename (`write_sidecar`): `dir` drops the temp, so one write is one signal.
     { id: 'codex-hooks', dir: codexHooks, kind: 'dir', cls: 'fast' },
-    { id: 'pi', dir: path.join(pi, 'sessions'), kind: 'transcripts', recursive: true, harness: 'pi' },
+    { id: 'pi', dir: path.join(pi, 'sessions'), kind: 'transcripts', recursive: true, harness: 'pi', signals: true },
   ];
 }
 
@@ -321,7 +323,7 @@ export function createDiscoveryWatcher({
   function arm(root) {
     if (armed.has(root.id)) return true;
     if (!exists(root.dir)) {
-      failed.delete(root.id); // gone: nothing to watch (a required root counts as missing in status())
+      failed.delete(root.id); // gone: nothing to watch (status() counts it as not armed)
       if (started) awaitRoot(root);
       return false;
     }
@@ -387,7 +389,8 @@ export function createDiscoveryWatcher({
    * An event named after the watched dir itself: the root was removed, renamed or replaced
    * (`rm -rf ~/.claude/sessions` reports only this — no per-file events). Its watcher is closed
    * either way and the root re-armed if it is back (a fresh watch on the new dir); while it is
-   * missing, a required root reports `degraded` and the next run's `rearm()` picks it up again.
+   * missing it is not armed (`degraded` when no other session root is) and the next run's `rearm()`
+   * picks it up again.
    * Fast: the rows it held may have gone.
    */
   function rootChanged(root, w) {
@@ -432,13 +435,13 @@ export function createDiscoveryWatcher({
 
   /**
    * `mode`: `watch` — armed and healthy (the caller may trust silence); `degraded` — a watcher
-   * errored or a required root is missing (the caller uses its TTL); `idle` — not started.
+   * errored or no session root (`signals`) is armed (the caller uses its TTL); `idle` — not started.
    */
   function status() {
     let mode = 'idle';
     if (started) {
-      const requiredMissing = roots.some((r) => r.required && !armed.has(r.id));
-      mode = failed.size || requiredMissing ? 'degraded' : 'watch';
+      const noSignal = !roots.some((r) => r.signals && armed.has(r.id));
+      mode = failed.size || noSignal ? 'degraded' : 'watch';
     }
     return {
       mode,

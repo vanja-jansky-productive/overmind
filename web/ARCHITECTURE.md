@@ -464,7 +464,9 @@ caller once that change is due (a poked rebuild, a peer's `?local=1`): a list sl
 cannot serve the change it was asked for. A list known dirty but not yet due keeps its own
 `fetchedAt`. The watcher starts with the
 first caller and stops after 90 s without one. No watcher (`web.discovery.watch: false`,
-`OVERMIND_WEB_WATCH=0`), a watch error or no `~/.claude/sessions` → `degraded`/`ttl`: every tick
+`OVERMIND_WEB_WATCH=0`), a watch error or no session root at all (none of `~/.claude/sessions`,
+`$CODEX_HOME/sessions`, pi's `sessions` — any one is enough, so a host that never ran Claude is watched)
+→ `degraded`/`ttl`: every tick
 lists and the 2 s TTL applies, as before. The kill-switch keeps the old cadence and cache; one difference is intended: a forced list (a mutation) asked while a list that started before the mutation is still running now chains a new one instead of returning the older list. `/api/health.discovery` reports the
 mode, `listRuns` and `lastListAt` (and, with a watcher, its age bound, gaps, events and roots).
 

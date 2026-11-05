@@ -210,7 +210,9 @@ That is the source of truth; `overmind` enriches each entry:
 
 Headless runs (`claude -p`, SDK and CI entrypoints) register too and are filtered out.
 A host that never ran Claude has no registry: that is no Claude rows, and Codex and pi are still
-looked for ([Other harnesses](#other-harnesses)); a registry that exists but can't be read is an error.
+looked for ([Other harnesses](#other-harnesses)); a registry that exists but can't be read is an error. The web
+server's watcher is healthy with any one session root (the registry, `$CODEX_HOME/sessions`, pi's
+`sessions`); with none it lists on its TTL ([web/ARCHITECTURE.md](../web/ARCHITECTURE.md)).
 
 ### Other harnesses
 
