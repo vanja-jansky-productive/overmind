@@ -34,15 +34,16 @@ export function offeredHarnesses(rows: HarnessInfo[] | null | undefined, claudeM
   return out.sort((a, b) => Number(b.id === 'claude') - Number(a.id === 'claude'))
 }
 
-/** "Opus 5.5 · high": the host's overmind default for a harness (Settings → Models), or null when none. */
-export function overmindDefaultLabel(h: Pick<HarnessInfo, 'defaultModel' | 'defaultEffort'>, models: ModelOption[]): string | null {
-  const model = h.defaultModel ? (models.find((m) => m.id === h.defaultModel)?.label ?? h.defaultModel) : null
-  const parts = [model, h.defaultEffort].filter(Boolean)
-  return parts.length ? parts.join(' · ') : null
+/**
+ * "Opus 5.5": the host's overmind default model for a harness (Settings → Models), or null when
+ * none. The default effort is the Effort row's Default chip (`defaultEffortLabel`).
+ */
+export function overmindDefaultLabel(h: Pick<HarnessInfo, 'defaultModel'>, models: ModelOption[]): string | null {
+  return h.defaultModel ? (models.find((m) => m.id === h.defaultModel)?.label ?? h.defaultModel) : null
 }
 
-/** The picker's default entry (`id: ''`) names the overmind default it starts, when one is set. */
-export function withOvermindDefault(models: ModelOption[], h: Pick<HarnessInfo, 'defaultModel' | 'defaultEffort'>): ModelOption[] {
+/** The picker's default entry (`id: ''`) names the overmind default model it starts, when one is set. */
+export function withOvermindDefault(models: ModelOption[], h: Pick<HarnessInfo, 'defaultModel'>): ModelOption[] {
   const label = overmindDefaultLabel(h, models)
   return label ? models.map((m) => (m.id === '' ? { ...m, label: `Default · ${label}` } : m)) : models
 }

@@ -86,9 +86,8 @@ function notShownUp(name: string, id: string | number, sent: string) {
   })
 }
 
-// Radix ToggleGroup treats '' as "nothing selected": the default model ('' = no --model) needs a stand-in.
-const DEFAULT_MODEL_VALUE = '__default'
-const DEFAULT_EFFORT_VALUE = '__default'
+// Radix ToggleGroup treats '' as "nothing selected": the default model / effort ('' = no flag) needs a stand-in.
+const DEFAULT_VALUE = '__default'
 
 // The extra directory row a prefill adds when its dir is not one of the host's spawnDirs.
 const PREFILL_DIR_LABEL = 'Same as the session'
@@ -538,7 +537,7 @@ function NewSessionForm({
         className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {models.map((m) => (
-          <option key={m.id || DEFAULT_MODEL_VALUE} value={m.id}>
+          <option key={m.id || DEFAULT_VALUE} value={m.id}>
             {m.label}
           </option>
         ))}
@@ -548,13 +547,13 @@ function NewSessionForm({
     <Field label="Model">
       <ToggleGroup
         type="single"
-        value={model || DEFAULT_MODEL_VALUE}
-        onValueChange={(v) => v && chooseModel(v === DEFAULT_MODEL_VALUE ? '' : v)}
+        value={model || DEFAULT_VALUE}
+        onValueChange={(v) => v && chooseModel(v === DEFAULT_VALUE ? '' : v)}
         aria-label="Model"
         className="no-scrollbar w-full justify-start overflow-x-auto"
       >
         {models.map((m) => (
-          <ToggleGroupItem key={m.id || DEFAULT_MODEL_VALUE} value={m.id || DEFAULT_MODEL_VALUE} title={m.id || `${who}'s default model`} className={chipClass}>
+          <ToggleGroupItem key={m.id || DEFAULT_VALUE} value={m.id || DEFAULT_VALUE} title={m.id || `${who}'s default model`} className={chipClass}>
             {m.label}
           </ToggleGroupItem>
         ))}
@@ -568,12 +567,12 @@ function NewSessionForm({
     <Field label="Effort">
       <ToggleGroup
         type="single"
-        value={effort || DEFAULT_EFFORT_VALUE}
-        onValueChange={(v) => v && chooseEffort(v === DEFAULT_EFFORT_VALUE ? '' : v)}
+        value={effort || DEFAULT_VALUE}
+        onValueChange={(v) => v && chooseEffort(v === DEFAULT_VALUE ? '' : v)}
         aria-label="Effort"
         className="no-scrollbar w-full justify-start overflow-x-auto"
       >
-        <ToggleGroupItem value={DEFAULT_EFFORT_VALUE} title={`${who}'s default effort`} className={chipClass}>
+        <ToggleGroupItem value={DEFAULT_VALUE} title={`${who}'s default effort`} className={chipClass}>
           {harnessInfo ? defaultEffortLabel(harnessInfo) : 'Default'}
         </ToggleGroupItem>
         {efforts.map((l) => (

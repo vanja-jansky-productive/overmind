@@ -48,12 +48,15 @@ describe('overmind defaults in the picker', () => {
     { id: '', label: 'Default' },
     { id: 'claude-opus-5-5', label: 'Opus 5.5' },
   ]
-  it('labels the default entry with the host default model and effort', () => {
-    expect(overmindDefaultLabel({ defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }, models)).toBe('Opus 5.5 · high')
-    expect(overmindDefaultLabel({ defaultModel: 'unknown-x', defaultEffort: null }, models)).toBe('unknown-x')
-    expect(overmindDefaultLabel({ defaultModel: null, defaultEffort: 'low' }, models)).toBe('low')
+  it('labels the default entry with the host default model only (the Effort row names the default effort)', () => {
+    const opusHigh = { defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }
+    const lowOnly = { defaultModel: null, defaultEffort: 'low' }
+    expect(overmindDefaultLabel(opusHigh, models)).toBe('Opus 5.5')
+    expect(overmindDefaultLabel({ defaultModel: 'unknown-x' }, models)).toBe('unknown-x')
+    expect(overmindDefaultLabel(lowOnly, models)).toBeNull()
     expect(overmindDefaultLabel({}, models)).toBeNull()
-    expect(withOvermindDefault(models, { defaultEffort: 'max' })[0]).toEqual({ id: '', label: 'Default · max' })
+    expect(withOvermindDefault(models, opusHigh)[0]).toEqual({ id: '', label: 'Default · Opus 5.5' })
+    expect(withOvermindDefault(models, lowOnly)).toBe(models)
     expect(withOvermindDefault(models, {})).toBe(models)
   })
   it('offeredHarnesses carries it to every harness, Claude included', () => {
@@ -62,8 +65,8 @@ describe('overmind defaults in the picker', () => {
       { id: 'codex', label: 'Codex', command: 'codex', installed: true, models: [{ id: '', label: 'Default' }], defaultEffort: 'xhigh' },
     ]
     const got = offeredHarnesses(rows, models)
-    expect(got[0].models[0].label).toBe('Default · Opus 5.5 · high')
-    expect(got[1].models[0].label).toBe('Default · xhigh')
+    expect(got[0].models[0].label).toBe('Default · Opus 5.5')
+    expect(got[1].models[0].label).toBe('Default')
   })
 })
 

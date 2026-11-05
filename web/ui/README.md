@@ -294,7 +294,8 @@ src/
   and `overmind.spawnModel` (a model id no longer offered falls back to the first option). Under Model,
   an Effort row of the same chips: the levels the picked model takes (`harnesses` → `models[].efforts`,
   else the harness's `efforts`; no row when the host lists none), Default first (no `effort`: the
-  Settings → Models default, else the harness's); remembered per harness in `overmind.spawnEffort.<harness>`,
+  Settings → Models default, else the harness's; it reads `Default · XHigh` only when a default
+  effort is saved, as the Model row's Default names a saved default model and nothing else); remembered per harness in `overmind.spawnEffort.<harness>`,
   a remembered level the picked model doesn't take reads Default. Branch from here has the same row
   (its chips, not remembered, like its model). The unsent
   first prompt is kept as a draft (`overmind.spawnDraft`, a week) across closing the form and reloads,

@@ -20,7 +20,7 @@ import { defaultEffortLabel, effortLabel, effortsFor, harnessLabel, offeredHarne
 import { sessionHref } from '@/lib/sessions'
 
 // Radix ToggleGroup treats '' as "nothing selected": the default model / effort needs a stand-in.
-const DEFAULT_MODEL_VALUE = '__default'
+const DEFAULT_VALUE = '__default'
 const CHIP = 'h-9 shrink-0 rounded-full border border-border bg-card px-3.5 text-sm data-[state=on]:border-primary/50 data-[state=on]:bg-accent'
 
 export interface BranchDialogProps {
@@ -158,15 +158,15 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
             <Label>Model</Label>
             <ToggleGroup
               type="single"
-              value={model || DEFAULT_MODEL_VALUE}
-              onValueChange={(v) => v && setModel(v === DEFAULT_MODEL_VALUE ? '' : v)}
+              value={model || DEFAULT_VALUE}
+              onValueChange={(v) => v && setModel(v === DEFAULT_VALUE ? '' : v)}
               aria-label="Model"
               className="no-scrollbar flex-wrap justify-start"
             >
               {models.map((m) => (
                 <ToggleGroupItem
-                  key={m.id || DEFAULT_MODEL_VALUE}
-                  value={m.id || DEFAULT_MODEL_VALUE}
+                  key={m.id || DEFAULT_VALUE}
+                  value={m.id || DEFAULT_VALUE}
                   title={m.id || `${who}'s default model`}
                   className={CHIP}
                 >
@@ -182,12 +182,12 @@ function BranchForm({ host, sessionId, harness: source, from, onClose, onOpenSes
             <Label>Effort</Label>
             <ToggleGroup
               type="single"
-              value={effort || DEFAULT_MODEL_VALUE}
-              onValueChange={(v) => v && setEffortChoice(v === DEFAULT_MODEL_VALUE ? '' : v)}
+              value={effort || DEFAULT_VALUE}
+              onValueChange={(v) => v && setEffortChoice(v === DEFAULT_VALUE ? '' : v)}
               aria-label="Effort"
               className="no-scrollbar flex-wrap justify-start"
             >
-              <ToggleGroupItem value={DEFAULT_MODEL_VALUE} title={`${who}'s default effort`} className={CHIP}>
+              <ToggleGroupItem value={DEFAULT_VALUE} title={`${who}'s default effort`} className={CHIP}>
                 {target ? defaultEffortLabel(target) : 'Default'}
               </ToggleGroupItem>
               {efforts.map((l) => (
