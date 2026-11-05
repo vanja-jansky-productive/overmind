@@ -238,8 +238,13 @@ const CODEX_FOOT = /Press enter to confirm/;
 const CODEX_OPTION = /^\s*(›\s*)?(\d+)\.\s+(.*)$/;
 const CODEX_HOTKEY = /\s*\((?:y|p|esc|a|n)\)\s*$/;
 
-/** The approval menu Codex shows, as `{ id, questions: [q], untouched, cursorAt }`; null when none. */
-export function parseCodexScreenPrompt(screen) {
+/**
+ * The approval menu Codex shows, as `{ id, questions: [q], untouched, cursorAt }`; null when none.
+ * `request`: the row's `approval_id` (the escalated call, or the hook's stamp) — mixed into the id,
+ * so the same command asked again is a new card, and a card for an earlier request cannot
+ * answer a later one with the same text.
+ */
+export function parseCodexScreenPrompt(screen, { request = null } = {}) {
   const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
   let head = -1;
   for (let i = lines.length - 1; i >= 0 && head < 0; i -= 1) if (lines[i].includes(CODEX_HEAD)) head = i;
@@ -309,7 +314,7 @@ export function parseCodexScreenPrompt(screen) {
   const command = cmd.join('\n');
   const question = [CODEX_HEAD, ...(meta.thread ? [`Thread: ${meta.thread}`] : []), `$ ${command}`, ...(meta.reason ? [`Reason: ${meta.reason}`] : [])].join('\n');
   const q = { header: 'Approval', question, multiSelect: false, noOther: true, options };
-  const sig = squash([question, ...options.map((o) => o.label)].join('\n'));
+  const sig = squash([question, ...options.map((o) => o.label), ...(request ? [`request ${request}`] : [])].join('\n'));
   const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
   return { id, questions: [q], untouched: cursorAt === 0, cursorAt };
 }

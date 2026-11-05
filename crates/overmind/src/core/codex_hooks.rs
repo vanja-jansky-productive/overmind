@@ -248,6 +248,9 @@ pub struct Trigger {
     pub label: String,
     /// The command, when known (first line; " (+N)" for several escalated calls).
     pub command: Option<String>,
+    /// This request's identity: the pending escalated call's `call_id`, else the sidecar's
+    /// stamp. The same command asked again is another request (the web's card id mixes it in).
+    pub request: Option<String>,
 }
 
 /// `sandbox_permissions\W{1,4}require_escalated`, without a regex crate: the key is
@@ -434,12 +437,18 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
         }),
         _ => None,
     };
+    let request = match (&pending, sc) {
+        (Some((call_id, _, _)), _) if !call_id.is_empty() => Some(call_id.clone()),
+        (_, Some(s)) => Some(format!("hook-{}", s.at)),
+        _ => None,
+    };
     Some(Trigger {
         sidecar: sidecar_live,
         sidecar_unresolved: sidecar_live && !sidecar_ran,
         rollout,
         label,
         command,
+        request,
     })
 }
 
@@ -1490,6 +1499,15 @@ x = 1
         let t = |lines: &[&str]| trigger(&text(lines), None, 0);
         let hi = t(&[STARTED, L17]).unwrap();
         assert!(hi.rollout && !hi.sidecar);
+        assert!(
+            hi.request.as_deref().is_some_and(|r| !r.is_empty()),
+            "the call id names the request"
+        );
+        assert_ne!(
+            t(&[STARTED, L17]).unwrap().request,
+            t(&[STARTED, L168]).unwrap().request,
+            "another call, another request"
+        );
         assert_eq!(hi.label, "exec approval");
         assert_eq!(hi.command.as_deref(), Some("printf hi > hello.txt"));
         assert_eq!(
@@ -1531,6 +1549,15 @@ x = 1
         let trig = trigger(&text(&[STARTED, L17]), Some(&s), at - 60_000).unwrap();
         assert!(trig.sidecar && trig.sidecar_unresolved && trig.rollout);
         assert_eq!(trig.command.as_deref(), Some("printf hi > hello.txt"));
+        let hook_only = trigger(&text(&[STARTED]), Some(&s), 0).unwrap();
+        assert_eq!(hook_only.request, Some(format!("hook-{at}")));
+        assert_ne!(
+            hook_only.request,
+            trigger(&text(&[STARTED]), Some(&sc(true, at + 5_000, None)), 0)
+                .unwrap()
+                .request,
+            "the same command asked again by the hook is another request"
+        );
         // The command ran (approved): still a trigger (the screen decides) but resolved for Unknown.
         let ran = trigger(&text(&[STARTED, L17, ITEM_HI]), Some(&s), at - 60_000).unwrap();
         assert!(ran.sidecar && !ran.sidecar_unresolved && !ran.rollout);
@@ -1597,6 +1624,7 @@ x = 1
             rollout: true,
             label: "exec approval".into(),
             command: Some("from rollout".into()),
+            request: None,
         };
         let menu = || Ok(MENU.to_string());
         assert_eq!(

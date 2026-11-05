@@ -119,6 +119,7 @@ Local discovery is `overmind list --json` (timeout 8s), an array of:
 pid, session_id (uuid), name, cwd, status ("busy"|"idle"|"waiting"|"unknown"), updated_at (ms),
 tty, backend ("iterm"|"tmux"|"unknown"), handle (iTerm session id | tmux pane id like "%87"),
 tab, tmux_session (string|null), name_source, waiting_for (string|null),
+approval_id (string, a waiting Codex row's approval request; absent otherwise),
 title (first prompt, may be long), gen_title (string|null),
 display_title (string — THE title to draw, see docs/architecture.md → Session titles),
 context ({ used, window, pct, model } | null — context-window usage, see docs/architecture.md)

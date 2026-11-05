@@ -515,7 +515,7 @@ export function createApi({
     } catch {
       return null;
     }
-    const prompt = parse(screen);
+    const prompt = parse(screen, { request: session.approval_id ?? null });
     if (!prompt) return null;
     const { id, questions } = prompt;
     return { role: 'assistant', kind: 'question', id, questions, text: questionsText(questions), ts: Date.now(), final: true };
@@ -561,7 +561,7 @@ export function createApi({
   async function answerScreenQuestion(session, toolUseId, body) {
     if (session.status !== 'waiting') throw new HttpError('the session is not waiting on a question', 409);
     const parse = screenPromptParser(session.harness);
-    const read = async () => (parse ? parse(await backend.peek(session, 80)) : null);
+    const read = async () => (parse ? parse(await backend.peek(session, 80), { request: session.approval_id ?? null }) : null);
     const prompt = await read();
     if (prompt?.id !== toolUseId) throw new HttpError('the terminal is no longer showing this question', 409);
     const check = validateAnswer(body, prompt.questions);

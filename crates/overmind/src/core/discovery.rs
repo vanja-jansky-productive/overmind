@@ -61,6 +61,10 @@ pub struct Session {
     pub name_source: Option<String>,
     /// Registry `waitingFor`: what a `waiting` session is blocked on.
     pub waiting_for: Option<String>,
+    /// A `waiting` Codex row's approval request: its escalated call's id, else the hook's
+    /// stamp — another request for the same command gets another one. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
     pub title: Option<String>,
     /// The LLM-generated title — what the work *is*, not where it lives. Filled
     /// in from `~/.claude/overmind-names.json` and the dashboard's background
@@ -123,6 +127,7 @@ impl Default for Session {
             tmux_session: None,
             name_source: None,
             waiting_for: None,
+            approval_id: None,
             title: None,
             gen_title: None,
             display_title: None,
@@ -389,6 +394,7 @@ pub fn discover_checked() -> Result<Vec<Session>, String> {
             tmux_session,
             name_source: reg.name_source,
             waiting_for: reg.waiting_for,
+            approval_id: None,
             session_id: reg.session_id,
             name: reg.name,
             cwd: reg.cwd,
@@ -543,6 +549,7 @@ fn apply_approval(
     if let Some(w) = truth(trig, look, || peek(s)) {
         s.status = "waiting".into();
         s.waiting_for = Some(w);
+        s.approval_id = trig.request.clone();
     }
 }
 
@@ -1186,6 +1193,7 @@ mod tests {
             rollout: true,
             label: "exec approval".into(),
             command: Some("printf hi > hello.txt".into()),
+            request: Some("call_1".into()),
             ..Default::default()
         };
         let row = |backend| Session {
@@ -1203,11 +1211,13 @@ mod tests {
             s.waiting_for.as_deref(),
             Some("exec approval: `printf hi > hello.txt`")
         );
+        assert_eq!(s.approval_id.as_deref(), Some("call_1"));
         let mut s = row(Backend::Tmux);
         apply_approval(&mut s, &trig, |_| {
             Ok("✔ You approved codex to run printf hi".into())
         });
         assert_eq!((s.status.as_str(), s.waiting_for), ("busy", None));
+        assert_eq!(s.approval_id, None);
         // iTerm without the hook: no osascript, busy.
         let mut s = row(Backend::Iterm);
         apply_approval(&mut s, &trig, |_| panic!("no peek"));
