@@ -359,11 +359,16 @@ export function createApi({
 
     if (action === 'messages') {
       const limit = clampLines(url.searchParams.get('limit'), 60, 1, 500);
+      // `after` (the previous answer's cursor; present but empty = none yet) selects the delta
+      // shape: only what changed since, the screen prompt as its own `screen` field. Without it,
+      // today's shape (an old UI), the screen prompt pushed into `messages`.
+      const after = url.searchParams.get('after');
       const session = await resolveLocalSession(id);
-      const result = await transcripts.messages(session, limit);
+      const result = await transcripts.delta(session, { limit, after });
       if (!result) throw new HttpError('transcript not found for this session', 404);
-      const onScreen = await screenQuestion(session, result.messages);
-      if (onScreen) result.messages.push(onScreen);
+      // Over the whole cached list, never a limit-500 read (that would grow the tail every poll).
+      const onScreen = await screenQuestion(session, result.all);
+      if (after === null && onScreen) result.messages.push(onScreen);
       return {
         status: 200,
         body: {
@@ -380,6 +385,12 @@ export function createApi({
           truncated: result.truncated,
           updatedAt: result.updatedAt,
           capturedAt: Date.now(),
+          // Deltas (#37): `full` = replace the list; else keep what is before `from` and append.
+          full: result.full,
+          from: result.from,
+          stable: result.stable,
+          cursor: result.cursor,
+          ...(after === null ? {} : { screen: onScreen ?? null }),
         },
       };
     }

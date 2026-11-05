@@ -182,7 +182,7 @@ JSON everywhere, same origin, no auth. Errors are `{ "error": "message" }`.
 | GET | `/api/hosts/:host/sessions/:id/peek` | `?lines=200` (10..2000) | `{ host, id, backend, lines, text, capturedAt }` |
 | GET | `/api/hosts/:host/sessions/:id/screen` | | the live terminal's frame (tmux only, else **409**): `{ host, id, backend, cols, rows, cursor: { x, y, visible }, altScreen, appCursor, mouse: { tracking: none\|click\|drag\|all, sgr, utf8 }, lines: [row with SGR colours], capturedAt }` |
 | POST | `/api/hosts/:host/sessions/:id/input` | `{ data }` (1..8000 chars) | `{ ok: true }` — raw terminal input (keys, escape sequences, mouse reports) written to the pane as is (tmux `send-keys -H`; iTerm `write text` without newline). Types into a live agent. Send one key / mouse event per request: Claude Code reads two escape sequences in one write as Esc |
-| GET | `/api/hosts/:host/sessions/:id/messages` | `?limit=60` (1..500) | `{ host, id, status, backend, name, limit, messages: [Message], total, truncated, updatedAt, capturedAt }` |
+| GET | `/api/hosts/:host/sessions/:id/messages` | `?limit=60` (1..500) `&after=<cursor>` (present, even empty = delta shape) | `{ host, id, status, backend, name, limit, messages: [Message], total, truncated, updatedAt, capturedAt, full, from, stable, cursor }` (+ `screen: Message \| null` with `after`) — see Chat deltas below |
 | POST | `/api/hosts/:host/sessions/:id/send` | `{ text }` (1..8000 chars, not blank) | `{ ok: true }` |
 | POST | `/api/hosts/:host/sessions/:id/keys` | `{ key }`, one of `Enter`, `Escape`, `Up`, `Down` | `{ ok: true }` |
 | POST | `/api/hosts/:host/sessions/:id/rename` | `{ title }` (trimmed, 1..64 chars, one line) | `{ ok: true, host, id, result, title, from, tmux, message, … }` — the `overmind rename --json` report. **409** `{ error, result: "held", held: "waiting", … }` when the session is waiting on a prompt (nothing typed); 400 bad title; 404 unknown session; 502/504 CLI failure / timeout. Proxied once to a peer like the other session actions |
@@ -274,6 +274,20 @@ Each host advertises its own `spawnDirs` (absolute paths on that host; the New s
 Conversation only: tool calls, tool results, thinking, hooks and sidechains are dropped.
 Assistant text that ends a turn is `final: true`; narration between tool calls is `final: false`.
 Last `limit` messages, oldest first; `truncated` when older ones exist.
+
+**Chat deltas** (#37, lib/transcript.mjs `delta` / `sliceDelta`): a poll carrying `after` (the
+previous answer's `cursor`; `after=` empty = "I speak deltas, none yet") gets only what changed:
+`full: true` → replace the list with `messages` (the last `limit`); `full: false` → keep the
+messages before the absolute index `from` and append `messages` (`from === total` and `messages:
+[]` = nothing changed, ~250 B). The cursor is opaque (`gen:stable:total:tailHash:limit`): `stable`
+is the first index a later transcript line could still change (the last bubble while it streams,
+an open question within 20 messages, the queued suffix), `tailHash` a hash of the messages from
+there, `gen` the server cache's index space — a transcript shrunk / replaced / rewritten, a grown
+tail (a larger `limit`), a span past 1.5 × the 6 MB tail, a server restart, another `limit`, or a
+gap longer than `limit` answer `full`. With `after`, the screen prompt is the `screen` field on
+every answer (never in `messages`); without it the body is the old shape (`full: true`, the screen
+prompt last in `messages`), so an old UI keeps working, and an old server's answer has no
+`cursor` (the UI then merges whole lists). Peers forward the query string verbatim.
 
 **spawn**: `name` is sanitized (lowercase, `[a-z0-9_-]`, ≤ 40, default `om-hhmmss`); `dir`
 defaults to the host's first offered `spawnDirs` entry and must be an existing absolute directory that,

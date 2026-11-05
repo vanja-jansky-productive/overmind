@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -11,9 +12,22 @@ import { createHttpServer } from '../lib/app.mjs';
 import { createOvermind } from '../lib/overmind.mjs';
 import { createOvermindCli } from '../lib/overmind-cli.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
+import { createTranscriptReader, sliceDelta, snapshotEntry, transcriptPath } from '../lib/transcript.mjs';
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
+}
+
+/** A transcripts fake over a list (or a function of the call): `messages` as before, `delta` through the real slicing. */
+function fakeTranscripts(list) {
+  const now = () => (typeof list === 'function' ? list() : list).slice();
+  return {
+    messages: async () => {
+      const all = now();
+      return { messages: all, total: all.length, truncated: false, updatedAt: 1 };
+    },
+    delta: async (s, o) => ({ ...sliceDelta(snapshotEntry(now(), { gen: 'f0f0f0f0' }), o), updatedAt: 1 }),
+  };
 }
 
 function fakeHost(self, sessions) {
@@ -26,7 +40,7 @@ function fakeHost(self, sessions) {
     screen: async (s) => (calls.push(['screen', s.session_id]), { cols: 80, rows: 2, cursor: { x: 0, y: 1, visible: true }, altScreen: true, appCursor: false, mouse: { tracking: 'all', sgr: true, utf8: false }, lines: [`screen of ${s.name}`, ''] }),
     input: async (s, data) => void calls.push(['input', s.session_id, data]),
   };
-  const transcripts = { messages: async () => ({ messages: [{ role: 'user', text: 'hi' }], total: 1, truncated: false, updatedAt: 1 }) };
+  const transcripts = fakeTranscripts([{ role: 'user', text: 'hi' }]);
   const spawner = { spawn: async (req) => (calls.push(['spawn', req]), { name: req.name, dir: req.dir, tmuxSession: req.name, command: 'claude', trusted: false }) };
   const killer = { kill: async (s) => (calls.push(['kill', s.session_id]), { process: 'terminated', terminal: 'tmux-session-killed' }) };
   const autoNamer = {
@@ -832,7 +846,7 @@ function cursorDown(screen) {
 test('a question only on screen (not yet in the transcript) shows in messages and is answered tab by tab', async (t) => {
   const id = 'cccccccc-0000-0000-0000-000000000004';
   const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%4', updated_at: 4 }]);
-  host.transcripts = { messages: async () => ({ messages: [{ role: 'assistant', kind: 'assistant', text: 'Need a pick.' }], total: 1, truncated: false }) };
+  host.transcripts = fakeTranscripts([{ role: 'assistant', kind: 'assistant', text: 'Need a pick.' }]);
   const tab = (q, cursor = 1) =>
     `←  ☐ A  ☐ B  ✔ Submit  →\n\n${q}\n\n${cursor === 1 ? '❯' : ' '} 1. Yes\n${cursor === 2 ? '❯' : ' '} 2. No\n  3. Type something.\n${'─'.repeat(20)}\n  4. Chat about this\n\nEnter to select · Esc to cancel`;
   let screen = tab('First?');
@@ -875,7 +889,7 @@ test('a question only on screen (not yet in the transcript) shows in messages an
 test('a waiting Codex row: its approval menu is a card, answered by its menu index, 409 once the screen moved on', async (t) => {
   const id = '01a1a876-0000-7000-8000-000000000001';
   const host = fakeHost('solo', [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', waiting_for: 'exec approval: `printf hi > hello.txt`', backend: 'tmux', handle: '%9', updated_at: 9 }]);
-  host.transcripts = { messages: async () => ({ messages: [{ role: 'user', kind: 'user', text: 'create hello.txt' }], total: 1, truncated: false }) };
+  host.transcripts = fakeTranscripts([{ role: 'user', kind: 'user', text: 'create hello.txt' }]);
   let screen = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
   host.backend.peek = async () => screen;
   host.backend.keys = async (s, key) => {
@@ -913,7 +927,7 @@ test('review-codex S3/N1: the same command asked again is a new card — the ear
   const id = '01a1a876-0000-7000-8000-000000000003';
   const rows = [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', approval_id: 'call_a', backend: 'tmux', handle: '%9', updated_at: 9 }];
   const host = fakeHost('solo', rows);
-  host.transcripts = { messages: async () => ({ messages: [], total: 0, truncated: false }) };
+  host.transcripts = fakeTranscripts([]);
   const screen = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
   host.backend.peek = async () => screen;
   const overmind = createOvermind({ cli: host.cli, self: 'solo' });
@@ -939,7 +953,7 @@ test('review-codex S3/N1: the same command asked again is a new card — the ear
 test('review-codex S1: the screen is read again before Enter — a moved cursor or another approval gets no Enter', async (t) => {
   const id = '01a1a876-0000-7000-8000-000000000002';
   const host = fakeHost('solo', [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', backend: 'tmux', handle: '%9', updated_at: 9 }]);
-  host.transcripts = { messages: async () => ({ messages: [], total: 0, truncated: false }) };
+  host.transcripts = fakeTranscripts([]);
   const menu = fs.readFileSync(new URL('./fixtures/codex-approval.txt', import.meta.url), 'utf8');
   const other = menu.replaceAll('printf hi > hello.txt', 'rm -rf build');
   let screen = menu;
@@ -999,7 +1013,7 @@ test('answer types the keys for the pending question, only when it is safe to', 
   const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%3', updated_at: 3 }]);
   const questions = [{ question: 'Merge it?', header: 'Merge', multiSelect: false, options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }] }];
   let answered = null;
-  host.transcripts = { messages: async () => ({ messages: [{ role: 'assistant', kind: 'question', id: 'tq1', questions, text: '', ...answered }], total: 1, truncated: false }) };
+  host.transcripts = fakeTranscripts(() => [{ role: 'assistant', kind: 'question', id: 'tq1', questions, text: '', ...answered }]);
   let screen = 'Merge it?\n❯ 1. Yes\n  2. No\nEnter to select · ↑/↓ to navigate';
   host.backend.peek = async () => screen;
   host.backend.type = async (s, text) => void host.calls.push(['type', s.session_id, text]);
@@ -1097,4 +1111,101 @@ test('refreshOvermind({ wait: true }) with an armed watcher resolves after a lis
   assert.equal(runs.length, 1);
   await api.refreshOvermind({ wait: true });
   assert.equal(runs.length, 2, 'forced past the validated cache');
+});
+
+// --- chat deltas (#37) -----------------------------------------------------------------------
+
+test('messages: no `after` is today\'s shape (+ full/from/stable/cursor), the screen prompt inside messages', async (t) => {
+  const id = 'cccccccc-0000-0000-0000-000000000037';
+  const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%4', updated_at: 4 }]);
+  host.transcripts = fakeTranscripts([{ role: 'user', kind: 'user', text: 'go' }, { role: 'assistant', kind: 'assistant', text: 'Need a pick.' }]);
+  host.backend.peek = async () => '←  ☐ A  ✔ Submit  →\n\nFirst?\n\n❯ 1. Yes\n  2. No\n  3. Type something.\n\nEnter to select · Esc to cancel';
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, warmOvermind: false });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  const url = (q = '') => `${base}/api/hosts/solo/sessions/${id}/messages${q}`;
+
+  const legacy = await get(url());
+  assert.equal(legacy.status, 200);
+  for (const k of ['host', 'id', 'status', 'backend', 'name', 'limit', 'messages', 'queue', 'total', 'truncated', 'updatedAt', 'capturedAt', 'full', 'from', 'stable', 'cursor']) assert.ok(k in legacy.body, k);
+  assert.equal('screen' in legacy.body, false);
+  assert.deepEqual(legacy.body.messages.map((m) => m.kind), ['user', 'assistant', 'question'], 'the screen prompt last, as today');
+  assert.deepEqual([legacy.body.total, legacy.body.truncated, legacy.body.full, legacy.body.from], [2, false, true, 0]);
+
+  const first = await get(url('?after='));
+  assert.deepEqual(first.body.messages.map((m) => m.kind), ['user', 'assistant'], 'never inside messages');
+  assert.equal(first.body.screen.kind, 'question');
+  assert.equal(first.body.full, true);
+  const same = await get(url(`?after=${encodeURIComponent(first.body.cursor)}`));
+  assert.deepEqual([same.body.full, same.body.from, same.body.messages, same.body.cursor], [false, 2, [], first.body.cursor]);
+  assert.equal(same.body.screen.id, first.body.screen.id, 'sent on every answer, "same" too');
+  assert.ok(JSON.stringify(same.body).length < 1500);
+
+  host.backend.peek = async () => '⏺ Done.';
+  const gone = await get(url(`?after=${encodeURIComponent(first.body.cursor)}`));
+  assert.equal(gone.body.screen, null, 'the card drops the moment the prompt leaves the terminal');
+});
+
+test('messages: a real reader behind the route — an idle poll is "same", an append is a small delta', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'overmind-delta-route-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const id = 'dddddddd-0000-0000-0000-000000000037';
+  const file = transcriptPath('/w', id, home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const line = (type, text, mid) => JSON.stringify({ type, timestamp: '2026-11-05T10:00:00Z', message: { id: mid, role: type, content: [{ type: 'text', text }], stop_reason: 'end_turn' } });
+  fs.writeFileSync(file, Array.from({ length: 30 }, (_, i) => `${line('user', `prompt ${i}`)}\n${line('assistant', `reply ${i} ${'z'.repeat(400)}`, `m${i}`)}\n`).join(''));
+  const host = fakeHost('solo', [{ session_id: id, name: 'r', status: 'idle', backend: 'tmux', handle: '%5', cwd: '/w', updated_at: 5 }]);
+  host.transcripts = createTranscriptReader({ home });
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, warmOvermind: false });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  const raw = async (after) => {
+    const res = await fetch(`${base}/api/hosts/solo/sessions/${id}/messages?limit=60${after == null ? '' : `&after=${encodeURIComponent(after)}`}`);
+    const text = await res.text();
+    return { bytes: Buffer.byteLength(text), body: JSON.parse(text) };
+  };
+  const legacy = await raw(null);
+  const first = await raw('');
+  assert.deepEqual(first.body.messages, legacy.body.messages, 'a full answer is the legacy list');
+  const idle = await raw(first.body.cursor);
+  assert.equal(idle.body.messages.length, 0);
+  assert.ok(idle.bytes < 400, `idle poll ${idle.bytes} B`);
+  fs.appendFileSync(file, `${line('user', 'one more')}\n`);
+  const next = await raw(idle.body.cursor);
+  assert.deepEqual(next.body.messages.map((m) => m.text.slice(0, 8)), ['reply 29', 'one more']);
+  assert.ok(next.bytes < legacy.bytes / 10, `delta ${next.bytes} B vs full ${legacy.bytes} B`);
+});
+
+test('messages through a peer: the proxy passes `after` and the delta both ways; an old peer\'s body passes unchanged', async (t) => {
+  const { urls, lap } = await startPair(t);
+  const via = (q) => get(`${urls.workstation}/api/hosts/laptop/sessions/aaaaaaaa/messages${q}`);
+  const first = await via('?limit=60&after=');
+  assert.deepEqual([first.status, first.body.host, first.body.full, first.body.messages.length], [200, 'laptop', true, 1]);
+  const same = await via(`?limit=60&after=${encodeURIComponent(first.body.cursor)}`);
+  assert.deepEqual([same.body.full, same.body.messages], [false, []]);
+  const inner = lap.transcripts.delta;
+  lap.transcripts.delta = async (s, o) => (lap.calls.push(['delta', o.after]), inner(s, o));
+  await via(`?limit=60&after=${encodeURIComponent(first.body.cursor)}`);
+  assert.deepEqual(lap.calls.at(-1), ['delta', first.body.cursor], 'the peer got the cursor verbatim');
+
+  // An old peer: answers today's body whatever the query says (no cursor, no full).
+  const oldBody = { host: 'old', id: 'eeee', status: 'idle', backend: 'tmux', name: 'x', limit: 60, messages: [{ role: 'user', kind: 'user', text: 'hi' }], queue: null, total: 1, truncated: false, updatedAt: 1, capturedAt: 2 };
+  const old = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(req.url.includes('/messages') ? { ...oldBody, url: req.url } : { hosts: [] }));
+  });
+  const oldUrl = await listen(old);
+  t.after(() => old.close());
+  const cfg = normalizeConfig({ self: 'laptop', hosts: { laptop: { web: urls.laptop }, old: { web: oldUrl } } }, { env: {}, home: '/home/tester' });
+  const proxy = createApi({ config: cfg, ...fakeHost('laptop', []), warmOvermind: false });
+  t.after(() => proxy.stop());
+  const res = await proxy({ method: 'GET', headers: {} }, new URL('http://x/api/hosts/old/sessions/eeee/messages?limit=60&after=abc'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.cursor, undefined, 'no cursor: the new UI reads it as a legacy answer');
+  assert.deepEqual(res.body.messages, oldBody.messages);
+  assert.match(res.body.url, /after=abc/);
 });

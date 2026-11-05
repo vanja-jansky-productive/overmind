@@ -10,6 +10,7 @@ import { createApi } from '../lib/api.mjs';
 import { createHttpServer } from '../lib/app.mjs';
 import { normalizeConfig } from '../lib/config.mjs';
 import { createPromptQueue } from '../lib/queue.mjs';
+import { sliceDelta, snapshotEntry } from '../lib/transcript.mjs';
 
 const SID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
@@ -138,7 +139,10 @@ test('HTTP: …/queue routes, the chat poll carries the queue, 501 without one',
   const fx = fixture(t);
   const config = normalizeConfig({ self: 'laptop' }, { env: {}, home: '/home/tester' });
   const overmind = { localHost: async () => ({ name: 'laptop', ok: true, sessions: [fx.session] }) };
-  const transcripts = { messages: async () => ({ messages: [], total: 0, truncated: false, updatedAt: 0 }) };
+  const transcripts = {
+    messages: async () => ({ messages: [], total: 0, truncated: false, updatedAt: 0 }),
+    delta: async (s, o) => ({ ...sliceDelta(snapshotEntry([], { gen: 'f0f0f0f0' }), o), updatedAt: 0 }),
+  };
   const urls = {};
   for (const [k, queue] of [['on', fx.queue], ['off', null]]) {
     const api = createApi({ config, overmind, backend: {}, transcripts, spawner: {}, queue, warmOvermind: false });
