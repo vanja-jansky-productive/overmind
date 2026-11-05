@@ -98,6 +98,11 @@ test('the spawn line takes the defaults unless the pick or the launcher sets the
   assert.equal(line('codex', 'codex', '', { effort: 'xhigh' }), "codex -c model_reasoning_effort=xhigh 'go'");
   assert.equal(line('pi', 'pi', '', { model: null, effort: 'medium' }), "pi --thinking medium 'go'");
   assert.equal(line('claude', 'claude', '', {}), "claude 'go'");
+  // a picked effort wins over the default, also over a launcher's own (the harness's last flag wins)
+  const picked = (launcher, harness, effort, defaults) => launchCommand({ launcher, harness, prompt: 'go', ...applyHarnessDefaults(launcher, harness, '', defaults, effort) });
+  assert.equal(picked('claude', 'claude', 'max', d), "claude --model 'claude-opus-5-5' --effort max 'go'");
+  assert.equal(picked('codex -c model_reasoning_effort=high', 'codex', 'low', {}), "codex -c model_reasoning_effort=high -c model_reasoning_effort=low 'go'");
+  assert.equal(picked('codex', 'codex', '', { effort: 'xhigh' }), "codex -c model_reasoning_effort=xhigh 'go'", "'' is no pick");
 });
 
 test('harnessDefaultsOf reads leniently: bad values are dropped, never fatal', () => {

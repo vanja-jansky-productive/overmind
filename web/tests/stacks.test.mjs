@@ -477,7 +477,7 @@ test('DELETE stack → { removed }; POST stacks/sync → the sync report', async
 
 test('sibling spawn from a session: ensure, spawn in its cwd with the context line, then add in the background', async (t) => {
   const { call, host, cwd } = solo(t);
-  const res = await call('POST', '/api/hosts/laptop/sessions/aaaaaaaa/stack/spawn', { prompt: '  Write the tests\n', name: 'login-tests', model: 'claude-sonnet-5' });
+  const res = await call('POST', '/api/hosts/laptop/sessions/aaaaaaaa/stack/spawn', { prompt: '  Write the tests\n', name: 'login-tests', model: 'claude-sonnet-5', effort: 'high' });
   assert.equal(res.status, 200);
   assert.equal(res.body.host, 'laptop');
   assert.equal(res.body.created, true);
@@ -490,6 +490,7 @@ test('sibling spawn from a session: ensure, spawn in its cwd with the context li
   const spawned = host.calls.find((c) => c.spawn).spawn;
   assert.equal(spawned.prompt, `${host.view.contextLine} Write the tests`, 'like core::stack::stack_prompt: the prompt trimmed');
   assert.equal(spawned.dir, cwd);
+  assert.equal(spawned.effort, 'high');
   assert.deepEqual(host.stackCalls()[0], ['ensure', SRC_ID]);
   const joined = await host.joins[0];
   assert.deepEqual(joined, { ok: true, reason: 'added', session: 'cccccccc-0000-0000-0000-000000000001', tries: 1 });
@@ -688,7 +689,7 @@ test('a sibling on another host: the peer spawns it with the remote context line
   assert.match(noDir.body.error, /dir is required/);
   assert.equal(hosts.laptop.stackCalls().filter((c) => c[0] === 'ensure').length, 0);
 
-  const res = await json('POST', `${home}/sessions/${SRC_ID}/stack/spawn`, { host: 'workstation', dir: cwd, prompt: 'Run the e2e suite', name: 'login-e2e' });
+  const res = await json('POST', `${home}/sessions/${SRC_ID}/stack/spawn`, { host: 'workstation', dir: cwd, prompt: 'Run the e2e suite', name: 'login-e2e', effort: 'low' });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.host, 'laptop');
   assert.equal(res.body.created, true);
@@ -699,6 +700,7 @@ test('a sibling on another host: the peer spawns it with the remote context line
   const spawned = hosts.workstation.calls.find((c) => c.spawn).spawn;
   assert.equal(spawned.dir, cwd);
   assert.equal(spawned.prompt, `${hosts.laptop.view.remoteContextLine} Run the e2e suite`);
+  assert.equal(spawned.effort, 'low', 'the pick travels to the peer');
   // The join: the laptop found the session in the workstation's list and added it there.
   assert.equal(hosts.laptop.joins.length, 1);
   const joined = await hosts.laptop.joins[0];

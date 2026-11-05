@@ -65,18 +65,19 @@ export function effortArgs(harness, level) {
 
 /**
  * What a spawn adds to `launcher` from the host's defaults (`harnesses.<id>.model` / `.effort`,
- * Settings → Models): the picked model, else the default one, and the default effort — unless the
- * launcher already sets one (a wrapper with flags keeps its own). Mirrors `Harness::with_defaults`.
+ * Settings → Models): the picked model and effort, else the default ones — a default only when the
+ * launcher does not already set one (a wrapper with flags keeps its own; a pick is still added, the
+ * harness's last flag wins). Mirrors `Harness::with_defaults`.
  * @returns {{ model: string, effort: string | null }}
  */
-export function applyHarnessDefaults(launcher, harness, model, defaults = {}) {
+export function applyHarnessDefaults(launcher, harness, model, defaults = {}, effort = '') {
   const words = String(launcher).split(/\s+/);
   const has = (...flags) => words.some((w) => flags.some((f) => w === f || w.startsWith(`${f}=`)));
   const setsModel = has('--model') || (harness === 'codex' && has('-m'));
   const setsEffort = has('--effort', '--thinking') || String(launcher).includes('model_reasoning_effort');
   return {
     model: model || (!setsModel && defaults.model) || '',
-    effort: (!setsEffort && defaults.effort) || null,
+    effort: effort || (!setsEffort && defaults.effort) || null,
   };
 }
 
@@ -139,6 +140,9 @@ export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
     if (!HARNESSES.includes(body.harness)) errors.push(`harness must be one of ${HARNESSES.join(', ')}`);
     else harness = body.harness;
   }
+  // Reasoning effort, typed as a flag: a lowercase level ('' / absent = the default). Which levels a
+  // model takes is the picker's business (`overmind harness list`); the CLI checks it too.
+  const effort = validEffort(body?.effort, errors);
   // A GitHub identity the session acts as (`ghIdentities`); '' / absent = the user's own.
   let ghIdentity = null;
   if (body?.ghIdentity != null && body.ghIdentity !== '') {
@@ -154,7 +158,17 @@ export function validateSpawnRequest(body, { spawnDirs = [] } = {}) {
     else embed = body.embed;
   }
   if (errors.length) return { ok: false, error: errors.join('; ') };
-  return { ok: true, name, title, dir, prompt, nameGiven, model, harness, ghIdentity, embed };
+  return { ok: true, name, title, dir, prompt, nameGiven, model, effort, harness, ghIdentity, embed };
+}
+
+/** A request's `effort`: '' when absent, the level when well-formed; else an error is pushed. */
+export function validEffort(raw, errors) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw !== 'string' || !EFFORT_RE.test(raw)) {
+    errors.push('effort must be a lowercase level like "high"');
+    return '';
+  }
+  return raw;
 }
 
 /** True when `child` is `root` or lies beneath it (both already resolved). */
@@ -260,8 +274,8 @@ export function createSpawner({
     await wait(enterDelayMs);
   }
 
-  /** @returns {{ name, dir, tmuxSession, command, trusted, model, harness, ghIdentity, embed, resume? }} */
-  async function spawn({ name, title = '', dir, prompt, nameGiven = true, model = '', harness = 'claude', ghIdentity = null, embed = null, resume = null }) {
+  /** @returns {{ name, dir, tmuxSession, command, trusted, model, effort?, harness, ghIdentity, embed, resume? }} */
+  async function spawn({ name, title = '', dir, prompt, nameGiven = true, model = '', effort = '', harness = 'claude', ghIdentity = null, embed = null, resume = null }) {
     if (ghIdentity && !ghIdentities.some((i) => i.name === ghIdentity)) {
       throw Object.assign(new Error(`no GitHub identity "${ghIdentity}" in this host's overmind config`), { status: 400 });
     }
@@ -282,7 +296,7 @@ export function createSpawner({
     await run(tmux, ['new-session', '-d', '-s', name, '-c', dir, '-e', 'DISABLE_AUTO_UPDATE=true'], { timeout: 8000 });
     let base = launchers[harness] || (harness === 'claude' ? launcher : harness);
     if (ghIdentity) base = await ghIdentityLauncher(ghIdentity, base);
-    const picked = applyHarnessDefaults(base, harness, model, harnessDefaults()?.[harness] ?? {});
+    const picked = applyHarnessDefaults(base, harness, model, harnessDefaults()?.[harness] ?? {}, effort);
     const launch = { launcher: base, harness, name: nameGiven ? name : null, title: title || null, prompt, model: picked.model, effort: picked.effort, resume };
     let command = launchCommand(launch);
     if (Buffer.byteLength(command) > TYPED_LINE_MAX) {
@@ -303,7 +317,7 @@ export function createSpawner({
     if (embed) await run(tmux, ['set-option', '-p', '-t', `${name}:`, '@overmind_embed', embed], { timeout: 5000 }).catch(() => {});
     const trusted = await acceptTrustPrompt(name, { harness });
     if (!trusted) await ensureStarted(name, { harness });
-    return { name, dir, tmuxSession: name, command, trusted, model: picked.model || null, harness, ghIdentity, embed, ...(resume ? { resume } : {}) };
+    return { name, dir, tmuxSession: name, command, trusted, model: picked.model || null, ...(effort ? { effort } : {}), harness, ghIdentity, embed, ...(resume ? { resume } : {}) };
   }
 
   /**

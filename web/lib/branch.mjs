@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { MODEL_ID_RE } from './config.mjs';
-import { sanitizeName } from './spawn.mjs';
+import { sanitizeName, validEffort } from './spawn.mjs';
 import { validateTitle } from './util.mjs';
 import { claudeHome, codexRef, encodeCwd, locateTranscript, parseCodexTranscript, parseTranscript } from './transcript.mjs';
 
@@ -50,6 +50,7 @@ export function validateBranchRequest(body, source) {
     if (typeof body.model !== 'string' || !MODEL_ID_RE.test(body.model)) errors.push('model must be 1-100 chars of letters, digits, . _ [ ] / : or -');
     else model = body.model;
   }
+  const effort = validEffort(body?.effort, errors);
   let prompt = null;
   if (body?.prompt != null) {
     if (typeof body.prompt !== 'string') errors.push('prompt must be a string');
@@ -65,7 +66,7 @@ export function validateBranchRequest(body, source) {
   const name = sanitizeName(body?.name) || sanitizeName(title);
   if (body?.name && !name) errors.push('name must have letters or digits');
   if (errors.length) return { ok: false, error: errors.join('; ') };
-  return { ok: true, ref, harness, model, prompt, name, title };
+  return { ok: true, ref, harness, model, effort, prompt, name, title };
 }
 
 function parseLines(text) {
@@ -295,7 +296,7 @@ export function createBrancher({ spawner, home = claudeHome(), codex = codexHome
       prompt = handoffPrompt({ file: handoff, source, prompt: next });
     }
 
-    const spawn = await spawner.spawn({ name, title: req.title, dir: session.cwd, prompt, nameGiven: true, model: req.model, harness: req.harness, resume });
+    const spawn = await spawner.spawn({ name, title: req.title, dir: session.cwd, prompt, nameGiven: true, model: req.model, effort: req.effort ?? '', harness: req.harness, resume });
     return { source: { id: session.session_id, harness: source, transcript: file }, ref: req.ref, harness: req.harness, sessionId: resume, transcript, handoff, spawn };
   }
 

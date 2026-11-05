@@ -1999,7 +1999,7 @@ export function createApi({
     const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
     let result;
     try {
-      result = await spawner.spawn({ name: check.name, title: check.title, dir: worktree.path, prompt, nameGiven, model: check.model, harness: check.harness, ghIdentity: check.ghIdentity });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir: worktree.path, prompt, nameGiven, model: check.model, effort: check.effort, harness: check.harness, ghIdentity: check.ghIdentity });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -2078,7 +2078,7 @@ export function createApi({
     let result;
     try {
       const dir = await resolveAllowedDir(check.dir, roots);
-      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness, ghIdentity: check.ghIdentity });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, effort: check.effort, harness: check.harness, ghIdentity: check.ghIdentity });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;
@@ -2136,6 +2136,7 @@ export function createApi({
         prompt: check.prompt.trim(),
         name: check.nameGiven ? check.name : null,
         model: check.model || null,
+        effort: check.effort || null,
         harness: check.harness,
         ghIdentity: check.ghIdentity,
       });
@@ -2357,6 +2358,7 @@ export function createApi({
           ...(check.nameGiven ? { name: check.name } : {}),
           ...(check.title ? { title: check.title } : {}),
           ...(check.model ? { model: check.model } : {}),
+          ...(check.effort ? { effort: check.effort } : {}),
           harness: check.harness,
           ...(check.ghIdentity ? { ghIdentity: check.ghIdentity } : {}),
         }),
@@ -2376,7 +2378,7 @@ export function createApi({
     const nameGiven = check.nameGiven !== false || !config.autoName?.enabled;
     let result;
     try {
-      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, harness: check.harness, ghIdentity: check.ghIdentity });
+      result = await spawner.spawn({ name: check.name, title: check.title, dir, prompt, nameGiven, model: check.model, effort: check.effort, harness: check.harness, ghIdentity: check.ghIdentity });
     } catch (err) {
       if (err?.status) throw new HttpError(err.message, err.status);
       throw err;

@@ -566,7 +566,7 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
    * Schedule a session: `overmind --local schedule add --json` with `--at` (a time) or `--task`
    * (+ `--time`) → the new entry. `--flag=value`: a value starting with "-" must not read as a flag.
    */
-  async function scheduleAdd({ at, task, time, prompt, dir, name, model, harness, ghIdentity }, { timeoutMs: t = 60 * 1000 } = {}) {
+  async function scheduleAdd({ at, task, time, prompt, dir, name, model, effort, harness, ghIdentity }, { timeoutMs: t = 60 * 1000 } = {}) {
     const flags = [];
     if (at) flags.push(`--at=${at}`);
     if (task) flags.push(`--task=${task}`);
@@ -574,6 +574,7 @@ export function createOvermindCli({ run, bin = 'overmind', timeoutMs = 8000 } = 
     if (dir) flags.push(`--dir=${dir}`);
     if (name) flags.push(`--name=${name}`);
     if (model) flags.push(`--model=${model}`);
+    if (effort) flags.push(`--effort=${effort}`);
     if (harness && harness !== 'claude') flags.push(`--harness=${harness}`);
     const pre = ghIdentity ? [`--gh-identity=${ghIdentity}`] : [];
     const out = await scheduleRun(['add', '--json', ...flags, ...(prompt ? ['--', prompt] : [])], t, pre);

@@ -95,6 +95,36 @@ test('spawner types --model when one was picked', async () => {
   assert.equal(res.model, 'claude-haiku-4-5-20251001');
 });
 
+test('validateSpawnRequest takes a picked effort: a lowercase level, nothing shell-shaped', () => {
+  const opts = { spawnDirs: ['/tmp'] };
+  assert.equal(validateSpawnRequest({ harness: 'codex', effort: 'ultra' }, opts).effort, 'ultra');
+  assert.equal(validateSpawnRequest({}, opts).effort, '');
+  assert.equal(validateSpawnRequest({ effort: '' }, opts).effort, '');
+  for (const bad of ['High', 'x y', "high'; id", 'a'.repeat(21), 5]) {
+    const r = validateSpawnRequest({ effort: bad }, opts);
+    assert.equal(r.ok, false, String(bad));
+    assert.match(r.error, /effort must be/);
+  }
+});
+
+test('spawner types the picked effort per harness, over the Settings default', async () => {
+  const calls = [];
+  const run = async (bin, args) => {
+    calls.push([bin, ...args]);
+    if (args[0] === 'has-session') throw new Error('no such session');
+    return { stdout: '', stderr: '' };
+  };
+  const sp = createSpawner({ run, tmux: 'tmux', launcher: 'claude', sleep: async () => {}, harnessDefaults: () => ({ codex: { model: null, effort: 'low' }, claude: { model: null, effort: 'high' } }) });
+  const typed = () => calls.filter((c) => c[1] === 'send-keys' && c[4] === '-l').at(-1)[6];
+  const res = await sp.spawn({ name: 'cx', dir: '/tmp', prompt: 'go', nameGiven: false, harness: 'codex', model: 'gpt-6-luna', effort: 'max' });
+  assert.equal(typed(), "codex --model 'gpt-6-luna' -c model_reasoning_effort=max 'go'");
+  assert.equal(res.effort, 'max');
+  await sp.spawn({ name: 'cx2', dir: '/tmp', prompt: 'go', nameGiven: false, harness: 'codex' });
+  assert.equal(typed(), "codex -c model_reasoning_effort=low 'go'", 'no pick: the default');
+  await sp.spawn({ name: 'cl', dir: '/tmp', prompt: '', nameGiven: false, effort: 'xhigh' });
+  assert.equal(typed(), 'claude --effort xhigh');
+});
+
 test('codex and pi: their launcher, --model, -n for pi only; a bad harness is refused', () => {
   assert.equal(launchCommand({ launcher: 'codex', harness: 'codex', name: 'job', model: 'gpt-6', prompt: 'go' }), "codex --model 'gpt-6' 'go'");
   assert.equal(launchCommand({ launcher: 'pi', harness: 'pi', name: 'job', model: 'openai/gpt-5.5:high', prompt: '' }), "pi --model 'openai/gpt-5.5:high' -n 'job'");

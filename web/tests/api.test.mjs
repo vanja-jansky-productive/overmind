@@ -345,7 +345,11 @@ test('spawn passes a valid model through and rejects a bad one (400, nothing spa
   const ok = await post(`${urls.laptop}/api/hosts/workstation/spawn`, { model: 'claude-haiku-4-5-20251001' });
   assert.equal(ok.status, 200);
   assert.equal(remote.calls.at(-1)[1].model, 'claude-haiku-4-5-20251001');
+  const picked = await post(`${urls.laptop}/api/hosts/workstation/spawn`, { harness: 'codex', model: 'gpt-6-luna', effort: 'max' });
+  assert.equal(picked.status, 200);
+  assert.deepEqual([remote.calls.at(-1)[1].model, remote.calls.at(-1)[1].effort], ['gpt-6-luna', 'max']);
   const before = remote.calls.length;
+  assert.equal((await post(`${urls.laptop}/api/hosts/workstation/spawn`, { effort: 'max; id' })).status, 400);
   const bad = await post(`${urls.laptop}/api/hosts/workstation/spawn`, { model: "x'; touch /tmp/pwned" });
   assert.equal(bad.status, 400);
   assert.match(bad.body.error, /model must be/);
@@ -533,7 +537,7 @@ test('prs/checkout and prs/spawn: worktree first, then a session there told abou
   assert.equal(co.body.worktree.editorUrl, 'vscode://file/home/tester/wt/app-feat');
   assert.equal(lap.calls.filter((c) => c[0] === 'spawn').length, 0);
 
-  const sp = await post(`${urls.laptop}/api/hosts/workstation/prs/spawn`, { pr: 'acme/app#12', prompt: '  Check CI. ', name: 'pr-12', model: 'opus' });
+  const sp = await post(`${urls.laptop}/api/hosts/workstation/prs/spawn`, { pr: 'acme/app#12', prompt: '  Check CI. ', name: 'pr-12', model: 'opus', effort: 'high' });
   assert.equal(sp.status, 200);
   assert.equal(sp.body.host, 'workstation');
   assert.equal(sp.body.spawn.tmuxSession, 'pr-12');
@@ -541,6 +545,7 @@ test('prs/checkout and prs/spawn: worktree first, then a session there told abou
   assert.equal(req.dir, '/home/tester/wt/app-feat');
   assert.equal(req.prompt, "You're working on pull request acme/app#12 in /home/tester/wt/app-feat. Check CI.");
   assert.equal(req.model, 'opus');
+  assert.equal(req.effort, 'high');
   assert.equal(lap.calls.filter((c) => c[0] === 'spawn').length, 0);
 });
 
@@ -683,12 +688,13 @@ test('tasks/status moves a task on the host it was fetched on; ids or links only
 
 test('tasks/spawn: a session in a spawn dir whose first prompt is the task context line + the prompt', async (t) => {
   const { urls, lap, remote } = await startPair(t);
-  const sp = await post(`${urls.laptop}/api/hosts/workstation/tasks/spawn`, { task: '1001', dir: os.tmpdir(), prompt: '  Plan it. ', name: 'task-1001', model: 'opus' });
+  const sp = await post(`${urls.laptop}/api/hosts/workstation/tasks/spawn`, { task: '1001', dir: os.tmpdir(), prompt: '  Plan it. ', name: 'task-1001', model: 'opus', effort: 'low' });
   assert.equal(sp.status, 200);
   assert.deepEqual([sp.body.host, sp.body.task.id, sp.body.spawn.tmuxSession], ['workstation', '1001', 'task-1001']);
   const [, req] = remote.calls.find((c) => c[0] === 'spawn');
   assert.equal(req.prompt, 'Productive task #12 “Fix it”: https://app.productive.io/1-acme/tasks/1001. Plan it.');
   assert.equal(req.model, 'opus');
+  assert.equal(req.effort, 'low');
   assert.equal(lap.calls.filter((c) => c[0] === 'spawn').length, 0);
 
   // Bad input: 400 before anything is looked up; outside the spawn dirs: refused.
@@ -707,11 +713,11 @@ test('schedule: add (a time, or a task + time) on the named host, list, cancel; 
   const list = await fetch(`${urls.laptop}/api/hosts/workstation/schedule`).then((r) => r.json());
   assert.deepEqual([list.host, list.entries], ['workstation', []]);
 
-  const timed = await post(`${urls.laptop}/api/hosts/workstation/schedule`, { at: '2026-10-29T07:30', dir: os.tmpdir(), prompt: ' Triage. ', model: 'opus' });
+  const timed = await post(`${urls.laptop}/api/hosts/workstation/schedule`, { at: '2026-10-29T07:30', dir: os.tmpdir(), prompt: ' Triage. ', model: 'opus', effort: 'high' });
   assert.equal(timed.status, 200);
   assert.equal(timed.body.host, 'workstation');
   const [, o] = remote.calls.find((c) => c[0] === 'scheduleAdd');
-  assert.deepEqual([o.at, o.task, o.prompt, o.model, o.name], ['2026-10-29T07:30', null, 'Triage.', 'opus', null]);
+  assert.deepEqual([o.at, o.task, o.prompt, o.model, o.effort, o.name], ['2026-10-29T07:30', null, 'Triage.', 'opus', 'high', null]);
 
   const linked = await post(`${urls.laptop}/api/hosts/workstation/schedule`, { task: 'https://app.productive.io/1-acme/tasks/1001', time: '09:15', dir: os.tmpdir() });
   assert.equal(linked.status, 200);
@@ -745,12 +751,12 @@ test('overmind CLI schedule / add / cancel pass every value as one flag', async 
   };
   const cli = createOvermindCli({ run, bin: '/x/overmind' });
   await cli.schedule();
-  await cli.scheduleAdd({ at: 'in 2h', dir: '/d', prompt: '-rf', harness: 'codex' });
+  await cli.scheduleAdd({ at: 'in 2h', dir: '/d', prompt: '-rf', harness: 'codex', model: 'gpt-6-luna', effort: 'max' });
   await cli.scheduleAdd({ task: '1001', time: '09:00', dir: '/d', name: 'n', ghIdentity: 'bot' });
   await cli.scheduleCancel('s1');
   assert.deepEqual(calls, [
     ['--local', 'schedule', '--json'],
-    ['--local', 'schedule', 'add', '--json', '--at=in 2h', '--dir=/d', '--harness=codex', '--', '-rf'],
+    ['--local', 'schedule', 'add', '--json', '--at=in 2h', '--dir=/d', '--model=gpt-6-luna', '--effort=max', '--harness=codex', '--', '-rf'],
     ['--local', '--gh-identity=bot', 'schedule', 'add', '--json', '--task=1001', '--time=09:00', '--dir=/d', '--name=n'],
     ['--local', 'schedule', 'cancel', '--', 's1'],
   ]);
