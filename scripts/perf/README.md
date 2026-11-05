@@ -17,10 +17,34 @@ node idle-cpu.mjs [--dist ../../web/ui/dist] [--runs 3] [--idle 60] [--only list
 - Output: one JSON line per run (`idleCpuS`, `idleCorePct`, `idleRequests`, `readyMs`, `loadCpuS`)
   and the median per scenario. Runs spread ±50 %, so compare medians of 3+ runs, before and after
   on the same machine.
-- CPU is the summed time of every process with `ms-playwright/webkit` in its command line, so run
-  nothing else on Playwright's WebKit meanwhile. The mock listens on 127.0.0.1:7798.
+- CPU is the summed time of the `ms-playwright/webkit` processes this run's browser started (told
+  apart by pid, `lib.mjs`), so another Playwright WebKit on the machine is not counted (before #39 it
+  was, and could triple a run). Its load still slows ours: run nothing else heavy meanwhile. The mock
+  listens on 127.0.0.1:7798.
 - To compare against another commit, build that commit's `web/ui` in a separate worktree and pass
   its `dist` with `--dist`.
+
+## Interaction latency (`interaction.mjs`, #39)
+
+`interaction.mjs` loads the desktop shell (1440×900) on a session, against the same frozen mock,
+and drives real input: it clicks `--switches` sidebar rows in turn (6 sessions, 400 ms apart), then
+types `--chars` characters into the open session's composer (40 ms apart).
+
+```sh
+node interaction.mjs [--dist ../../web/ui/dist] [--runs 5] [--switches 30] [--chars 120] [--json]
+node interaction.mjs --renders [--runs 3]   # React commits / component renders per phase
+```
+
+- Latency per input, INP-style: from a capture-phase listener on `window` (before React's) to the
+  first task after the next animation frame. Per phase: p50 / p95 / max, and `cpuS` (this browser's
+  WebKit CPU). `settledP50`: click → the last DOM mutation within 1 s (the new pane's fetches and
+  follow-up renders included).
+- `--renders` installs a stub React DevTools hook before load and counts commits and the components
+  that rendered (fibers with React's PerformedWork flag; a subtree React bailed out of is skipped).
+  The hook walks the tree on every commit, so its timings are not comparable: run it on its own.
+- Also prints the dist's JS / CSS size (raw, gzip -9, brotli).
+- Compare builds interleaved (before, after, before, after…) and read medians: per-run p50s spread
+  ±25 %.
 
 ## Web server CPU (`server-cpu.mjs`, #38)
 
