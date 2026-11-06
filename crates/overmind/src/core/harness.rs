@@ -21,8 +21,8 @@
 //! `pi --session <id>`), else by cwd and start time: the newest transcript in its cwd that
 //! was created after it started (one its own older thread kept writing past is a closed
 //! sibling's, not this process's `/new`; one another process ran, by the owners discovery
-//! records, is never taken; one several could have started is not taken by a process that
-//! already runs its own), then the newest one written to since — never a `codex exec`
+//! records, is never taken; a contested one, which several could have started, is taken by
+//! no one), then the newest one written to since — never a `codex exec`
 //! / `codex review` rollout (`source: "exec"`, `originator: "codex_exec"`): one run in the
 //! same cwd would take the TUI's row. A fresh Codex
 //! session has no transcript until its first prompt — it is listed without a session id.

@@ -266,7 +266,7 @@ sibling's transcript (same cwd) from taking a survivor's row, and one pane's thr
   gone one), it becomes the owner and its row shows the thread. A contested thread one of whose
   starters is gone is closed like a gone owner's (`closedMtimeMs`): no row takes it until it grows
   more than 10 s past that, then it goes to the one process that could have taken it up. The
-  costs, all a missing thread and never another pane's:
+  costs are mostly a missing thread; the one known case of another pane's thread is under "Left open":
   - A pane opened beside an idle Codex pane in the same cwd shows no thread until the idle pane is
     used again (its next turn proves it was not the `/new`).
   - Two panes opened within 3 s of each other in one cwd show none for as long as both stay open
@@ -274,12 +274,19 @@ sibling's transcript (same cwd) from taking a survivor's row, and one pane's thr
   - A `/new` pane's row stays on its older thread until its sibling is busy on its own.
   - On a host's first list (or after an unreadable owners file) only the earliest pane in a cwd
     is certain; each later one shows its thread once the panes before it are seen busy on theirs.
+    A closed sibling's thread created after a live pane started is shown as that pane's (the
+    same class as the "Left open" case below).
 - **Superseded**: a newer candidate is the process's `/new` only if its own recorded older thread
   went quiet when it appeared (5 s slack). Codex 0.166 does not write the old rollout after
   `/new` (checked live with the mock).
 
 Left open: a thread started and closed between two lists, beside a sibling idle since before
-it, is still taken by the sibling. A `codex exec` / `codex review`
+it, is still taken by the sibling. A `/new`, a prompt, then `/resume` back to the older thread
+makes A's older thread write past the `/new` thread's creation, which reads as proof A did not
+start it; an idle same-cwd sibling B is then the only starter left, so A's `/new` thread is
+recorded as B's and shown on B's row (until B is written again, while both live). No
+mtime-only rule tells this from B's own `/new` while A stayed busy; accepted as rare. A planned
+follow-up breaks the tie by the thread's last prompt on each candidate pane's screen. A `codex exec` / `codex review`
 rollout (`session_meta` `source: "exec"` or `originator: "codex_exec"`, the markers the web
 watcher drops) is only ever matched by id: by cwd, one run beside an open TUI would take its row.
 A Codex session before its first prompt has no transcript yet: `session_id` is `null` and its title `<cwd>-codex`.
