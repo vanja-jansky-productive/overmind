@@ -31,6 +31,7 @@ const SKIP_COMMANDS: &[&str] = &[
     "stack edit",
     "config edit",
     "mcp",
+    "lesson hook",
 ];
 
 /// Flags that need a terminal, per command.
@@ -60,6 +61,10 @@ const READ_ONLY: &[&str] = &[
     "config show",
     "config get",
     "skill show",
+    "lesson list",
+    "lesson search",
+    "lesson recall",
+    "lesson proposals",
 ];
 
 const INSTRUCTIONS: &str = "overmind supervises Claude Code (and Codex, pi) sessions and tmux sessions \
