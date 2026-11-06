@@ -15,7 +15,7 @@
 //! `install` also leaves `.install.json` there: what it wrote and the trust it found, so
 //! `status` can tell a stale trust entry from a fresh one.
 //!
-//! A sidecar (or a pending escalated call in the rollout) only *triggers* a look at the
+//! A sidecar (or a pending call that may ask, in the rollout) only *triggers* a look at the
 //! terminal: discovery reads `waiting` off the screen ([`screen_shows_approval`]). Codex
 //! persists nothing for a pending approval, in either mode — see `docs/codex-findings.md`.
 
@@ -305,7 +305,8 @@ pub struct Trigger {
     pub sidecar: bool,
     /// The sidecar's command has not run yet (for rows no backend can peek).
     pub sidecar_unresolved: bool,
-    /// The current turn's last `exec` call asks for escalation and has no outcome yet.
+    /// A call of the current turn that may ask (an escalated exec, a patch, an MCP call) has
+    /// no outcome yet.
     pub rollout: bool,
     /// "exec approval", "patch approval", "MCP approval", "<tool> approval".
     pub label: String,
@@ -573,8 +574,10 @@ fn pending_call(p: &Value) -> Option<Pending> {
 pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Option<Trigger> {
     const SLACK_MS: i64 = 2000;
     let sidecar = sidecar.filter(|s| s.waiting && s.at >= proc_start_ms - SLACK_MS);
-    // The current turn's last tool call, when it is one that may ask.
-    let mut pending: Option<Pending> = None;
+    // The current turn's calls that may ask and have no outcome yet, oldest first. Codex asks
+    // them in order, so the oldest is the one its menu is about; a call that cannot ask
+    // (`update_plan`, a plain exec, a read-only MCP call) neither sets nor clears one.
+    let mut pending: Vec<Pending> = Vec::new();
     let mut sidecar_live = sidecar.is_some();
     let mut sidecar_ran = false;
     for line in text.lines() {
@@ -598,17 +601,18 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
         let after_sidecar = sidecar.is_some_and(|s| line_ms(&v).is_some_and(|t| t > s.at));
         match (kind, ptype) {
             ("event_msg", "task_started" | "task_complete" | "turn_aborted") => {
-                pending = None;
+                pending.clear();
                 if after_sidecar {
                     sidecar_live = false;
                 }
             }
             ("response_item", "custom_tool_call" | "function_call") => {
-                pending = pending_call(p);
+                pending.extend(pending_call(p));
             }
             ("response_item", "custom_tool_call_output" | "function_call_output") => {
                 let id = p.get("call_id").and_then(Value::as_str);
-                if let Some(done) = pending.take_if(|c| Some(c.call_id.as_str()) == id) {
+                let at = pending.iter().position(|c| Some(c.call_id.as_str()) == id);
+                if let Some(done) = at.map(|i| pending.remove(i)) {
                     // Denied, or done: the sidecar's request is over — its command (exec), or
                     // its call when the hook names no command (MCP).
                     let cmd = sidecar.and_then(|s| s.command.as_ref());
@@ -627,12 +631,11 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
             ("event_msg", "item_completed") => {
                 let done = completed_command(p);
                 // A sibling command's completion resolves nothing.
-                if done.is_some()
-                    && pending
-                        .as_ref()
-                        .is_some_and(|c| c.kind == ApprovalKind::Exec && c.what == done)
+                if let Some(i) = pending
+                    .iter()
+                    .position(|c| done.is_some() && c.kind == ApprovalKind::Exec && c.what == done)
                 {
-                    pending = None;
+                    pending.remove(i);
                 }
                 if after_sidecar && done.is_some() && sidecar.is_some_and(|s| s.command == done) {
                     sidecar_ran = true;
@@ -641,12 +644,13 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
             _ => {}
         }
     }
+    let pending = pending.first();
     let rollout = pending.is_some();
     if !rollout && !sidecar_live {
         return None;
     }
     let sc = sidecar.filter(|_| sidecar_live);
-    let label = match (sc, &pending) {
+    let label = match (sc, pending) {
         (Some(s), _) => match ApprovalKind::of_tool(s.tool.as_deref()) {
             Some(k) => k.label().to_string(),
             None => format!("{} approval", s.tool.as_deref().unwrap_or("")),
@@ -654,7 +658,7 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
         (None, Some(c)) => c.kind.label().to_string(),
         (None, None) => ApprovalKind::Exec.label().to_string(),
     };
-    let command = match (sc, &pending) {
+    let command = match (sc, pending) {
         (Some(s), _) if s.command.is_some() => s.command.as_deref().map(|c| first_line_max(c, 80)),
         (Some(s), _) if s.tool.as_deref().is_some_and(|t| t.starts_with("mcp__")) => {
             s.tool.as_deref().and_then(mcp_name)
@@ -668,7 +672,7 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
         }),
         _ => None,
     };
-    let request = match (&pending, sc) {
+    let request = match (pending, sc) {
         (Some(c), _) if !c.call_id.is_empty() => Some(c.call_id.clone()),
         (_, Some(s)) => Some(format!("hook-{}", s.at)),
         _ => None,
@@ -1946,9 +1950,10 @@ x = 1
         assert_eq!(t(&[STARTED, L17, STARTED]), None);
         // A sibling command's completion resolves nothing.
         assert!(t(&[STARTED, L17, ITEM_OTHER]).is_some());
-        // The nine-command loop asks nothing; a later plain call replaces the pending one.
+        // The nine-command loop asks nothing, and a later call that cannot ask leaves the
+        // pending one pending.
         assert_eq!(t(&[STARTED, L75]), None);
-        assert_eq!(t(&[STARTED, L17, L75]), None);
+        assert_eq!(t(&[STARTED, L17, L75]).unwrap().request, hi.request);
         // `require_escalated` in a compacted history or instructions is never a call.
         assert_eq!(t(&[STARTED, COMPACTED]), None);
     }
@@ -2065,8 +2070,11 @@ x = 1
         );
         let plain = fc.replace("require_escalated", "use_default");
         assert_eq!(t(&[STARTED, &plain]), None, "a plain call asks nothing");
-        // A later plain exec replaces the pending call, as for exec.
-        assert_eq!(t(&[STARTED, PATCH_CALL, L75]), None);
+        // A later plain exec leaves the pending call pending, as for exec.
+        assert_eq!(
+            t(&[STARTED, PATCH_CALL, L75]).unwrap().request.as_deref(),
+            Some("call_p")
+        );
         // An MCP sidecar is resolved by its call's output (no command to match).
         let at = chrono::DateTime::parse_from_rfc3339("2026-11-06T08:42:10.000Z")
             .unwrap()
@@ -2077,6 +2085,53 @@ x = 1
         assert!(open.sidecar_unresolved);
         let done = trigger(&text(&[STARTED, MCP_FN, MCP_FN_OUT]), Some(&s), 0).unwrap();
         assert!(done.sidecar && !done.sidecar_unresolved);
+    }
+
+    #[test]
+    fn the_oldest_unanswered_call_that_may_ask_is_the_request() {
+        let t = |lines: &[&str]| trigger(&text(lines), None, 0);
+        // Two apply_patch calls in one response: Codex asks the first one first.
+        let p2 = PATCH_CALL
+            .replace("call_p", "call_p2")
+            .replace("patched by mock 1", "patched by mock 2");
+        let both = t(&[STARTED, PATCH_CALL, &p2]).unwrap();
+        assert_eq!(both.request.as_deref(), Some("call_p"));
+        let second = t(&[STARTED, PATCH_CALL, &p2, PATCH_OUT]).unwrap();
+        assert_eq!(
+            second.request.as_deref(),
+            Some("call_p2"),
+            "the first answered: the second is next"
+        );
+        assert_eq!(
+            t(&[STARTED, PATCH_CALL, &p2, PATCH_OUT, ABORTED]),
+            None,
+            "a turn end clears them all"
+        );
+        // An escalated exec, then a call that cannot ask (`update_plan`), neither with an
+        // output: the exec still triggers.
+        let plan = r#"{"timestamp":"2026-11-04T17:52:44.200Z","type":"response_item","payload":{"type":"function_call","call_id":"call_plan","name":"update_plan","arguments":"{\"plan\":[]}"}}"#;
+        let e = t(&[STARTED, L17, plan]).unwrap();
+        assert!(e.rollout);
+        assert_eq!(e.command.as_deref(), Some("printf hi > hello.txt"));
+        assert_eq!(
+            t(&[STARTED, PATCH_CALL, plan]).unwrap().label,
+            "patch approval",
+            "a patch has no hook to fall back on"
+        );
+        // A read-only MCP call (`echo` never asks — but it is an MCP call: it may) after an
+        // exec: still the exec, the oldest.
+        assert_eq!(
+            t(&[STARTED, L17, MCP_FN]).unwrap().command.as_deref(),
+            Some("printf hi > hello.txt")
+        );
+        // The exec's own command completing resolves it; the MCP call is next.
+        assert_eq!(
+            t(&[STARTED, L17, MCP_FN, ITEM_HI])
+                .unwrap()
+                .request
+                .as_deref(),
+            Some("call_mf")
+        );
     }
 
     const PATCH_MENU: &str =

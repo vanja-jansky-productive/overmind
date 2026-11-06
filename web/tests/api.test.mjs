@@ -1120,6 +1120,40 @@ test('#34 phase 5: a Codex patch approval is a card — its files, the diff prev
   assert.equal(fresh.questions[0].preview, undefined, 'no pending call_p2 patch in the rollout: no preview, never another patch\'s');
 });
 
+test('review C2: one exec script, two patches on the same file — no preview, and the first card never answers the second menu', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'om-p5-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rollout = path.join(dir, 'rollout.jsonl');
+  const p1 = '*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n+patched by mock 1\n*** End Patch\n';
+  const p2 = '*** Begin Patch\n*** Update File: a.txt\n@@\n-alpha\n+SECOND rm -rf payload\n*** End Patch\n';
+  const script = `await tools.apply_patch(${JSON.stringify(p1)});\nawait tools.apply_patch(${JSON.stringify(p2)});`;
+  fs.writeFileSync(
+    rollout,
+    [
+      { type: 'event_msg', payload: { type: 'task_started' } },
+      { type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'call_X', name: 'exec', input: script } },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join('\n') + '\n',
+  );
+  const h = await codexMenuHost(t, 'codex-approval-patch.txt', { cwd: '/work/project', transcript: rollout, approval_id: 'call_X', waiting_for: 'patch approval: `a.txt`' });
+  const only = (drawn) => h.menu.replace(/• Edited 2 files[\s\S]*?\+ Show details\n/, `${drawn}\n`).replace('  Destination: /work/project/new.txt\n', '');
+  const menu1 = only('• Edited a.txt (+1 -0)\n  └ a.txt (+1 -0)\n    2 +patched by mock 1');
+  const menu2 = only('• Edited a.txt (+1 -1)\n  └ a.txt (+1 -1)\n    1 -alpha\n    1 +SECOND rm -rf payload');
+  h.st.screen = menu1;
+  const c1 = await h.card();
+  assert.equal(c1.questions[0].preview, undefined, 'two patches in one script: which one is asked is not known — no preview');
+  // P1 answered in the terminal; Codex asks P2 under the same call id, same file.
+  h.st.screen = menu2;
+  const c2 = await h.card();
+  assert.notEqual(c2.id, c1.id);
+  h.host.calls.length = 0;
+  assert.equal(await h.call({ toolUseId: c1.id, answers: [{ options: [0] }] }), 409, 'a stale card (a second click, another tab) answers nothing');
+  assert.deepEqual(h.keys(), []);
+  assert.equal(await h.call({ toolUseId: c2.id, answers: [{ options: [2] }] }), 200);
+  assert.deepEqual(h.keys(), ['Down', 'Down', 'Enter']);
+});
+
 test('#34 phase 5: a Codex MCP approval is a card — server, tool, arguments; four options picked by index with every screen check', async (t) => {
   const h = await codexMenuHost(t, 'codex-approval-mcp.txt', { approval_id: 'call_m1', waiting_for: 'MCP approval: `tiny.write_note`' });
   const m = await h.card();

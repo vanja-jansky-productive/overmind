@@ -1,6 +1,7 @@
 // The HTTP JSON API (/api/*), independent of any UI. server.mjs mounts it next to the
 // static UI; tests mount it on an ephemeral port with fake dependencies.
 // Endpoint reference: ARCHITECTURE.md → "HTTP API".
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -16,9 +17,6 @@ import {
 } from './peers.mjs';
 import { createSnapshot } from './snapshot.mjs';
 import { readFileTail } from './watch.mjs';
-
-/** How much of a Codex rollout a patch card reads for its diff preview (the pending call is near the end). */
-const PATCH_TAIL_BYTES = 512 * 1024;
 import { DISABLED_GROUPS } from './grouping.mjs';
 import { checkInboxSettings } from './inbox.mjs';
 import { DEFAULT_MODELS, slackSpawn, spawnRoots } from './config.mjs';
@@ -45,6 +43,27 @@ import { validJobName } from './jobs.mjs';
 import { MAX_FIRST, MAX_TASK, MODES, SlackError, isPersonTarget, linkMinutes, parseSlackUrl, validLinkId } from './slack.mjs';
 
 export const API_VERSION = 1;
+
+/** How much of a Codex rollout a patch card reads for its diff preview (the pending call is near the end). */
+const PATCH_TAIL_BYTES = 512 * 1024;
+const patchTails = new Map(); // rollout → { key: size:mtime, text }: a waiting card is polled
+
+/** A rollout's tail for a patch card's preview, read again only when the file changed. */
+function patchTail(file) {
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    return null;
+  }
+  const key = `${st.size}:${st.mtimeMs}`;
+  const hit = patchTails.get(file);
+  if (hit?.key === key) return hit.text;
+  const text = readFileTail(file, PATCH_TAIL_BYTES);
+  if (patchTails.size >= 8) patchTails.delete(patchTails.keys().next().value);
+  patchTails.set(file, { key, text });
+  return text;
+}
 
 const SESSION_ROUTE = /^\/api\/hosts\/([^/]+)\/sessions\/([^/]+)\/(peek|screen|input|messages|send|keys|answer|kill|sleep|rename|autoname|branch)$/;
 const POST_ACTIONS = new Set(['input', 'send', 'keys', 'answer', 'kill', 'sleep', 'rename', 'autoname', 'branch']);
@@ -534,10 +553,16 @@ export function createApi({
     const prompt = parse(screen, { request: session.approval_id ?? null, cwd: session.cwd ?? null });
     if (!prompt) return null;
     const { id, questions } = prompt;
-    // A Codex patch menu draws its diff above it, in the history: the card shows the pending
-    // call's patch from the rollout instead, when its files are the menu's.
+    // A Codex patch menu draws its diff above it, in the history (cut to the pane): the card shows
+    // the pending call's patch from the rollout instead, when its files and +/- lines are the
+    // ones drawn there.
     if (prompt.kind === 'patch' && session.transcript) {
-      const preview = codexPatchPreview(readFileTail(session.transcript, PATCH_TAIL_BYTES), prompt.files, session.cwd, session.approval_id);
+      const preview = codexPatchPreview(patchTail(session.transcript), {
+        files: prompt.files,
+        drawn: prompt.drawn,
+        cwd: session.cwd,
+        request: session.approval_id,
+      });
       if (preview) questions[0].preview = preview;
     }
     return { role: 'assistant', kind: 'question', id, questions, text: questionsText(questions), ts: Date.now(), final: true };

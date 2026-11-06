@@ -338,25 +338,85 @@ test('the MCP menu at 90 columns: a wrapped option description stays with its op
   );
 });
 
-test("a patch card's diff preview is the pending call's patch — only when its files are the menu's", () => {
-  const line = (o) => JSON.stringify(o);
-  const started = line({ type: 'event_msg', payload: { type: 'task_started' } });
-  const patch = '*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n+patched\n*** Add File: new.txt\n+new file\n*** End Patch\n';
-  const direct = line({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c1', name: 'apply_patch', input: patch } });
-  const viaExec = line({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c2', name: 'exec', input: `text(await tools.apply_patch(${JSON.stringify(patch)}));\n` } });
-  const out1 = line({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'c1', output: 'ok' } });
-  const files = ['/work/project/a.txt', '/work/project/new.txt'];
-  const want = '*** Update File: a.txt\n@@\n alpha\n+patched\n*** Add File: new.txt\n+new file';
-  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project'), want);
-  assert.equal(codexPatchPreview([started, viaExec].join('\n'), files, '/work/project'), want, "code mode's tools.apply_patch(\"…\")");
-  assert.equal(codexPatchPreview([started, direct, out1].join('\n'), files, '/work/project'), null, 'answered: not pending');
-  assert.equal(codexPatchPreview([started, direct].join('\n'), ['/work/project/a.txt'], '/work/project'), null, 'other files: not this menu');
-  assert.equal(codexPatchPreview([direct, started].join('\n'), files, '/work/project'), null, 'an earlier turn');
-  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project', 'c1'), want, 'the row names this call');
-  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project', 'c9'), null, 'the row names another call');
-  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project', 'hook-1'), want, "a hook stamp names no call: the files decide");
+// The live patch call behind codex-approval-patch.txt, and what Codex drew for it above the menu.
+const P_LIVE = '*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n+patched by mock 1\n*** Add File: new.txt\n+new file from mock 1\n+second line\n*** End Patch\n';
+const P_OTHER = '*** Begin Patch\n*** Update File: a.txt\n@@\n-keep\n+SECOND rm -rf payload\n*** End Patch\n';
+const rl = (o) => JSON.stringify(o);
+const startedLine = rl({ type: 'event_msg', payload: { type: 'task_started' } });
+const patchCall = (callId, input) => rl({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: callId, name: 'apply_patch', input } });
+const execCall = (callId, input) => rl({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: callId, name: 'exec', input } });
+const PATCH_FILES = ['/work/project/a.txt', '/work/project/new.txt'];
+/** The patch fixture with another drawn diff above its menu (`• Edited …` through `+ Show details`). */
+const drawnAs = (block) => codexPatch.replace(/• Edited 2 files[\s\S]*?\+ Show details\n/, `${block}\n`);
+
+test("a patch card's diff preview is the pending call's patch — only when its +/- lines are the diff Codex drew above the menu", () => {
+  const p = parseCodexScreenPrompt(codexPatch, { cwd: '/work/project' });
+  assert.deepEqual(p.drawn, ['+patched by mock 1', '+new file from mock 1', '+second line']);
+  const preview = (rollout, opts = {}) => codexPatchPreview(rollout.join('\n'), { files: p.files, drawn: p.drawn, cwd: '/work/project', ...opts });
+  const want = '*** Update File: a.txt\n@@\n alpha\n+patched by mock 1\n*** Add File: new.txt\n+new file from mock 1\n+second line';
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE)]), want);
+  assert.equal(preview([startedLine, execCall('c2', `text(await tools.apply_patch(${JSON.stringify(P_LIVE)}));\n`)]), want, "code mode's tools.apply_patch(\"…\")");
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE), rl({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'c1', output: 'ok' } })]), null, 'answered: not pending');
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE)], { files: ['/work/project/a.txt'] }), null, 'other files: not this menu');
+  assert.equal(preview([patchCall('c1', P_LIVE), startedLine]), null, 'an earlier turn');
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE)], { request: 'c1' }), want, 'the row names this call');
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE)], { request: 'c9' }), null, 'the row names another call');
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE)], { request: 'hook-1' }), want, 'a hook stamp names no call: the files and the drawn diff decide');
+  // The same files, other lines: not what Codex drew — no preview.
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE.replace('+second line', '+second line, edited'))]), null);
+  assert.equal(preview([startedLine, patchCall('c1', P_LIVE)], { drawn: null }), null, 'no drawn diff on the screen: no preview');
+  // A long patch: the preview is cut at 60 lines (when Codex drew all of it).
   const long = `*** Begin Patch\n*** Add File: new.txt\n${Array.from({ length: 100 }, (_, i) => `+line ${i}`).join('\n')}\n*** End Patch\n`;
-  const big = codexPatchPreview([started, line({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c3', name: 'apply_patch', input: long } })].join('\n'), ['/work/project/new.txt'], '/work/project');
+  const big = codexPatchPreview([startedLine, patchCall('c3', long)].join('\n'), {
+    files: ['/work/project/new.txt'],
+    drawn: Array.from({ length: 100 }, (_, i) => `+line ${i}`),
+    cwd: '/work/project',
+  });
   assert.equal(big.split('\n').length, 61);
   assert.match(big, /… 41 more lines$/);
+});
+
+test('the drawn diff: line numbers dropped, context lines skipped, wrapped lines joined, the files in any order', () => {
+  const screen = drawnAs(['• Edited 2 files (+2 -1)', '  └ new.txt (+1 -0)', '    1 +new file from mock 1', '', '  └ a.txt (+1 -1)', '    1  alpha', '    2 -keep', '   10 +a long line that the pane', '       wrapped here', '    + Show details'].join('\n'));
+  const p = parseCodexScreenPrompt(screen, { cwd: '/work/project' });
+  assert.deepEqual(p.drawn, ['+new file from mock 1', '-keep', '+a long line that the pane wrapped here']);
+  const patch = '*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n-keep\n+a long line that the pane wrapped here\n*** Add File: new.txt\n+new file from mock 1\n*** End Patch\n';
+  assert.match(codexPatchPreview([startedLine, patchCall('c1', patch)].join('\n'), { files: p.files, drawn: p.drawn, cwd: '/work/project' }), /^\*\*\* Update File: a\.txt/);
+  // No `•` block above the menu (scrolled away): nothing drawn, so no preview.
+  const bare = codexPatch.replace(/• Edited 2 files[\s\S]*?\+ Show details\n/, '');
+  assert.equal(parseCodexScreenPrompt(bare).drawn, null);
+});
+
+test('review C2: two patches in one exec script — no preview (which one is asked?), and the two menus are two cards', () => {
+  const script = `await tools.apply_patch(${JSON.stringify(P_LIVE)});\nawait tools.apply_patch(${JSON.stringify(P_OTHER)});`;
+  const rollout = [startedLine, execCall('call_X', script)].join('\n');
+  const m1 = parseCodexScreenPrompt(codexPatch, { request: 'call_X', cwd: '/work/project' });
+  assert.equal(codexPatchPreview(rollout, { files: m1.files, drawn: m1.drawn, cwd: '/work/project', request: 'call_X' }), null);
+  // Menu 2 asks P2 under the same call id and the same files: Codex draws P2's diff above it.
+  const m2 = parseCodexScreenPrompt(drawnAs('• Edited a.txt (+1 -1)\n  └ a.txt (+1 -1)\n    1 -keep\n    1 +SECOND rm -rf payload').replace('  Destination: /work/project/new.txt\n', ''), { request: 'call_X', cwd: '/work/project' });
+  const m1b = parseCodexScreenPrompt(drawnAs('• Edited a.txt (+1 -0)\n  └ a.txt (+1 -0)\n    2 +patched by mock 1').replace('  Destination: /work/project/new.txt\n', ''), { request: 'call_X', cwd: '/work/project' });
+  assert.deepEqual(m2.files, m1b.files);
+  assert.notEqual(m2.id, m1b.id, "P1's card can never answer P2's menu");
+});
+
+test('review C2: two parallel apply_patch calls — the preview is the one whose lines Codex drew, never the other', () => {
+  const rollout = [startedLine, patchCall('call_1', P_LIVE), patchCall('call_2', P_LIVE.replace('+second line', '+SECOND rm -rf payload'))].join('\n');
+  const p = parseCodexScreenPrompt(codexPatch, { cwd: '/work/project' });
+  const want = /\+second line$/;
+  assert.match(codexPatchPreview(rollout, { files: p.files, drawn: p.drawn, cwd: '/work/project', request: 'call_1' }), want, 'the oldest is the request (core::codex_hooks)');
+  assert.equal(codexPatchPreview(rollout, { files: p.files, drawn: p.drawn, cwd: '/work/project', request: 'call_2' }), null, 'a row naming the other call: no preview, never its diff');
+  assert.match(codexPatchPreview(rollout, { files: p.files, drawn: p.drawn, cwd: '/work/project', request: 'hook-1' }), want);
+});
+
+test("a patch menu's Thread: line (a sub-agent asking) stays on the card", () => {
+  const screen = codexPatch.replace('  Description: Apply proposed file edits', '  Thread: worker (explorer)\n  Description: Apply proposed file edits');
+  const p = parseCodexScreenPrompt(screen, { cwd: '/work/project' });
+  assert.equal(p.questions[0].question, 'Would you like to make the following edits?\nThread: worker (explorer)\nFiles:\n  a.txt\n  new.txt');
+  assert.deepEqual(p.files, PATCH_FILES);
+});
+
+test('review O2: MCP menus whose drawn arguments differ are two cards', () => {
+  const a = parseCodexScreenPrompt(codexMcp, { request: 'call_X' });
+  const b = parseCodexScreenPrompt(codexMcp.replace('text: hi from mcp', 'text: bye from mcp'), { request: 'call_X' });
+  assert.notEqual(a.id, b.id);
 });

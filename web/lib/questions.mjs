@@ -299,12 +299,46 @@ function firstOptionAt(block) {
   return -1;
 }
 
+const CODEX_DRAWN_LINE = /^\s*\d+ ([+-].*)$/;
+
 /**
- * The approval menu Codex shows, as `{ id, kind, questions: [q], untouched, cursorAt }` (+ `files`,
- * the absolute paths a patch edits); null when none. `kind`: 'exec' | 'patch' | 'mcp'.
- * `request`: the row's `approval_id` (the pending call, or the hook's stamp) — mixed into the id,
- * so the same request asked again is a new card, and a card for an earlier request cannot answer
- * a later one with the same text. `cwd`: a patch's files are shown relative to it.
+ * The diff Codex drew above a patch menu, in the history: the block from the last `• …` line
+ * before the head (`• Edited 2 files (+3 -0)`, `└ a.txt (+1 -0)`, `2 +patched`, `+ Show details`).
+ * `block`: its non-blank lines, trimmed (mixed into the card id); `changes`: its `+`/`-` lines
+ * without their line numbers, a wrapped line joined back. Null when there is no such block.
+ */
+function drawnPatch(lines, head) {
+  let start = -1;
+  for (let i = head - 1; i >= 0 && start < 0; i -= 1) if (/^•\s/.test(lines[i])) start = i;
+  if (start < 0) return null;
+  const block = lines.slice(start, head).map((l) => l.trim()).filter(Boolean);
+  const changes = [];
+  let open = false; // the last numbered line was a change: an unnumbered indented line continues it
+  for (const raw of lines.slice(start + 1, head)) {
+    const t = raw.trim();
+    const m = raw.match(CODEX_DRAWN_LINE);
+    if (m) {
+      changes.push(m[1].replace(/\s+$/, ''));
+      open = true;
+    } else if (open && t && /^\s/.test(raw) && !/^(└|\+ Show details|⋮|…)/.test(t) && !/^\d+\s/.test(t)) {
+      changes[changes.length - 1] += ` ${t}`;
+    } else {
+      open = false;
+    }
+  }
+  return { block, changes };
+}
+
+/**
+ * The approval menu Codex shows, as `{ id, kind, questions: [q], untouched, cursorAt }` (+ for a
+ * patch `files`, the absolute paths it edits, and `drawn`, the `+`/`-` lines Codex drew above the
+ * menu or null); null when none. `kind`: 'exec' | 'patch' | 'mcp'.
+ * `request`: the row's `approval_id` (the oldest unanswered call that may ask, or the hook's
+ * stamp) — mixed into the id, so the same request asked again is a new card, and a card for an
+ * earlier request cannot answer a later one with the same text. One call can ask twice (a script
+ * with two `tools.apply_patch`, or two MCP calls): what the screen draws is mixed in too — a
+ * patch's drawn diff, an MCP call's arguments — so two different asks never share an id.
+ * `cwd`: a patch's files are shown relative to it.
  */
 export function parseCodexScreenPrompt(screen, { request = null, cwd = null } = {}) {
   const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
@@ -328,7 +362,8 @@ export function parseCodexScreenPrompt(screen, { request = null, cwd = null } = 
   let question;
   let header = 'Approval';
   let files;
-  let sigExtra = []; // a patch's id is its absolute files, not the cwd-relative text
+  let drawn;
+  let sigExtra = []; // a patch's id is its absolute files and drawn diff, not the cwd-relative text
   if (found.kind === 'exec') {
     const meta = { thread: '', reason: '' };
     const cmd = [];
@@ -368,11 +403,15 @@ export function parseCodexScreenPrompt(screen, { request = null, cwd = null } = 
     // `Destination: <path>`, or the label alone and the path on the lines below, hard-wrapped at
     // the pane's width: joined back without spaces.
     files = [];
+    let thread = '';
     let open = false;
     for (const raw of before) {
       const l = raw.trim();
       const d = l.match(/^Destination:\s*(.*)$/);
-      if (d) {
+      if (/^Thread:\s/.test(l)) {
+        thread = l.replace(/^Thread:\s*/, '');
+        open = false;
+      } else if (d) {
         files.push(d[1]);
         open = true;
       } else if (open && l && !/^[A-Z][\w ]*:\s/.test(l)) {
@@ -386,8 +425,10 @@ export function parseCodexScreenPrompt(screen, { request = null, cwd = null } = 
     const base = cwd ? `${String(cwd).replace(/\/+$/, '')}/` : null;
     const shown = files.map((f) => (base && f.startsWith(base) ? f.slice(base.length) : f));
     header = 'Edit approval';
-    question = [CODEX_PATCH_HEAD, 'Files:', ...shown.map((f) => `  ${f}`)].join('\n');
-    sigExtra = files;
+    question = [CODEX_PATCH_HEAD, ...(thread ? [`Thread: ${thread}`] : []), 'Files:', ...shown.map((f) => `  ${f}`)].join('\n');
+    const d = drawnPatch(lines, head);
+    drawn = d?.changes.length ? d.changes : null;
+    sigExtra = [...(thread ? [`Thread: ${thread}`] : []), ...files, ...(d?.block ?? [])];
     const these = options.findIndex((o) => /^Yes, and don't ask again for these files/i.test(o.label));
     if (these >= 0) {
       options[these].secondary = true;
@@ -410,17 +451,20 @@ export function parseCodexScreenPrompt(screen, { request = null, cwd = null } = 
   const q = { header, question, multiSelect: false, noOther: true, options };
   const sig = squash([found.kind === 'patch' ? CODEX_PATCH_HEAD : question, ...sigExtra, ...options.map((o) => o.label), ...(request ? [`request ${request}`] : [])].join('\n'));
   const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
-  return { id, kind: found.kind, ...(files ? { files } : {}), questions: [q], untouched: cursorAt === 0, cursorAt };
+  return { id, kind: found.kind, ...(files ? { files, drawn } : {}), questions: [q], untouched: cursorAt === 0, cursorAt };
 }
 
 const PREVIEW_LINES = 60;
 const PREVIEW_WIDTH = 240;
 
-/** A patch's text from a pending call: an `apply_patch` call's input, or `tools.apply_patch("…")` in an exec script. */
+/**
+ * A patch's text from a pending call: an `apply_patch` call's input, or `tools.apply_patch("…")`
+ * in an exec script — null when the script has more than one (which one Codex asks is not known).
+ */
 function patchOfCall(p) {
   const input = typeof p.input === 'string' ? p.input : typeof p.arguments === 'string' ? p.arguments : '';
   if (p.name === 'apply_patch') return input;
-  if (p.name !== 'exec') return null;
+  if (p.name !== 'exec' || input.split('tools.apply_patch(').length !== 2) return null;
   const m = input.match(/tools\.apply_patch\(\s*("(?:[^"\\]|\\.)*")/);
   if (!m) return null;
   try {
@@ -430,15 +474,19 @@ function patchOfCall(p) {
   }
 }
 
+const squashAll = (l) => l.replace(/\s+/g, '');
+
 /**
  * The diff preview of a waiting patch card: the current turn's pending `apply_patch` (no output
  * yet) whose files are exactly the menu's `files` (absolute; a patch's relative paths resolve
- * against `cwd`) and, when the row's `request` is a call id (not the hook's `hook-…` stamp), whose
- * call it is — so a preview never shows another patch than the one asked about. Its lines
- * between `*** Begin Patch` and `*** End Patch`, at most PREVIEW_LINES; null when none matches.
- * The screen stays the truth for what is asked; this only shows what Codex drew above the menu.
+ * against `cwd`), whose `+`/`-` lines are exactly the ones Codex `drawn` above the menu (in any
+ * file order, whitespace aside), and, when the row's `request` is a call id (not the hook's
+ * `hook-…` stamp), whose call it is — so a preview never shows another patch than the one asked
+ * about. Its lines between `*** Begin Patch` and `*** End Patch`, at most PREVIEW_LINES; null when
+ * none matches (no drawn diff, a script with two patches, a diff Codex cut short).
  */
-export function codexPatchPreview(rolloutText, files, cwd, request = null) {
+export function codexPatchPreview(rolloutText, { files, drawn, cwd = null, request = null } = {}) {
+  if (!drawn?.length) return null;
   const pending = new Map();
   for (const line of String(rolloutText ?? '').split('\n')) {
     if (!/task_started|_call/.test(line)) continue;
@@ -457,6 +505,7 @@ export function codexPatchPreview(rolloutText, files, cwd, request = null) {
     } else if (p.type === 'custom_tool_call_output' || p.type === 'function_call_output') pending.delete(p.call_id);
   }
   const want = [...new Set(files ?? [])].sort().join('\n');
+  const wantChanges = drawn.map(squashAll).sort().join('\n');
   const abs = (f) => (f.startsWith('/') || !cwd ? f : `${String(cwd).replace(/\/+$/, '')}/${f}`);
   const only = request && !String(request).startsWith('hook-') ? String(request) : null;
   for (const [callId, patch] of [...pending.entries()].reverse()) {
@@ -465,6 +514,8 @@ export function codexPatchPreview(rolloutText, files, cwd, request = null) {
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
     const touched = lines.map((l) => l.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/)?.[1]?.trim()).filter(Boolean);
     if ([...new Set(touched.map(abs))].sort().join('\n') !== want) continue;
+    const changes = lines.filter((l) => /^[+-]/.test(l) && !/^\*\*\* /.test(l));
+    if (changes.map(squashAll).sort().join('\n') !== wantChanges) continue;
     const shown = lines.slice(0, PREVIEW_LINES).map((l) => (l.length > PREVIEW_WIDTH ? `${l.slice(0, PREVIEW_WIDTH - 1)}…` : l));
     if (lines.length > PREVIEW_LINES) shown.push(`… ${lines.length - PREVIEW_LINES} more lines`);
     return shown.join('\n');
