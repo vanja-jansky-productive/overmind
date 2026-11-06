@@ -313,14 +313,16 @@ function drawnPatch(lines, head) {
   if (start < 0) return null;
   const block = lines.slice(start, head).map((l) => l.trim()).filter(Boolean);
   const changes = [];
-  let open = false; // the last numbered line was a change: an unnumbered indented line continues it
+  // The last numbered line was a change: an unnumbered indented line continues it. A bare number
+  // is a numbered line too — a blank context line, its trailing space trimmed (`    4 ` → `    4`).
+  let open = false;
   for (const raw of lines.slice(start + 1, head)) {
     const t = raw.trim();
     const m = raw.match(CODEX_DRAWN_LINE);
     if (m) {
       changes.push(m[1].replace(/\s+$/, ''));
       open = true;
-    } else if (open && t && /^\s/.test(raw) && !/^(└|\+ Show details|⋮|…)/.test(t) && !/^\d+\s/.test(t)) {
+    } else if (open && t && /^\s/.test(raw) && !/^(└|\+ Show details|⋮|…)/.test(t) && !/^\d+(\s|$)/.test(t)) {
       changes[changes.length - 1] += ` ${t}`;
     } else {
       open = false;

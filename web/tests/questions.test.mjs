@@ -387,6 +387,19 @@ test('the drawn diff: line numbers dropped, context lines skipped, wrapped lines
   assert.equal(parseCodexScreenPrompt(bare).drawn, null);
 });
 
+test('review S1: a blank context line (a bare line number, right-trimmed) after a change is context, not a wrapped continuation', () => {
+  // The screen of review p5-r2 S1 (rv-p5b/probe-drawn.mjs): `    4 ` arrives as `    4`.
+  const one = ['• Edited a.txt (+2 -0)', '  └ a.txt (+2 -0)', '    1  import os', '    2 +import sys', '    3 +import re', '    4 ', '    5  def main():', '    + Show details'].join('\n');
+  const p = parseCodexScreenPrompt(drawnAs(one).replace('  Destination: /work/project/new.txt\n', ''), { request: 'call_1', cwd: '/work/project' });
+  assert.deepEqual(p.drawn, ['+import sys', '+import re']);
+  const patch = '*** Begin Patch\n*** Update File: a.txt\n@@\n import os\n+import sys\n+import re\n \n def main():\n*** End Patch';
+  assert.match(codexPatchPreview([startedLine, patchCall('call_1', patch)].join('\n'), { files: p.files, drawn: p.drawn, cwd: '/work/project', request: 'call_1' }), /^\*\*\* Update File: a\.txt/);
+  // Several blank context lines, and a wrapped long `+` line still joined back.
+  const many = ['• Edited a.txt (+3 -1)', '  └ a.txt (+3 -1)', '    1  import os', '    2 -old', '    3 +a long added line that the', '      pane wrapped here', '    4', '    5', '   10 +after blanks', '   11', '   12 +last', '   13', '    + Show details'].join('\n');
+  const q = parseCodexScreenPrompt(drawnAs(many).replace('  Destination: /work/project/new.txt\n', ''), { cwd: '/work/project' });
+  assert.deepEqual(q.drawn, ['-old', '+a long added line that the pane wrapped here', '+after blanks', '+last']);
+});
+
 test('review C2: two patches in one exec script — no preview (which one is asked?), and the two menus are two cards', () => {
   const script = `await tools.apply_patch(${JSON.stringify(P_LIVE)});\nawait tools.apply_patch(${JSON.stringify(P_OTHER)});`;
   const rollout = [startedLine, execCall('call_X', script)].join('\n');
