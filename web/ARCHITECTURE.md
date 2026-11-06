@@ -348,7 +348,8 @@ alike), so next, for a busy or waiting Codex row, the **tool processes of its cu
 looked up (lib/codex-tools.mjs) and TERMed — **embedded mode only**: one `ps -ax` and one
 `lsof -d cwd` for the candidates; a process counts only when its parent is the row's own codex
 pid (the TUI: its children are this session's by construction, and nothing else is ever
-signalled), it runs `<shell> -c|-lc <script>` with `<script>` a command the current turn (the
+signalled), it runs `<shell> -c|-lc <script>` (or `<script>` itself: the shell execs a lone simple
+command in its own place, `sleep 300` runs as `sleep 300`) with `<script>` a command the current turn (the
 rollout's last 2 MB, after its last `task_started`) asked to run, it started no earlier than that
 call (2 s slack) and its cwd is the row's cwd or below (a row whose cwd is `/` matches none). Its
 process group (when it leads one) and its descendants go with it. Each is checked again to be the

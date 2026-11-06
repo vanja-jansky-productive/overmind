@@ -112,6 +112,8 @@ the 90-column ones re-wrapped the way Codex wraps them): `web/tests/fixtures/cod
 | MCP option 4 / Esc | `Failed tiny.write_note └ Error: user cancelled MCP tool call`; the turn goes on |
 | MCP hook | `PermissionRequest` with `tool_name: "mcp__tiny__write_note"`, no `command` |
 | MCP call shapes | code mode calls it as `tools.mcp__tiny__write_note({…})` inside `exec`; a bare `function_call` `mcp__tiny__write_note` is `unsupported call` in 0.166's code mode. A `readOnlyHint: true` tool runs without asking |
+| Two `tools.apply_patch` in one script | each asks in turn under the one `exec` call id: P1's menu (its diff drawn above it), then, answered, P2's (`• Edited b.txt (+1 -1)` with P2's lines). The card ids differ only by the drawn diff; a P1 card answering P2's menu got 409 (live, `call_mock_32`) |
+| A code-mode script outlives its call | an `exec` waiting on a patch menu yields after ~30 s (`Script running with cell ID 1`), the turn ends, and the cell asks its next patch later — seen live at the *next* turn's start, while the row's `approval_id` named that turn's new call: the menu on screen was the old cell's P2. So neither the call id nor the files say which patch a menu asks; the drawn diff does (the old preview showed the new call's `+FIRST harmless 28` above the old cell's `-FIRST … +SECOND …` menu; now none) |
 | Exec outside code mode | an `exec_command` `function_call` with `sandbox_permissions: "require_escalated"` shows the usual exec menu (embedded mode; code mode's `exec` timed out negotiating with its code-mode host there) |
 
 Answered from the web by menu index with the exec card's checks (the id, `untouched`, the cursor
@@ -131,6 +133,8 @@ got 409 with no key sent. Waiting showed 1–2.5 s after the prompt.
 | Embedded mode, the pane closed | the command is reparented to pid 1 and runs to its end (§3) |
 | `ps -E` | shows no environment of these processes, so `CODEX_THREAD_ID` cannot tell whose a tool is; `ps` prints a newline in the args as `\012` |
 | Daemon mode, whose shells | the daemon serves every pane on the host, and is a child of the pane that started it only until that pane goes (then pid 1; a managed daemon `codex app-server daemon` runs under launchd from the start). Two panes on one checkout run the same `npm test` / `npm run dev` under it — command, cwd and start time cannot tell whose a shell is |
+| A lone simple command | the shell execs it in its own place: `FCMD: sleep 401` ran as `sleep 401`, the TUI's direct child (no `zsh -lc` parent); a compound one (`sleep 401; echo done`) keeps its `zsh -lc` |
+| Web close, live (embedded, three panes) | A and B on one checkout, each with an earlier turn's `sleep 401` still running and a current (busy) turn's `sleep 402`, B's started after A's call: closing A → `tools: {pids: [A's sleep 402], result: "terminated"}`, A's `sleep 401` and both of B's untouched; closing B (busy) → only B's `sleep 402`; closing D (idle, its turn's `sleep 404` past the yield) → no `tools`, `sleep 404` still running |
 | What a web close stops | **embedded mode only**: the TUI's own `<shell> -c` children running a command of the row's **current turn**, for a busy or waiting row. Daemon mode: nothing (Codex ends the thread's commands ~60 s later, above). An idle row: nothing — a dev server the user asked for keeps running |
 
 ## 7. Open
