@@ -1,4 +1,4 @@
-// Close a session for good: interrupt a Codex turn, stop the tool processes the session started,
+// Close a session for good: interrupt a Codex turn, stop the tool processes that turn started,
 // terminate the process, then tear down the terminal that hosted it (the tmux window, and the tmux
 // session when that was its only window, or the iTerm tab).
 //
@@ -73,28 +73,37 @@ export function createKiller({
     return 'timeout';
   }
 
-  const signal = (pid, sig) => {
+  /** Sends `sig` to `pid`: null when it was sent, else the error (ESRCH: the process is gone). */
+  const send = (pid, sig) => {
     try {
       killProcess(pid, sig);
-    } catch {
-      /* gone already (ESRCH), or not ours to signal (EPERM): nothing more to do for it */
+      return null;
+    } catch (err) {
+      return err;
     }
   };
 
   /**
-   * The tool processes a Codex row started (lib/codex-tools.mjs: in the pane's tree only, matched
-   * by the commands its rollout asked for), looked up after the interrupt and TERMed before the
-   * agent goes — neither Esc nor the agent's SIGTERM stops them, and a command still running when
-   * `exec_command` yielded outlives its turn, so an idle row is looked at too. Returns the lookup,
-   * for `reap` once the agent is gone; null when there is nothing to stop.
+   * The tool processes a busy or waiting Codex row's current turn started (lib/codex-tools.mjs:
+   * the TUI's own shells, embedded mode, matched by the commands the turn asked for), looked up
+   * after the interrupt and TERMed before the agent goes — neither Esc nor the agent's SIGTERM
+   * stops them. An idle row's commands are left running: a dev server or watcher the user asked
+   * for outlives its turn on purpose. Each is checked again to be the same process (pid, args,
+   * start) right before the TERM; a group only while its leader is. Errors are ignored (gone
+   * already, or not ours). Returns what was signalled, for `reap` once the agent is gone; null
+   * when nothing was.
    */
   async function stopTools(session) {
-    if (session.harness !== 'codex' || !tools) return null;
+    const codexTurn = session.harness === 'codex' && (session.status === 'busy' || session.status === 'waiting');
+    if (!codexTurn || !tools) return null;
     const found = await tools.find(session).catch(() => null);
     if (!found?.pids?.length) return null;
-    for (const g of found.groups ?? []) signal(-g, 'SIGTERM');
-    for (const pid of found.pids) signal(pid, 'SIGTERM');
-    return found;
+    const rows = await tools.alive(found).catch(() => []);
+    if (!rows.length) return null;
+    const live = new Set(rows.map((r) => r.pid));
+    for (const g of found.groups ?? []) if (live.has(g)) send(-g, 'SIGTERM');
+    for (const pid of live) send(pid, 'SIGTERM');
+    return { ...found, pids: [...live].sort((a, b) => a - b), groups: (found.groups ?? []).filter((g) => live.has(g)), rows };
   }
 
   /**
@@ -110,7 +119,7 @@ export function createKiller({
     }
     if (!left.length) return { pids: found.pids, result: 'terminated' };
     left = await tools.alive(found).catch(() => []);
-    for (const r of left) signal(r.pid, 'SIGKILL');
+    for (const r of left) send(r.pid, 'SIGKILL');
     return { pids: found.pids, result: left.length ? 'killed' : 'terminated' };
   }
 
@@ -118,24 +127,18 @@ export function createKiller({
   async function terminate(pid) {
     if (!Number.isInteger(pid) || pid <= 1) return 'skipped';
     if (!isAlive(pid, killProcess)) return 'gone';
-    try {
-      killProcess(pid, 'SIGTERM');
-    } catch (err) {
-      if (err?.code === 'ESRCH') return 'gone';
-      throw err;
-    }
+    const term = send(pid, 'SIGTERM');
+    if (term?.code === 'ESRCH') return 'gone';
+    if (term) throw term;
     const deadline = Date.now() + graceMs;
     while (Date.now() < deadline) {
       await wait(200);
       if (!isAlive(pid, killProcess)) return 'terminated';
     }
     if (!isAlive(pid, killProcess)) return 'terminated';
-    try {
-      killProcess(pid, 'SIGKILL');
-    } catch (err) {
-      if (err?.code === 'ESRCH') return 'terminated';
-      throw err;
-    }
+    const kill = send(pid, 'SIGKILL');
+    if (kill?.code === 'ESRCH') return 'terminated';
+    if (kill) throw kill;
     await wait(200);
     return 'killed';
   }

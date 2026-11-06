@@ -1,23 +1,24 @@
-// The tool processes a Codex session started, so closing its row can stop them too (#34 phase 5).
+// The tool processes a Codex turn started, so closing a busy or waiting row can stop them too
+// (#34 phase 5). Embedded mode only.
 //
 // Codex 0.166 runs a shell command as `<shell> -c <script>` (`-lc` for a login shell), a direct
 // child of a codex process: the TUI itself in embedded mode, or the app-server daemon in daemon
-// mode — which runs as a child of the TUI that started it and serves every other pane on the host
-// too. A command still running when `exec_command` yields keeps running after its turn ends (the
-// turn can be over, the row `idle`), and neither an Esc (`turn_aborted`) nor the TUI's SIGTERM
-// stops it (docs/codex-findings.md §3, §6). Codex records no pid. So a tool process is
-// recognised, never guessed, by all of:
-//   - it is in the closed pane's process tree (a descendant of the row's codex pid) — nothing
-//     outside it is ever signalled;
-//   - its parent is a codex process in that tree (the TUI, or a daemon it started);
-//   - it runs `<shell> -c|-lc <script>` with `<script>` a command the row's rollout (its tail)
-//     asked to run (`exec_command({cmd:…})` in an `exec` script, an `exec_command` / `shell`
-//     function call, a `CommandExecution` item), and it started no earlier than that call (2 s
-//     slack);
-//   - its cwd is the row's cwd or below it (a daemon this pane started may run another pane's
-//     identical command in another checkout).
+// mode. A command still running when `exec_command` yields keeps running after its call returns,
+// and neither an Esc (`turn_aborted`) nor the TUI's SIGTERM stops it (docs/codex-findings.md §3,
+// §6). Codex records no pid. So a tool process is recognised, never guessed, by all of:
+//   - its parent IS the row's codex pid (the TUI, embedded mode): the TUI's own children are this
+//     session's by construction, and nothing else is ever signalled;
+//   - it runs `<shell> -c|-lc <script>` with `<script>` a command the row's CURRENT turn (the
+//     rollout tail after its last `task_started`) asked to run (`exec_command({cmd:…})` in an
+//     `exec` script, an `exec_command` / `shell` function call, a `CommandExecution` item), and
+//     it started no earlier than that call (2 s slack);
+//   - its cwd is the row's cwd or below it (never by cwd when the row's cwd is `/`).
 // What it started is killed with it: its process group when it leads one, else its descendants.
-// A daemon another pane started is outside this pane's tree: its tool processes are left alone.
+//
+// Daemon mode is left to Codex: the daemon serves every pane on the host, so its shells cannot be
+// told apart by command, cwd or time (two panes on one checkout run the same `npm test`), and it
+// ends a closed thread's commands itself ~60 s after the TUI goes (codex-findings §6).
+// An earlier turn's commands are left alone too: a dev server the user asked for stays up.
 
 import fs from 'node:fs';
 
@@ -60,14 +61,15 @@ function cmdLiteral(seg) {
 }
 
 /**
- * The shell scripts a Codex rollout (`text`, its tail) asked to run, each with when it asked
- * (ms, the line's timestamp): `[{ cmd, atMs }]`, oldest first. A line without a timestamp is
- * skipped — its process could not be told from an older one.
+ * The shell scripts the current turn of a Codex rollout (`text`, its tail: the lines after its
+ * last `task_started`, or all of it when it has none) asked to run, each with when it asked (ms,
+ * the line's timestamp): `[{ cmd, atMs }]`, oldest first. A line without a timestamp is skipped —
+ * its process could not be told from an older one.
  */
 export function rolloutCommands(text) {
-  const out = [];
+  let out = [];
   for (const line of String(text ?? '').split('\n')) {
-    if (!/_call"|CommandExecution/.test(line)) continue;
+    if (!/_call"|CommandExecution|"task_started"/.test(line)) continue;
     let v;
     try {
       v = JSON.parse(line);
@@ -75,6 +77,10 @@ export function rolloutCommands(text) {
       continue;
     }
     const p = v?.payload;
+    if (v?.type === 'event_msg' && p?.type === 'task_started') {
+      out = [];
+      continue;
+    }
     const atMs = Date.parse(v?.timestamp);
     if (!p || typeof p !== 'object' || !Number.isFinite(atMs)) continue;
     const add = (cmd) => typeof cmd === 'string' && cmd && out.push({ cmd, atMs });
@@ -104,49 +110,48 @@ export function shellScript(args) {
 const isCodex = (row) => /^codex(?:-|$)/.test(base(String(row.args).split(' ')[0]));
 
 /**
+ * The row's tool processes by tree, script and time only (no cwd yet): the TUI's (`root`'s) direct
+ * `<shell> -c` children running a script of `calls`, started no earlier than its first call.
+ */
+export function toolCandidates({ rows, root, calls }) {
+  if (!Number.isInteger(root) || root <= 1 || !calls?.length) return [];
+  // The earliest a process running each script may have started: its first call's time.
+  const since = new Map();
+  for (const c of calls) if (!since.has(c.cmd) || c.atMs < since.get(c.cmd)) since.set(c.cmd, c.atMs);
+  return rows.filter((r) => {
+    if (r.ppid !== root || isCodex(r)) return false;
+    const script = shellScript(r.args);
+    // Not before the call that asked for it: an older identical command is another one's.
+    return script != null && since.has(script) && r.startMs >= since.get(script) - START_SLACK_MS;
+  });
+}
+
+/**
  * The tool processes to stop for the row whose codex process is `root`: see the header. `rows`
  * from parsePs; `calls` from rolloutCommands; `cwdOf`: pid → cwd (null when unknown — then the
  * process is left alone).
  * @returns {{ leaders: number[], pids: number[] }} the matched tool processes, and every pid to
- *   signal (each one, its descendants, its group when it leads one).
+ *   signal (each one and its descendants).
  */
 export function toolTargets({ rows, root, calls, cwd, cwdOf = () => null }) {
-  const none = { leaders: [], pids: [] };
-  if (!Number.isInteger(root) || root <= 1 || !calls?.length || !cwd) return none;
+  const dir = String(cwd ?? '').replace(/\/+$/, '');
+  // `/` (or no cwd) would match every process's cwd: no narrowing, so no match.
+  if (!dir) return { leaders: [], pids: [] };
+  const leaders = toolCandidates({ rows, root, calls }).filter((r) => {
+    const at = cwdOf(r.pid);
+    return typeof at === 'string' && (at === dir || at.startsWith(`${dir}/`));
+  });
   const kids = new Map();
   for (const r of rows) {
     if (!kids.has(r.ppid)) kids.set(r.ppid, []);
     kids.get(r.ppid).push(r);
   }
-  const below = (pid) => {
-    const out = [];
-    const stack = [...(kids.get(pid) ?? [])];
-    while (stack.length) {
-      const r = stack.pop();
-      out.push(r);
-      stack.push(...(kids.get(r.pid) ?? []));
-    }
-    return out;
-  };
-  const tree = below(root);
-  const codexPids = new Set([root, ...tree.filter(isCodex).map((r) => r.pid)]);
-  // The earliest a process running each script may have started: its first call's time.
-  const since = new Map();
-  for (const c of calls) if (!since.has(c.cmd) || c.atMs < since.get(c.cmd)) since.set(c.cmd, c.atMs);
-  const dir = String(cwd).replace(/\/+$/, '');
-  const leaders = tree.filter((r) => {
-    if (!codexPids.has(r.ppid) || isCodex(r)) return false;
-    const script = shellScript(r.args);
-    if (script == null || !since.has(script)) return false;
-    // Not before the call that asked for it: an older identical command is another one's.
-    if (r.startMs < since.get(script) - START_SLACK_MS) return false;
-    const at = cwdOf(r.pid);
-    return typeof at === 'string' && (at === dir || at.startsWith(`${dir}/`));
-  });
   const pids = new Set();
-  for (const l of leaders) {
-    pids.add(l.pid);
-    for (const d of below(l.pid)) pids.add(d.pid);
+  const stack = [...leaders];
+  while (stack.length) {
+    const r = stack.pop();
+    pids.add(r.pid);
+    stack.push(...(kids.get(r.pid) ?? []));
   }
   return { leaders: leaders.map((l) => l.pid).sort((a, b) => a - b), pids: [...pids].sort((a, b) => a - b) };
 }
@@ -192,9 +197,9 @@ export function createCodexTools({ run, readTail, now = Date.now, ps = 'ps', lso
       const rows = await table();
       const root = Number(session.pid);
       // Only the candidates' cwds are looked up: one lsof for the few shells that matched the rest.
-      const pre = toolTargets({ rows, root, calls, cwd: '/', cwdOf: () => '/' });
-      if (!pre.leaders.length) return empty;
-      const { stdout } = await run(lsof, ['-a', '-d', 'cwd', '-Fpn', '-p', pre.leaders.join(',')], { timeout: 5000 }).catch((e) => ({ stdout: e?.stdout ?? '' })); // exit 1 when one pid is gone
+      const pre = toolCandidates({ rows, root, calls }).map((r) => r.pid);
+      if (!pre.length) return empty;
+      const { stdout } = await run(lsof, ['-a', '-d', 'cwd', '-Fpn', '-p', pre.join(',')], { timeout: 5000 }).catch((e) => ({ stdout: e?.stdout ?? '' })); // exit 1 when one pid is gone
       const cwds = parseLsofCwd(stdout);
       const t = toolTargets({ rows, root, calls, cwd: realDir(session.cwd), cwdOf: (pid) => cwds.get(pid) ?? null });
       const byPid = new Map(rows.map((r) => [r.pid, r]));

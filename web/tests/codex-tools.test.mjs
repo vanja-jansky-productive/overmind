@@ -8,8 +8,7 @@ const T0 = Date.parse('2026-11-06T08:45:42.000Z');
 const started = (ts = '2026-11-06T08:45:42.000Z') => line({ timestamp: ts, type: 'event_msg', payload: { type: 'task_started' } });
 const exec = (input, ts = '2026-11-06T08:45:42.209Z') => line({ timestamp: ts, type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c1', name: 'exec', input } });
 
-test('rolloutCommands: every script the rollout asked to run, with when — from every call shape Codex 0.166 writes', () => {
-  const ts = (iso) => Date.parse(iso);
+test("rolloutCommands: every script the current turn asked to run, with when — from every call shape Codex 0.166 writes", () => {
   const text = [
     started('2026-11-06T08:40:00.000Z'),
     exec('await tools.exec_command({cmd:"an earlier turn"});', '2026-11-06T08:40:01.000Z'),
@@ -22,14 +21,18 @@ test('rolloutCommands: every script the rollout asked to run, with when — from
     line({ type: 'response_item', payload: { type: 'function_call', call_id: 'c4', name: 'exec_command', arguments: JSON.stringify({ cmd: 'no timestamp' }) } }),
   ].join('\n');
   assert.deepEqual(rolloutCommands(text), [
-    { cmd: 'an earlier turn', atMs: ts('2026-11-06T08:40:01.000Z') },
     { cmd: 'sleep 61; echo done61', atMs: T0 + 209 },
     { cmd: "printf 'a\nb'", atMs: T0 + 209 },
     { cmd: 'npm test', atMs: T0 + 209 },
     { cmd: 'cargo build', atMs: T0 + 1000 },
     { cmd: 'make', atMs: T0 + 1000 },
     { cmd: 'ls -la', atMs: T0 + 2000 },
-  ]);
+  ], "an earlier turn's commands are not this turn's: a dev server it started is left running");
+  // A tail that starts mid-turn (no turn start in it): what it has.
+  assert.deepEqual(rolloutCommands(exec('await tools.exec_command({cmd:"x"})')), [{ cmd: 'x', atMs: T0 + 209 }]);
+  // An interrupt (the close's Escape) does not start a turn: the aborted turn's commands stay.
+  const aborted = line({ timestamp: '2026-11-06T08:46:00.000Z', type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } });
+  assert.deepEqual(rolloutCommands([started(), exec('await tools.exec_command({cmd:"x"})'), aborted].join('\n')), [{ cmd: 'x', atMs: T0 + 209 }]);
   assert.deepEqual(rolloutCommands('garbage\n'), []);
 });
 
@@ -49,50 +52,68 @@ test('ps parsing: etime forms, octal-escaped newlines, shells only', () => {
   assert.deepEqual([...parseLsofCwd('p101\nfcwd\nn/work/project\np102\nfcwd\nn/elsewhere\n')], [[101, '/work/project'], [102, '/elsewhere']]);
 });
 
-// The live tree (docs/codex-findings.md §6): pane → codex TUI (500) → app-server daemon (510) →
-// [code-mode host, an MCP server, the turn's `zsh -c …` (600) → sleep (601)], plus another pane's
-// tool (700) under the same daemon, an older one of this pane (650), and a process outside (900).
+// The live trees (docs/codex-findings.md §6). Embedded mode: pane → codex TUI (500) → the turn's
+// `zsh -c …` (600) → sleep (601), the code-mode host and an MCP server; an older identical command
+// of this pane (650), one in another checkout (660). A second embedded pane in the SAME checkout
+// (TUI 800) runs the identical command (810) and a dev server (820). A process outside (900).
 const NOW = T0 + 60_000;
 const ps = (pid, ppid, pgid, startMs, args) => ({ pid, ppid, pgid, startMs, args });
 const ROWS = [
   ps(499, 1, 499, T0 - 600_000, '/opt/homebrew/bin/tmux -L omtest new-session'),
   ps(500, 499, 500, T0 - 300_000, '/opt/codex/bin/codex -a on-request -s read-only'),
-  ps(510, 500, 510, T0 - 300_000, '/home/.codex/packages/app-server-daemon/bin/codex app-server --listen unix:// --managed-daemon'),
-  ps(511, 510, 510, T0 - 300_000, '/home/.codex/packages/app-server-daemon/bin/codex-code-mode-host'),
-  ps(512, 510, 512, T0 - 300_000, 'node /work/tinymcp.mjs'),
-  ps(600, 510, 600, T0 + 1_000, '/bin/zsh -c sleep 61; echo done61'),
+  ps(511, 500, 500, T0 - 300_000, '/opt/codex/bin/codex-code-mode-host'),
+  ps(512, 500, 512, T0 - 300_000, 'node /work/tinymcp.mjs'),
+  ps(600, 500, 600, T0 + 1_000, '/bin/zsh -c sleep 61; echo done61'),
   ps(601, 600, 600, T0 + 1_010, 'sleep 61'),
-  ps(650, 510, 650, T0 - 120_000, '/bin/zsh -c sleep 61; echo done61'),
-  ps(700, 510, 700, T0 + 2_000, '/bin/zsh -c sleep 61; echo done61'),
-  ps(701, 510, 701, T0 + 2_000, '/bin/zsh -c npm run dev'),
+  ps(650, 500, 650, T0 - 120_000, '/bin/zsh -c sleep 61; echo done61'),
+  ps(660, 500, 660, T0 + 2_000, '/bin/zsh -c npm test'),
+  ps(800, 499, 800, T0 - 200_000, '/opt/codex/bin/codex'),
+  ps(810, 800, 810, T0 + 2_000, '/bin/zsh -c sleep 61; echo done61'),
+  ps(811, 810, 810, T0 + 2_010, 'sleep 61'),
+  ps(820, 800, 820, T0 + 3_000, '/bin/zsh -lc npm run dev'),
   ps(900, 1, 900, T0 + 1_000, '/bin/zsh -c sleep 61; echo done61'),
 ];
-const CWD = { 600: '/work/project', 650: '/work/project', 700: '/work/other', 701: '/work/project', 900: '/work/project' };
-const CALLS = [{ cmd: 'sleep 61; echo done61', atMs: T0 + 209 }];
+const CWD = { 600: '/work/project', 650: '/work/project', 660: '/work/other', 810: '/work/project', 820: '/work/project/web', 900: '/work/project' };
+const CALLS = [{ cmd: 'sleep 61; echo done61', atMs: T0 + 209 }, { cmd: 'npm test', atMs: T0 + 209 }, { cmd: 'npm run dev', atMs: T0 + 209 }];
+const cwdOf = (pid) => CWD[pid] ?? null;
 
-test("toolTargets: the turn's own shell and what it started, nothing else in or outside the pane's tree", () => {
-  const t = toolTargets({ rows: ROWS, root: 500, calls: CALLS, cwd: '/work/project', cwdOf: (pid) => CWD[pid] ?? null });
-  assert.deepEqual(t.leaders, [600], '650 started before the call, 700 runs in another checkout, 701 is not a command it asked for, 900 is outside the tree');
-  assert.deepEqual(t.pids.sort(), [600, 601]);
-  // Never the daemon, the code-mode host or an MCP server, even when a command matches its args.
-  const odd = toolTargets({ rows: ROWS, root: 500, calls: [{ cmd: '/work/tinymcp.mjs', atMs: T0 - 600_000 }], cwd: '/work/project', cwdOf: () => '/work/project' });
-  assert.deepEqual(odd.pids, []);
-  // The same script asked for earlier too: its earliest call is the bound (650 is that one's).
-  const twice = toolTargets({ rows: ROWS, root: 500, calls: [{ cmd: 'sleep 61; echo done61', atMs: T0 - 130_000 }, ...CALLS], cwd: '/work/project', cwdOf: (pid) => CWD[pid] ?? null });
+test("toolTargets (embedded mode): the TUI's own shells this turn asked for, and what they started — never another pane's", () => {
+  const t = toolTargets({ rows: ROWS, root: 500, calls: CALLS, cwd: '/work/project', cwdOf });
+  assert.deepEqual(t.leaders, [600], '650 started before the call, 660 runs in another checkout, 810/820 are the other pane\'s, 900 is outside');
+  assert.deepEqual(t.pids, [600, 601]);
+  // Closing the other pane in the same checkout: only its own.
+  assert.deepEqual(toolTargets({ rows: ROWS, root: 800, calls: CALLS, cwd: '/work/project', cwdOf }).pids, [810, 811, 820]);
+  // Never the code-mode host or an MCP server, even when a command matches its args.
+  assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: [{ cmd: '/work/tinymcp.mjs', atMs: T0 - 600_000 }], cwd: '/work/project', cwdOf: () => '/work/project' }).pids, []);
+  // The same script asked for twice this turn: its earliest call is the bound.
+  const twice = toolTargets({ rows: ROWS, root: 500, calls: [{ cmd: 'sleep 61; echo done61', atMs: T0 - 130_000 }, ...CALLS], cwd: '/work/project', cwdOf });
   assert.deepEqual(twice.leaders, [600, 650]);
   // An unknown cwd, no calls, a bad root: nothing.
   assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: CALLS, cwd: '/work/project' }).pids, []);
-  assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: [], cwd: '/work/project', cwdOf: () => '/work/project' }).pids, []);
-  assert.deepEqual(toolTargets({ rows: ROWS, root: 1, calls: CALLS, cwd: '/', cwdOf: () => '/' }).pids, []);
-  // A daemon another pane started is not in this pane's tree: its tools are left alone.
-  const other = ROWS.map((r) => (r.pid === 510 ? { ...r, ppid: 1 } : r));
-  assert.deepEqual(toolTargets({ rows: other, root: 500, calls: CALLS, cwd: '/work/project', cwdOf: (pid) => CWD[pid] ?? null }).pids, []);
-  // Embedded mode: the TUI itself is the parent.
-  const embedded = [ROWS[1], ps(620, 500, 620, T0 + 500, '/bin/bash -lc cargo build'), ps(621, 620, 620, T0 + 600, 'cargo build')];
-  assert.deepEqual(
-    toolTargets({ rows: embedded, root: 500, calls: [{ cmd: 'cargo build', atMs: T0 }], cwd: '/work/project', cwdOf: () => '/work/project/sub' }).pids.sort(),
-    [620, 621],
-  );
+  assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: [], cwd: '/work/project', cwdOf }).pids, []);
+  assert.deepEqual(toolTargets({ rows: ROWS, root: 1, calls: CALLS, cwd: '/work/project', cwdOf }).pids, []);
+  // A row whose cwd is `/` narrows nothing: never a match by cwd.
+  assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: CALLS, cwd: '/', cwdOf }).pids, []);
+});
+
+test('toolTargets (daemon mode): nothing — the daemon serves every pane, so its shells are never told apart; Codex ends them itself', () => {
+  // The review's topology: pane A's TUI (200) started the daemon (300), which also serves pane B
+  // (TUI 210). B runs `npm test` (400) and a dev server (500) in A's checkout; A asked for both
+  // commands earlier. Closing A must touch neither.
+  const m = 60_000;
+  const rows = [
+    ps(100, 1, 100, T0 - 60 * m, '-zsh'),
+    ps(200, 100, 200, T0 - 59 * m, '/opt/homebrew/bin/codex'),
+    ps(300, 200, 200, T0 - 59 * m, '/opt/homebrew/bin/codex app-server'),
+    ps(110, 1, 110, T0 - 50 * m, '-zsh'),
+    ps(210, 110, 210, T0 - 50 * m, '/opt/homebrew/bin/codex'),
+    ps(400, 300, 400, T0 - 1 * m, '/bin/zsh -lc npm test'),
+    ps(401, 400, 400, T0 - 1 * m, 'node jest'),
+    ps(500, 300, 500, T0 - 2 * m, '/bin/zsh -lc npm run dev'),
+  ];
+  const calls = [{ cmd: 'npm test', atMs: T0 - 30 * m }, { cmd: 'npm run dev', atMs: T0 - 40 * m }];
+  const at = (pid) => ({ 400: '/repo', 500: '/repo/web' })[pid] ?? null;
+  assert.deepEqual(toolTargets({ rows, root: 200, calls, cwd: '/repo', cwdOf: at }), { leaders: [], pids: [] });
 });
 
 test('createCodexTools: one ps and one lsof for the candidates; a reused pid is never "alive"', async () => {
@@ -116,7 +137,7 @@ test('createCodexTools: one ps and one lsof for the candidates; a reused pid is 
   assert.deepEqual(found.groups, [600], 'it leads its own process group');
   assert.deepEqual(found.pids.sort(), [600, 601]);
   assert.deepEqual(calls.map((c) => c[0]), ['ps', 'lsof']);
-  assert.deepEqual(calls[1].slice(1), ['-a', '-d', 'cwd', '-Fpn', '-p', '600,700']);
+  assert.deepEqual(calls[1].slice(1), ['-a', '-d', 'cwd', '-Fpn', '-p', '600'], 'only the TUI\'s own shells this turn asked for');
   assert.deepEqual((await tools.alive(found)).map((r) => r.pid).sort(), [600, 601]);
   psOut = psOut.replace(/^601 .*$/m, '601 1 601 00:01 /usr/bin/other');
   assert.deepEqual((await tools.alive(found)).map((r) => r.pid), [600], 'pid 601 now runs something else');

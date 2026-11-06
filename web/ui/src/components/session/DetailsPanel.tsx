@@ -219,7 +219,7 @@ export function DetailsPanel(p: DetailsPanelProps & { variant: 'drawer' | 'panel
                 variant="destructive"
                 size={armed ? 'sm' : 'icon'}
                 aria-label={armed ? 'Confirm close session' : 'Close session'}
-                title={`Close session: ends ${harnessLabel(s?.harness)} and its ${s?.backend === 'iterm' ? 'iTerm tab' : 'tmux window'}${armed ? '' : ` (${panel ? 'click' : 'tap'} twice; or Deactivate to keep it)`}`}
+                title={`Close session: ends ${harnessLabel(s?.harness)}${s?.harness === 'codex' && (s.status === 'busy' || s.status === 'waiting') ? ', the commands its running turn started' : ''} and its ${s?.backend === 'iterm' ? 'iTerm tab' : 'tmux window'}${s?.harness === 'codex' ? ' (commands from earlier turns, like a dev server, keep running)' : ''}${armed ? '' : ` (${panel ? 'click' : 'tap'} twice; or Deactivate to keep it)`}`}
                 disabled={closing || sleeping}
                 onClick={closeSession}
                 className={cn(

@@ -175,7 +175,7 @@ function recorder(order) {
   };
 }
 
-function toolsFake({ survivors = [] } = {}) {
+function toolsFake({ survivors = null } = {}) {
   const rows = [
     { pid: 600, ppid: 510, pgid: 600, startMs: 1, args: '/bin/zsh -c sleep 61' },
     { pid: 601, ppid: 600, pgid: 600, startMs: 1, args: 'sleep 61' },
@@ -184,7 +184,8 @@ function toolsFake({ survivors = [] } = {}) {
   return {
     seen,
     find: async (s) => (seen.push(['find', s.pid]), { leaders: [600], pids: [600, 601], groups: [600], rows }),
-    alive: async (found) => (seen.push(['alive']), found.rows.filter((r) => survivors.includes(r.pid))),
+    // The first check (right before the TERM) finds them all; later ones only the `survivors`.
+    alive: async (found) => (seen.push(['alive']), found.rows.filter((r) => seen.filter((x) => x[0] === 'alive').length === 1 || survivors?.includes(r.pid))),
   };
 }
 
@@ -202,6 +203,7 @@ test('kill: a busy Codex row — Escape, its turn\'s tool processes TERMed, the 
   });
   const res = await k.kill({ pid: 4242, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%7', transcript: '/r', cwd: '/w' });
   assert.deepEqual(order.slice(0, 5), ['Escape', 'SIGTERM -600', 'SIGTERM 600', 'SIGTERM 601', 'SIGTERM 4242'], 'the group, each pid, then the agent');
+  assert.deepEqual(tools.seen.slice(0, 2), [['find', 4242], ['alive']], 'checked to be the same processes right before the first TERM');
   assert.deepEqual(res.tools, { pids: [600, 601], result: 'terminated' });
   assert.ok(!order.some((o) => o.startsWith('SIGKILL')), 'all gone: nothing more');
 
@@ -225,15 +227,34 @@ test('kill: a busy Codex row — Escape, its turn\'s tool processes TERMed, the 
   assert.ok(stubborn.seen.filter((s) => s[0] === 'alive').length >= 2, 'checked while waiting and again right before the KILL');
 });
 
-test('kill: an idle Codex row still gets its tool processes stopped (a yielded command outlives its turn); Claude rows look for none', async () => {
+test("kill: the TERM goes only to what is still the same process (pid, args, start) after the lookup; a gone leader's group is never signalled", async () => {
+  const order = [];
+  const tools = toolsFake();
+  // Between the lookup and the TERM, 600 ended (its pid may be reused); 601 still ran, and ends on the TERM.
+  let checks = 0;
+  tools.alive = async (found) => (checks += 1) === 1 ? found.rows.filter((r) => r.pid === 601) : [];
+  const k = createKiller({ run: noRun, killProcess: recorder(order), sleep: async () => {}, keys: async () => {}, listSessions: async () => [], tools, graceMs: 50 });
+  await k.kill({ pid: 4247, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%8' });
+  assert.deepEqual(order.filter((o) => !o.endsWith(' 4247')), ['SIGTERM 601']);
+  // Nothing left by then: no TERM at all, no `tools` in the answer.
+  const order2 = [];
+  const gone = toolsFake();
+  gone.alive = async () => [];
+  const k2 = createKiller({ run: noRun, killProcess: recorder(order2), sleep: async () => {}, keys: async () => {}, listSessions: async () => [], tools: gone, graceMs: 50 });
+  const res = await k2.kill({ pid: 4248, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%8' });
+  assert.deepEqual(order2, ['SIGTERM 4248']);
+  assert.equal(res.tools, undefined);
+});
+
+test("kill: an idle Codex row's earlier commands are left running (a dev server the user asked for); Claude rows look for none", async () => {
   const order = [];
   const tools = toolsFake();
   const k = createKiller({ run: noRun, killProcess: recorder(order), sleep: async () => {}, keys: async () => order.push('Escape'), listSessions: async () => [], tools });
   const idle = await k.kill({ pid: 4243, harness: 'codex', status: 'idle', backend: 'tmux', handle: '%8' });
-  assert.deepEqual(idle.tools, { pids: [600, 601], result: 'terminated' });
+  assert.equal(idle.tools, undefined);
   assert.equal(idle.interrupt, undefined, 'no Escape for an idle row');
-  assert.deepEqual(order.slice(0, 4), ['SIGTERM -600', 'SIGTERM 600', 'SIGTERM 601', 'SIGTERM 4243']);
-  tools.seen.length = 0;
+  assert.deepEqual(order, ['SIGTERM 4243']);
+  assert.deepEqual(tools.seen, [], 'not even looked up');
   assert.equal((await k.kill({ pid: 4244, harness: 'claude', status: 'busy', backend: 'tmux', handle: '%9' })).tools, undefined);
   assert.deepEqual(tools.seen, []);
   const none = { find: async () => ({ leaders: [], pids: [], groups: [], rows: [] }), alive: async () => [] };
