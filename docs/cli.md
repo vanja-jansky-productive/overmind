@@ -80,8 +80,10 @@ Codex, `/name` in pi — held while the session is busy) and restore (`codex res
 `waiting` while its terminal shows one of Codex's approval menus (`waiting_for: "exec approval: \`<cmd>\`"`,
 `"patch approval: \`<files>\`"`, `"MCP approval: \`<server>.<tool>\`"`), and the web answers that menu as a
 card (a patch card shows its files and the diff); closing a busy or waiting Codex row from the web
-presses Esc first so the turn ends with `turn_aborted`, then stops the tool processes the session
-started in the pane's process tree (see [architecture](architecture.md#other-harnesses)).
+presses Esc first so the turn ends with `turn_aborted`, then (embedded mode) stops the commands that
+turn started — a dev server or watcher Codex started for you in an earlier turn keeps running, and in
+daemon mode Codex ends a closed thread's commands itself ~60 s later (see
+[architecture](architecture.md#other-harnesses)).
 
 **Codex approval hook** (optional, per host):
 

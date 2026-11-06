@@ -130,11 +130,12 @@ got 409 with no key sent. Waiting showed 1–2.5 s after the prompt.
 | Daemon mode, the pane closed | Codex's daemon ends that thread's running commands ~60 s after its TUI goes (`item_completed CommandExecution`, `source: "unified_exec_startup"`, `status: "failed"`, `exit_code: -1`; measured 62 s) |
 | Embedded mode, the pane closed | the command is reparented to pid 1 and runs to its end (§3) |
 | `ps -E` | shows no environment of these processes, so `CODEX_THREAD_ID` cannot tell whose a tool is; `ps` prints a newline in the args as `\012` |
-| Web close, live | the daemon's pane (idle, its `sleep 300` past its turn): `tools: {pids: [shell, sleep], result: "terminated"}`, gone at once; another pane's identical `sleep 300` under the same daemon, in another checkout, untouched. Embedded pane (idle after the yield): its `zsh -lc sleep 401` and `sleep` terminated. A pane whose daemon another pane started: nothing found in its tree, no `tools` field; Codex ended its command 62 s later |
+| Daemon mode, whose shells | the daemon serves every pane on the host, and is a child of the pane that started it only until that pane goes (then pid 1; a managed daemon `codex app-server daemon` runs under launchd from the start). Two panes on one checkout run the same `npm test` / `npm run dev` under it — command, cwd and start time cannot tell whose a shell is |
+| What a web close stops | **embedded mode only**: the TUI's own `<shell> -c` children running a command of the row's **current turn**, for a busy or waiting row. Daemon mode: nothing (Codex ends the thread's commands ~60 s later, above). An idle row: nothing — a dev server the user asked for keeps running |
 
 ## 7. Open
 
 - iTerm rows: covered by unit tests only (one osascript peek, only while the hook's approved
   command has not run).
-- A daemon-mode pane that did not start the daemon: its tool processes are outside its tree, so
-  a close leaves them to Codex (~60 s).
+- Daemon mode: a close stops no tool process; Codex ends a closed thread's commands ~60 s after
+  its TUI goes (§6). An embedded row's commands from an earlier turn are never stopped by a close.
