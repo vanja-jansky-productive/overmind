@@ -92,6 +92,10 @@ test("toolTargets (embedded mode): the TUI's own shells this turn asked for, and
   assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: CALLS, cwd: '/work/project' }).pids, []);
   assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: [], cwd: '/work/project', cwdOf }).pids, []);
   assert.deepEqual(toolTargets({ rows: ROWS, root: 1, calls: CALLS, cwd: '/work/project', cwdOf }).pids, []);
+  // A lone simple command: the shell execs it in its own place, so it runs as itself (`sleep 401`,
+  // seen live on Codex 0.166 embedded) — still the TUI's own child running exactly what was asked.
+  const execd = [...ROWS, ps(630, 500, 630, T0 + 1_500, 'sleep 401'), ps(631, 500, 631, T0 + 1_500, 'sleep 4010')];
+  assert.deepEqual(toolTargets({ rows: execd, root: 500, calls: [...CALLS, { cmd: 'sleep 401', atMs: T0 + 209 }], cwd: '/work/project', cwdOf: (pid) => ({ 630: '/work/project', 631: '/work/project' })[pid] ?? cwdOf(pid) }).leaders, [600, 630]);
   // A row whose cwd is `/` narrows nothing: never a match by cwd.
   assert.deepEqual(toolTargets({ rows: ROWS, root: 500, calls: CALLS, cwd: '/', cwdOf }).pids, []);
 });

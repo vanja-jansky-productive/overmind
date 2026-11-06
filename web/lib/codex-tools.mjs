@@ -8,7 +8,8 @@
 // §6). Codex records no pid. So a tool process is recognised, never guessed, by all of:
 //   - its parent IS the row's codex pid (the TUI, embedded mode): the TUI's own children are this
 //     session's by construction, and nothing else is ever signalled;
-//   - it runs `<shell> -c|-lc <script>` with `<script>` a command the row's CURRENT turn (the
+//   - it runs `<shell> -c|-lc <script>` (or `<script>` itself: the shell execs a lone simple
+//     command in its own place) with `<script>` a command the row's CURRENT turn (the
 //     rollout tail after its last `task_started`) asked to run (`exec_command({cmd:…})` in an
 //     `exec` script, an `exec_command` / `shell` function call, a `CommandExecution` item), and
 //     it started no earlier than that call (2 s slack);
@@ -111,7 +112,8 @@ const isCodex = (row) => /^codex(?:-|$)/.test(base(String(row.args).split(' ')[0
 
 /**
  * The row's tool processes by tree, script and time only (no cwd yet): the TUI's (`root`'s) direct
- * `<shell> -c` children running a script of `calls`, started no earlier than its first call.
+ * `<shell> -c <script>` (or exec'd `<script>`) children running a script of `calls`, started no
+ * earlier than its first call.
  */
 export function toolCandidates({ rows, root, calls }) {
   if (!Number.isInteger(root) || root <= 1 || !calls?.length) return [];
@@ -120,7 +122,8 @@ export function toolCandidates({ rows, root, calls }) {
   for (const c of calls) if (!since.has(c.cmd) || c.atMs < since.get(c.cmd)) since.set(c.cmd, c.atMs);
   return rows.filter((r) => {
     if (r.ppid !== root || isCodex(r)) return false;
-    const script = shellScript(r.args);
+    // A lone simple command is exec'd by the shell in its own place: it runs as itself (`sleep 401`).
+    const script = shellScript(r.args) ?? r.args;
     // Not before the call that asked for it: an older identical command is another one's.
     return script != null && since.has(script) && r.startMs >= since.get(script) - START_SLACK_MS;
   });
