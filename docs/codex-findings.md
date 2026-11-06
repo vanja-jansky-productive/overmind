@@ -59,7 +59,7 @@ is a new hash), so `codex hooks status` compares that entry with the one `instal
 | Hotkeys `(y)` / `(p)` / `(esc)` | not needed: the arrow keys reach every option |
 | Approved `sleep 20 && …` answered in the TUI | the row reads `busy` on the next forced list, `idle` when it ends; the card's answer gets 409 and types nothing |
 | Esc on a busy daemon-mode turn, then SIGTERM (web close) | `custom_tool_call_output "aborted by user"`, `turn_aborted interrupted` before the TUI went. The running tool process (`sleep 30`, a daemon child) was not stopped by the abort and ended on its own |
-| Esc on a busy embedded-mode turn, then SIGTERM (web close) | same: `turn_aborted interrupted`, and the turn's `sleep 30` stayed alive, reparented to pid 1. So a close never stops a tool process the turn started, in either mode — killing it is planned for phase 1b of #34 |
+| Esc on a busy embedded-mode turn, then SIGTERM (web close) | same: `turn_aborted interrupted`, and the turn's `sleep 30` stayed alive, reparented to pid 1. So neither Esc nor SIGTERM stops a tool process the turn started, in either mode — the web close stops it itself since #34 phase 5 (§6) |
 | Esc on a waiting embedded-mode row (menu = "No"), then SIGTERM | same `turn_aborted interrupted` |
 | Embedded TUI killed mid-turn (`sleep 45`), then `codex resume <id>` | **resume writes nothing** before the first prompt: the rollout's last line stays the open turn's `custom_tool_call` until the next prompt, ten minutes later. The resumed row reads `idle` (open turn, nothing written since this process started) |
 
@@ -88,9 +88,53 @@ block or decide. A changed hook (sync → async, a moved binary) is a new hash: 
 again at the next start. A hook that is not trusted does not run at all (one mis-trusted run above:
 the menu, no hook line).
 
-## 5. Open
+## 5. Patch and MCP approvals (#34 phase 5)
 
-- `apply_patch` and other non-exec approvals: untested; their screen is not the exec menu, so
-  such rows stay `busy`.
+Checked live on 2026-11-06 against the Codex `0.166.0` TUI (daemon mode, and embedded with
+`-c model_reasoning_effort=medium`), a temp `CODEX_HOME`, `-a on-request -s read-only`, and a mock
+Responses API that scripts the calls (the account has no credits): `PATCH: <files>` emits an
+`apply_patch` `custom_tool_call` (or `tools.apply_patch("…")` in a code-mode `exec`), `MCP: <tool>
+<args>` an MCP call on a tiny local stdio server (`[mcp_servers.tiny]` in the temp config: a
+`write_note` tool, and a `readOnlyHint` `echo`). Screens are committed as fixtures (paths replaced;
+the 90-column ones re-wrapped the way Codex wraps them): `web/tests/fixtures/codex-approval-patch.txt`,
+`codex-approval-patch-wrapped.txt`, `codex-approval-mcp.txt`, `codex-approval-mcp-narrow.txt`.
+
+| Check | Result |
+| --- | --- |
+| Patch menu | `Would you like to make the following edits?`, `Description: Apply proposed file edits`, one `Destination: <abs path>` per file (the label alone and the path hard-wrapped below it when it does not fit), then `› 1. Yes, proceed (y)` / `2. Yes, and don't ask again for these files (a)` / `3. No, and tell Codex what to do differently (esc)`, footer `Press enter to confirm or esc to cancel`. The diff is drawn *above* the menu, in the history (`• Edited 2 files (+3 -0)` … `+ Show details`) |
+| Patch option 2 | approves; the same files are then patched without asking for the rest of the session; nothing is written to `config.toml` or `rules/` |
+| Patch option 3 / Esc | `■ Conversation interrupted`, `custom_tool_call_output "aborted by user"`, `turn_aborted` — ends the turn |
+| Patch rollout | the `apply_patch` call (or the code-mode `exec`) with no output while the menu shows: the rollout trigger |
+| Patch hook | `PermissionRequest` with `tool_name: "apply_patch"` fired in the live server run, not in an earlier probe right after trusting the hooks — so the rollout is the trigger to rely on |
+| MCP menu | an elicitation form: `Field 1/1`, `Allow the tiny MCP server to run tool "write_note"?`, one `key: value` line per argument (cut to the width with `...`), `› 1. Allow  Run the tool and continue` / `2. Allow for this session` / `3. Always allow` / `4. Cancel` (label and description in columns, a long description wrapped under its column), footer `enter to submit \| esc to cancel` |
+| MCP option 3 "Always allow" | writes `[mcp_servers.tiny.tools.write_note] approval_mode = "approve"` to `config.toml` (the temp one; restored after) — every later call, every session |
+| MCP option 2 | remembered by that TUI's session only; `config.toml` unchanged |
+| MCP option 4 / Esc | `Failed tiny.write_note └ Error: user cancelled MCP tool call`; the turn goes on |
+| MCP hook | `PermissionRequest` with `tool_name: "mcp__tiny__write_note"`, no `command` |
+| MCP call shapes | code mode calls it as `tools.mcp__tiny__write_note({…})` inside `exec`; a bare `function_call` `mcp__tiny__write_note` is `unsupported call` in 0.166's code mode. A `readOnlyHint: true` tool runs without asking |
+| Exec outside code mode | an `exec_command` `function_call` with `sandbox_permissions: "require_escalated"` shows the usual exec menu (embedded mode; code mode's `exec` timed out negotiating with its code-mode host there) |
+
+Answered from the web by menu index with the exec card's checks (the id, `untouched`, the cursor
+read again before every key, a fresh list and the row's `approval_id` in the card id): yes / these
+files / no on patches, allow / session / always / cancel on MCP each picked exactly the option
+(tmux log: `Enter`, `Down Enter`, `Down Down Enter`, `Down Down Down Enter`); a ↓ pressed in the
+terminal first, a wrong card id and a stale card (the same files asked again by another call) each
+got 409 with no key sent. Waiting showed 1–2.5 s after the prompt.
+
+## 6. Tool processes and closing a row
+
+| Check | Result |
+| --- | --- |
+| Where a tool runs | `<shell> -c <cmd>` (`-lc` outside code mode), its own process group, a direct child of a codex process: in daemon mode the app-server daemon (`app-server --managed-daemon`), which is itself a child of the **TUI that started it** and serves every later pane on the host; in embedded mode the TUI itself |
+| A command that runs past `exec_command`'s yield | the call returns, the turn ends (`task_complete`, row `idle`) and the process keeps running |
+| Daemon mode, the pane closed | Codex's daemon ends that thread's running commands ~60 s after its TUI goes (`item_completed CommandExecution`, `source: "unified_exec_startup"`, `status: "failed"`, `exit_code: -1`; measured 62 s) |
+| Embedded mode, the pane closed | the command is reparented to pid 1 and runs to its end (§3) |
+| `ps -E` | shows no environment of these processes, so `CODEX_THREAD_ID` cannot tell whose a tool is; `ps` prints a newline in the args as `\012` |
+| Web close, live | the daemon's pane (idle, its `sleep 300` past its turn): `tools: {pids: [shell, sleep], result: "terminated"}`, gone at once; another pane's identical `sleep 300` under the same daemon, in another checkout, untouched. Embedded pane (idle after the yield): its `zsh -lc sleep 401` and `sleep` terminated. A pane whose daemon another pane started: nothing found in its tree, no `tools` field; Codex ended its command 62 s later |
+
+## 7. Open
+
 - iTerm rows: covered by unit tests only (one osascript peek, only while the hook's approved
   command has not run).
+- A daemon-mode pane that did not start the daemon: its tool processes are outside its tree, so
+  a close leaves them to Codex (~60 s).

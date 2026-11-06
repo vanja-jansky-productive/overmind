@@ -317,16 +317,25 @@ menu. Two things only *trigger* a look at the screen:
   `clear`. A `waiting` sidecar counts when `at` is no older than the process (2 s slack) and no
   `task_started` / `task_complete` / `turn_aborted` follows it. A sub-agent's approval carries the
   parent's `session_id`, and the parent's screen shows the menu;
-- a **pending escalated call** in the rollout: the current turn's last `custom_tool_call` named
-  `exec` whose `input` asks `sandbox_permissions` `require_escalated` (quoted key in embedded mode,
-  bare in daemon mode), with no `custom_tool_call_output` for its `call_id`, no `item_completed
-  CommandExecution` of the same command and no turn end after it. The command is the first `cmd`
-  string literal of the escalated `exec_command(…)` (" (+N)" when several ask).
+- a **pending call that may ask** in the rollout: the current turn's last tool call, with no
+  `custom_tool_call_output` / `function_call_output` for its `call_id` (and, for exec, no
+  `item_completed CommandExecution` of the same command) and no turn end after it — an `exec`
+  script whose `exec_command(…)` asks `sandbox_permissions` `require_escalated` (quoted key in
+  embedded mode, bare in daemon mode; the command is the first `cmd` string literal of it, " (+N)"
+  when several ask) — or an escalated `exec_command` / `shell` function call (outside code mode,
+  seen in embedded mode); an `apply_patch` (its own `custom_tool_call`, or `tools.apply_patch(…)` in an
+  `exec` script; the files are its `*** Update/Add/Delete File:` lines); an MCP tool
+  (`tools.mcp__<server>__<tool>(…)` in a script, or a `mcp__…` function call; shown `server.tool`).
+  Codex 0.166 fires no `PermissionRequest` hook for a patch, so the rollout is its only trigger; an
+  MCP approval fires one with `tool_name: "mcp__<server>__<tool>"` and no command.
 
-Truth: on tmux any trigger costs one `capture-pane`; the row is `waiting` iff `Would you like to
-run`, an option `1.` line and `Press enter to confirm` are in that order in the last 40 lines
-(trailing blank padding dropped; `✔ You approved …` has none, and output that merely quotes the two
-strings has no option line between them), else `busy`, also on a peek error. iTerm rows peek (one
+Truth: on tmux any trigger costs one `capture-pane`; the row is `waiting` iff one of Codex's three
+menus is in the last 40 lines — a head (`Would you like to run`, `Would you like to make the
+following edits?`, `Allow the <server> MCP server to run tool "<tool>"?`), an option `1.` line and
+that head's own footer (`Press enter to confirm` for the first two, `enter to submit | esc to
+cancel` for MCP), in that order (trailing blank padding dropped; `✔ You approved …` / `• Called …`
+have none, and output that merely quotes the strings has no option line between them), else
+`busy`, also on a peek error. The screen names the kind, whatever triggered the look. iTerm rows peek (one
 osascript, 0.1–0.3 s) only while a sidecar's command has not run (no `item_completed` of it, no
 output of its call) — once answered the menu is gone for the rest of the turn, and nothing fires
 to say so. Without the hook an iTerm row stays `busy`. A row with no backend has nothing to peek: a sidecar's
@@ -340,9 +349,14 @@ refresh plus one list, measured on Codex 0.166). The hook fires ~1 s before Code
 so the list its sidecar starts usually finds no menu yet: such a busy row carries
 `approval_unseen` (the request it looked for), and the web server looks again 1 s later — at most
 3 times per request, never again once that request was seen `waiting` — so the row reads `waiting`
-~1–2 s after the menu shows instead of at the next unrelated list. `waiting_for` is `<label>: \`<command, first line,
-≤ 80 chars>\`` (`Bash` → `exec approval`, else `<tool> approval`); the menu text is the web card's.
-Only exec approvals are read (an `apply_patch` screen is not the exec menu: `busy`). Sidecars of
+~1–2 s after the menu shows instead of at the next unrelated list. `waiting_for` is `<label>: \`<what>\``:
+`exec approval: \`<command, first line, ≤ 80 chars>\``, `patch approval: \`<file names, ", "-joined,
+" (+N)" past three>\``, `MCP approval: \`<server>.<tool>\`` — the label from the menu on screen (the
+hook's `tool_name` only where nothing can peek: `Bash` → exec, `apply_patch` → patch, `mcp__…` →
+MCP, else `<tool> approval`); the menu text is the web card's. The patch card adds a diff preview:
+the pending `apply_patch` call's patch from the rollout (≤ 60 lines), only when that call is the
+row's `approval_id` (or, for a hook stamp, the latest pending one) and its files are exactly the
+menu's `Destination:` paths. Sidecars of
 threads no live row has (and temp files a killed hook left) are deleted after an hour, by any
 `list` on a host with a Codex home, Codex running or not — only files provably ours (a
 `<thread>.json` holding that thread's v1 sidecar, the exact temp-file pattern), since
@@ -587,7 +601,7 @@ JSON over HTTP, errors as `{ "error": "..." }`. At a high level:
 | POST | `/api/hosts/:host/schedule/:id/cancel` | → `{ host, id, output }`: `overmind --local schedule cancel <id>` |
 | POST | `/api/hosts/:host/repos/sync` · `/repos/service` | `{ names? }` → `overmind --local repos sync --json` (409 while one runs); `{ install }` → `overmind --local repos install-service [--uninstall]` |
 | POST | `/api/hosts/:host/sessions/:id/sleep` | `{}` → `overmind --local sleep <id> --json` (ends it, keeps it dormant), then closes its iTerm tab if it had one |
-| POST | `/api/hosts/:host/sessions/:id/kill` | `{}` → a busy or waiting Codex row first gets Esc (its turn ends with `turn_aborted`; waits ≤ 5 s for the row to read idle; a tool process the turn started, e.g. a long shell command, is not stopped by it and runs until it ends — killing it is planned for phase 1b of #34), then SIGTERM (then SIGKILL) the agent, then kill its tmux session (or just its window when the session has others) / close its iTerm tab |
+| POST | `/api/hosts/:host/sessions/:id/kill` | `{}` → a busy or waiting Codex row first gets Esc (its turn ends with `turn_aborted`; waits ≤ 5 s for the row to read idle), then — for any Codex row, idle too: a command still running when `exec_command` yields outlives its turn — the tool processes it started are TERMed (only `<shell> -c <a command its rollout asked for>` children of codex processes in the pane's own process tree, started no earlier than that call, in its cwd — see web/ARCHITECTURE.md; `tools: { pids, result }` in the answer; a daemon another pane started is outside the tree, and Codex ends that thread's commands ~60 s after its TUI goes), then SIGTERM (then SIGKILL) the agent, then KILL the tool processes still running after 4 s (each re-checked to be the same process), then kill its tmux session (or just its window when the session has others) / close its iTerm tab |
 | GET | `/api/groups` | the Board view's groups: `{ enabled, host, intervalMinutes, running, updatedAt, lastRun, groups: [{ id, label, description, source, members: [{ host, id, dormant? }] }] }` (`dormant: true` only on a member that is dormant on its host; never set from stored groups, so the UI also cross-references `GET …/dormant`); served by the grouping host, proxied by every other server (`enabled: false` when nobody runs it) |
 | GET | `/api/inbox` | the [inbox](#inbox): `{ enabled, host, error?, updatedAt, brief: { text, at, model } \| null, sources: { github?, productive?, sessions?, comms? : { at, ok, error, count, nextAt?, running? } }, items: [{ id, source, kind, section, title, ask, url, href, from, at, firstSeen, effort, meta }] }` — served by `inbox.host`, proxied by every other server (`enabled: false` when none is set) |
 | GET | `/api/slack` | [Slack links](#slack-links): `{ enabled, host, error?, socket: { connected, error }, bot: { userId, team, url }, owner, links: [Link], ended: [Link], bridges? }` (with `slack.bridges`: `links` / `ended` of every bridge, `bridges: [{ host, enabled, error?, socket, bot }]`; `host`, `socket`, `bot` stay `slack.host`'s) — Link = `{ id, host, session, sessionName, channel, threadTs \| null, permalink, task, mode, createdAt, until \| null, minutes \| null, pending, delivered, replies, endedAt, endReason, startedBy, blocked }` (`blocked`: `{ at, what }` while its session waits on the owner and the thread was told, else null; `until: null`: no end, it lasts until unlinked; `minutes`: the duration it was linked for, null = no end; `startedBy`: `{ user, name, owner }` when a mention started its session, else null); `spawn`: this bridge's `slack.spawn` (`{ host, dir, model, harness, ghIdentity, mode, task, minutes, from }`, `host` resolved) when it opens sessions on a mention, else null; `bot.name`: the app's bot user name; with `slack.bridges` each of `bridges` carries its own `spawn`; served by `slack.host`, proxied by the others (`enabled: false` when none is set) |
@@ -868,7 +882,7 @@ server's name as `host`, and the reply's pane is checked on that host.
   apart; the ones addressed to it get an 👀 reaction when typed in.
 - **Blocked**: every 15 s the bridge checks the sessions of links that have been in their thread.
   One `waiting` for 30 s gets a notice in the thread (the registry's `waiting_for` label only — no
-  command, no path; for a Codex approval just `exec approval`, since its `waiting_for` carries the command) and a DM with a link to the session's page in its host's web
+  command, no path; for a Codex approval just `exec approval` / `patch approval` / `MCP approval`, since its `waiting_for` carries the command, files or tool) and a DM with a link to the session's page in its host's web
   UI (`hosts.<host>.web` + `#/s/<host>/<id>`; a DM link with an owner gets only that one). The DM
   goes to the owner the link is a DM with, else the owner who started the session from Slack, else
   the only owner; several owners and none of those: no DM (the thread is still told). Messages

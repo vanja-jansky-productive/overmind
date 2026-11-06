@@ -77,9 +77,11 @@ matched to their transcript by cwd and start time (see
 [architecture](architecture.md#other-harnesses)). Peek, send, keys, kill, rename (`/rename` in
 Codex, `/name` in pi — held while the session is busy) and restore (`codex resume <id>`,
 `pi --session <id>`) work the same; briefs and naming are Claude-only for now. A Codex row is
-`waiting` while its terminal shows Codex's approval menu (`waiting_for: "exec approval: \`<cmd>\`"`),
-and the web answers that menu as a card; closing a busy or waiting Codex row from the web presses
-Esc first so the turn ends with `turn_aborted` (see [architecture](architecture.md#other-harnesses)).
+`waiting` while its terminal shows one of Codex's approval menus (`waiting_for: "exec approval: \`<cmd>\`"`,
+`"patch approval: \`<files>\`"`, `"MCP approval: \`<server>.<tool>\`"`), and the web answers that menu as a
+card (a patch card shows its files and the diff); closing a busy or waiting Codex row from the web
+presses Esc first so the turn ends with `turn_aborted`, then stops the tool processes the session
+started in the pane's process tree (see [architecture](architecture.md#other-harnesses)).
 
 **Codex approval hook** (optional, per host):
 

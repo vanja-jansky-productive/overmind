@@ -35,8 +35,9 @@ lib/spawn-dirs.mjs    Settings → Start directories: validate a `spawnDirs` lis
 lib/repos.mjs         Settings → Git repos: `overmind repos` list/sync/timer, validate + write the `repos` config key
 lib/jobs.mjs          Bots screen: `overmind jobs` (alias of `overmind bots`) list / show / run now / enable|disable, job-name validation
 lib/spawn.mjs         new tmux session + `claude [--model <id>] [-n <name>] '<prompt>'`, auto-accept folder trust
-lib/kill.mjs          close a session: Esc first for a busy/waiting Codex turn, SIGTERM/SIGKILL the agent, then its tmux session/window or iTerm tab
-lib/questions.mjs     pending prompts as question cards: Claude's AskUserQuestion (transcript or screen), Codex's approval menu (screen only, `screen:<hash>` ids), answers → keys
+lib/kill.mjs          close a session: Esc first for a busy/waiting Codex turn, its turn's tool processes, SIGTERM/SIGKILL the agent, then its tmux session/window or iTerm tab
+lib/codex-tools.mjs   a Codex turn's tool processes: `<shell> -c <its command>` children of codex processes in the pane's tree (ps + lsof)
+lib/questions.mjs     pending prompts as question cards: Claude's AskUserQuestion (transcript or screen), Codex's approval menus — exec, patch (files + the pending call's diff), MCP (screen only, `screen:<hash>` ids), answers → keys
 lib/autoname.mjs      periodic `overmind name --all --apply` + generic-tmux-name sync
 lib/grouping.mjs      periodic `overmind group` over the merged overmind (the grouping host only)
 lib/snapshot.mjs      warm stale-while-revalidate snapshot of the merged /api/overmind
@@ -342,8 +343,20 @@ Editing the list is as powerful as spawning (it widens the allow-list) and has n
 included) — so the rollout ends
 with `turn_aborted` (SIGTERM alone leaves an embedded-mode turn open forever, and a daemon-mode turn
 keeps running in the Codex daemon). The kill goes ahead either way. The interrupt ends the turn,
-not a tool process the turn started: a long shell command keeps running until it ends, in daemon
-and embedded mode alike (killing it is planned for phase 1b of #34). Then SIGTERM to the agent's `pid` (SIGKILL after 4s), then the
+not a tool process the session started (a long shell command runs on, in daemon and embedded mode
+alike, and one still running when `exec_command` yields outlives its turn — the row can be `idle`),
+so next, for any Codex row, its **tool processes** are looked up (lib/codex-tools.mjs) and TERMed:
+one `ps -ax` and one `lsof -d cwd` for the candidates; a process counts only when it is in the
+closed pane's tree (a descendant of the row's codex pid — nothing outside it is ever signalled),
+its parent is a codex process there (the TUI in embedded mode, the app-server daemon it started in
+daemon mode), it runs `<shell> -c|-lc <script>` with `<script>` a command the row's rollout (its
+last 2 MB) asked to run, it started no earlier than that call (2 s slack) and its cwd is the row's
+cwd or below. Its process group (when it leads one) and its descendants go with it. After the agent
+is gone, the ones still running after `graceMs` are KILLed, each checked first to be the same
+process (pid, args, start). A daemon another pane started is outside this pane's tree: its tool
+processes are left to Codex, whose daemon ends a closed thread's commands ~60 s after its TUI
+goes (measured on 0.166). `tools: { pids, result: "terminated" | "killed" }` in the response when
+there were any. Then SIGTERM to the agent's `pid` (SIGKILL after 4s), then the
 terminal that hosted it. tmux: the whole tmux session when Claude's window was its only window
 (`terminal: "tmux-session-killed"`), else just that window (`"tmux-window-killed"`). The pane's
 session/window ids (`$3`, `@7`, never names) are resolved *before* the signal, because when Claude
