@@ -1,0 +1,50 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     /work/project
+
+
+› SAY: hello
+
+
+• hello
+
+  Worked for <1s • 09:40
+
+
+› PATCH: a.txt new.txt
+
+
+• Edited 2 files (+3 -0)
+  └ a.txt (+1 -0)
+    2 +patched by mock 1
+
+  └ new.txt (+2 -0)
+    1 +new file from mock 1
+    2 +second line
+    + Show details
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Would you like to make the following edits?
+
+  Description: Apply proposed file edits
+  Destination: /work/project/a.txt
+  Destination: /work/project/new.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

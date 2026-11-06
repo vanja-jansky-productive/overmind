@@ -1,0 +1,41 @@
+  >_ OpenAI Codex (v0.166.0)
+     /work/project
+
+
+› PATCHJS: a.txt src/deeply/nested/module_with_long_name.rs added.md
+
+
+• Edited 3 files (+4 -0)
+  └ a.txt (+1 -0)
+    3 +patched by mock 13
+
+  └ added.md (+2 -0)
+    1 +new file from mock 13
+    2 +second line
+
+  └ src/deeply/nested/module_with_long_name.rs (+1 -0)
+    2 +patched by mock 13
+    + Show details
+
+■ Conversation interrupted - use /feedback if something went wrong
+
+
+› MCPJS: write_note {"path":"/work/project/note.txt","text":"hi from mcp"}
+
+
+• Calling tiny.write_note
+    + Show details
+
+
+  Field 1/1
+  Allow the tiny MCP server to run tool "write_note"?
+
+  path: /work/project/notes/a-rather-long-directory-name/with-a-n...
+  text: a fairly long note text that should get truncated on a na...
+
+  › 1. Allow                   Run the tool and continue
+    2. Allow for this session  Run the tool and remember this choice for this session
+    3. Always allow            Run the tool and remember this choice for future tool
+                               calls
+    4. Cancel                  Cancel this tool call
+  enter to submit | esc to cancel

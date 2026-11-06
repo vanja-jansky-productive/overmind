@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { HttpError, readJsonBody } from './http.mjs';
 import { clampLines, findSession, resolveHost, sleep as defaultSleep, validateInputData, validateKey, validateSendText, validateTitle } from './util.mjs';
-import { answerSteps, finalPick, questionsText, screenPromptParser, screenShowsPrompt, validateAnswer } from './questions.mjs';
+import { answerSteps, codexPatchPreview, finalPick, questionsText, screenPromptParser, screenShowsPrompt, validateAnswer } from './questions.mjs';
 import { resolveAllowedDir, validateSpawnRequest } from './spawn.mjs';
 import {
   fetchPeerHost as defaultFetchPeerHost,
@@ -15,6 +15,10 @@ import {
   streamFromPeer as defaultStreamFromPeer,
 } from './peers.mjs';
 import { createSnapshot } from './snapshot.mjs';
+import { readFileTail } from './watch.mjs';
+
+/** How much of a Codex rollout a patch card reads for its diff preview (the pending call is near the end). */
+const PATCH_TAIL_BYTES = 512 * 1024;
 import { DISABLED_GROUPS } from './grouping.mjs';
 import { checkInboxSettings } from './inbox.mjs';
 import { DEFAULT_MODELS, slackSpawn, spawnRoots } from './config.mjs';
@@ -527,9 +531,15 @@ export function createApi({
     } catch {
       return null;
     }
-    const prompt = parse(screen, { request: session.approval_id ?? null });
+    const prompt = parse(screen, { request: session.approval_id ?? null, cwd: session.cwd ?? null });
     if (!prompt) return null;
     const { id, questions } = prompt;
+    // A Codex patch menu draws its diff above it, in the history: the card shows the pending
+    // call's patch from the rollout instead, when its files are the menu's.
+    if (prompt.kind === 'patch' && session.transcript) {
+      const preview = codexPatchPreview(readFileTail(session.transcript, PATCH_TAIL_BYTES), prompt.files, session.cwd, session.approval_id);
+      if (preview) questions[0].preview = preview;
+    }
     return { role: 'assistant', kind: 'question', id, questions, text: questionsText(questions), ts: Date.now(), final: true };
   }
 

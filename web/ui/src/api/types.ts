@@ -553,6 +553,8 @@ export interface Question {
   options: { label: string; description: string; secondary?: boolean }[]
   /** No "Type something" row (the terminal's "Review your answers" screen). */
   noOther?: boolean
+  /** A Codex patch approval: the patch it asks to apply (`*** Update File: …`, `+` / `-` lines), cut to 60 lines. */
+  preview?: string
 }
 
 /** POST …/answer: one entry per question, in order (option indexes and/or typed text). */

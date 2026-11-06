@@ -307,13 +307,101 @@ pub struct Trigger {
     pub sidecar_unresolved: bool,
     /// The current turn's last `exec` call asks for escalation and has no outcome yet.
     pub rollout: bool,
-    /// "exec approval", "<tool> approval".
+    /// "exec approval", "patch approval", "MCP approval", "<tool> approval".
     pub label: String,
-    /// The command, when known (first line; " (+N)" for several escalated calls).
+    /// What it asks for, when known: the command (first line; " (+N)" for several escalated
+    /// calls), the files a patch edits, an MCP call's `server.tool`.
     pub command: Option<String>,
-    /// This request's identity: the pending escalated call's `call_id`, else the sidecar's
-    /// stamp. The same command asked again is another request (the web's card id mixes it in).
+    /// This request's identity: the pending call's `call_id`, else the sidecar's stamp. The
+    /// same command asked again is another request (the web's card id mixes it in).
     pub request: Option<String>,
+}
+
+/// What a Codex 0.166 approval menu asks for — each kind has its own screen
+/// (`docs/codex-findings.md` §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalKind {
+    /// "Would you like to run the following command?" — an escalated shell command.
+    Exec,
+    /// "Would you like to make the following edits?" — an `apply_patch` outside what the sandbox allows.
+    Patch,
+    /// "Allow the <server> MCP server to run tool "<tool>"?" — an MCP tool call.
+    Mcp,
+}
+
+impl ApprovalKind {
+    /// The row's `waiting_for` label (Slack hears only this part).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Exec => "exec approval",
+            Self::Patch => "patch approval",
+            Self::Mcp => "MCP approval",
+        }
+    }
+
+    /// The kind a hook's `tool_name` asks for (`Bash`, `apply_patch`, `mcp__<server>__<tool>`).
+    fn of_tool(tool: Option<&str>) -> Option<Self> {
+        match tool {
+            None | Some("Bash") => Some(Self::Exec),
+            Some("apply_patch" | "Edit" | "Write") => Some(Self::Patch),
+            Some(t) if t.starts_with("mcp__") => Some(Self::Mcp),
+            Some(_) => None,
+        }
+    }
+}
+
+/// `mcp__tiny__write_note` → `tiny.write_note` (Codex's own name for the call on screen).
+fn mcp_name(tool: &str) -> Option<String> {
+    let (server, name) = tool.strip_prefix("mcp__")?.split_once("__")?;
+    (!server.is_empty() && !name.is_empty()).then(|| format!("{server}.{name}"))
+}
+
+/// The first `mcp__<server>__<tool>` an exec script calls (`tools.mcp__…(`).
+fn mcp_in_script(input: &str) -> Option<String> {
+    let at = input.find("tools.mcp__")? + "tools.".len();
+    let name: String = input[at..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    mcp_name(&name)
+}
+
+/// The files a patch touches, in order: its `*** Update/Add/Delete File: <path>` lines, raw
+/// (an `apply_patch` call's input) or inside a JS string (`tools.apply_patch("…\n…")`).
+fn patch_files(input: &str) -> Vec<String> {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for head in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] {
+        for (i, _) in input.match_indices(head) {
+            let rest = &input[i + head.len()..];
+            let end = rest.find(['\n', '\\', '"']).unwrap_or(rest.len());
+            let path = rest[..end].trim();
+            if !path.is_empty() {
+                out.push((i, path.to_string()));
+            }
+        }
+    }
+    out.sort();
+    out.into_iter().map(|(_, p)| p).collect()
+}
+
+/// A patch's files as one short line: base names, ", "-joined, " (+N)" past three.
+fn files_line<S: AsRef<str>>(files: &[S]) -> Option<String> {
+    let names: Vec<&str> = files
+        .iter()
+        .map(|f| {
+            let f = f.as_ref().trim_end_matches('/');
+            f.rsplit('/').next().unwrap_or(f)
+        })
+        .filter(|n| !n.is_empty())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let mut line = names[..names.len().min(3)].join(", ");
+    if names.len() > 3 {
+        line.push_str(&format!(" (+{})", names.len() - 3));
+    }
+    Some(first_line_max(&line, 80))
 }
 
 /// `sandbox_permissions\W{1,4}require_escalated`, without a regex crate: the key is
@@ -419,18 +507,80 @@ fn completed_command(p: &Value) -> Option<String> {
     }
 }
 
+/// A call that may be waiting on an approval: what it asks for, when its kind can ask.
+struct Pending {
+    call_id: String,
+    kind: ApprovalKind,
+    /// The command / files / `server.tool`, when known.
+    what: Option<String>,
+    /// More escalated exec calls in the same script.
+    more: usize,
+}
+
+/// The approval a tool call may wait on: an `exec` script with an escalated `exec_command` (or
+/// an escalated `exec_command` / `shell` function call),
+/// an `apply_patch` (its own call or `tools.apply_patch(…)` in a script), an MCP tool
+/// (`tools.mcp__…(…)` in a script, or a `mcp__…` function call). None for anything else.
+fn pending_call(p: &Value) -> Option<Pending> {
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("");
+    let call_id = p
+        .get("call_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let input = p
+        .get("input")
+        .or_else(|| p.get("arguments"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let (kind, what, more) = match (p.get("type").and_then(Value::as_str)?, name) {
+        ("custom_tool_call", "exec") => {
+            if let Some((c, n)) = escalated_commands(input) {
+                (ApprovalKind::Exec, c, n)
+            } else if input.contains("tools.apply_patch(") {
+                (ApprovalKind::Patch, files_line(&patch_files(input)), 0)
+            } else {
+                (ApprovalKind::Mcp, Some(mcp_in_script(input)?), 0)
+            }
+        }
+        ("custom_tool_call" | "function_call", "apply_patch") => {
+            (ApprovalKind::Patch, files_line(&patch_files(input)), 0)
+        }
+        ("function_call", n) if n.starts_with("mcp__") => (ApprovalKind::Mcp, mcp_name(n), 0),
+        // Outside code mode (seen live in embedded mode): `exec_command` / `shell` as their own
+        // function calls, JSON arguments.
+        ("function_call", "exec_command" | "shell") if asks_escalation(input) => {
+            let args: Value = serde_json::from_str(input).unwrap_or(Value::Null);
+            let cmd = match (&args["cmd"], &args["command"]) {
+                (Value::String(c), _) => Some(c.clone()),
+                (_, Value::Array(a)) => a.last().and_then(Value::as_str).map(str::to_string),
+                _ => None,
+            };
+            (ApprovalKind::Exec, cmd, 0)
+        }
+        _ => return None,
+    };
+    Some(Pending {
+        call_id,
+        kind,
+        what,
+        more,
+    })
+}
+
 /// What a busy Codex row's rollout tail (`text`) and sidecar say about a pending
 /// approval, for a process started at `proc_start_ms`. None: nothing to look at.
 pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Option<Trigger> {
     const SLACK_MS: i64 = 2000;
     let sidecar = sidecar.filter(|s| s.waiting && s.at >= proc_start_ms - SLACK_MS);
-    // (call_id, command, more) of the current turn's last exec call, if escalated.
-    let mut pending: Option<(String, Option<String>, usize)> = None;
+    // The current turn's last tool call, when it is one that may ask.
+    let mut pending: Option<Pending> = None;
     let mut sidecar_live = sidecar.is_some();
     let mut sidecar_ran = false;
     for line in text.lines() {
         // Cheap filter before parsing: the lines that matter name one of these.
         if !(line.contains("custom_tool_call")
+            || line.contains("function_call")
             || line.contains("item_completed")
             || line.contains("task_")
             || line.contains("turn_aborted"))
@@ -453,18 +603,23 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
                     sidecar_live = false;
                 }
             }
-            ("response_item", "custom_tool_call")
-                if p.get("name").and_then(Value::as_str) == Some("exec") =>
-            {
-                let input = p.get("input").and_then(Value::as_str).unwrap_or("");
-                let call_id = p.get("call_id").and_then(Value::as_str).unwrap_or("");
-                pending = escalated_commands(input).map(|(c, n)| (call_id.to_string(), c, n));
+            ("response_item", "custom_tool_call" | "function_call") => {
+                pending = pending_call(p);
             }
-            ("response_item", "custom_tool_call_output") => {
+            ("response_item", "custom_tool_call_output" | "function_call_output") => {
                 let id = p.get("call_id").and_then(Value::as_str);
-                if let Some((_, cmd, _)) = pending.take_if(|(c, _, _)| Some(c.as_str()) == id) {
-                    // Denied, or the whole exec script done: the sidecar's command is over.
-                    if after_sidecar && cmd.is_some() && sidecar.is_some_and(|s| s.command == cmd) {
+                if let Some(done) = pending.take_if(|c| Some(c.call_id.as_str()) == id) {
+                    // Denied, or done: the sidecar's request is over — its command (exec), or
+                    // its call when the hook names no command (MCP).
+                    let cmd = sidecar.and_then(|s| s.command.as_ref());
+                    if after_sidecar
+                        && match cmd {
+                            Some(c) => {
+                                done.kind == ApprovalKind::Exec && done.what.as_ref() == Some(c)
+                            }
+                            None => done.kind != ApprovalKind::Exec,
+                        }
+                    {
                         sidecar_ran = true;
                     }
                 }
@@ -472,7 +627,11 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
             ("event_msg", "item_completed") => {
                 let done = completed_command(p);
                 // A sibling command's completion resolves nothing.
-                if done.is_some() && pending.as_ref().is_some_and(|(_, c, _)| *c == done) {
+                if done.is_some()
+                    && pending
+                        .as_ref()
+                        .is_some_and(|c| c.kind == ApprovalKind::Exec && c.what == done)
+                {
                     pending = None;
                 }
                 if after_sidecar && done.is_some() && sidecar.is_some_and(|s| s.command == done) {
@@ -487,21 +646,30 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
         return None;
     }
     let sc = sidecar.filter(|_| sidecar_live);
-    let label = match sc.and_then(|s| s.tool.as_deref()) {
-        None | Some("Bash") => "exec approval".to_string(),
-        Some(t) => format!("{t} approval"),
+    let label = match (sc, &pending) {
+        (Some(s), _) => match ApprovalKind::of_tool(s.tool.as_deref()) {
+            Some(k) => k.label().to_string(),
+            None => format!("{} approval", s.tool.as_deref().unwrap_or("")),
+        },
+        (None, Some(c)) => c.kind.label().to_string(),
+        (None, None) => ApprovalKind::Exec.label().to_string(),
     };
-    let command = match (sc.and_then(|s| s.command.clone()), &pending) {
-        (Some(c), _) => Some(first_line_max(&c, 80)),
-        (None, Some((_, Some(c), more))) => Some(if *more > 0 {
-            format!("{} (+{more})", first_line_max(c, 80))
-        } else {
-            first_line_max(c, 80)
+    let command = match (sc, &pending) {
+        (Some(s), _) if s.command.is_some() => s.command.as_deref().map(|c| first_line_max(c, 80)),
+        (Some(s), _) if s.tool.as_deref().is_some_and(|t| t.starts_with("mcp__")) => {
+            s.tool.as_deref().and_then(mcp_name)
+        }
+        (_, Some(c)) => c.what.as_deref().map(|w| {
+            if c.more > 0 {
+                format!("{} (+{})", first_line_max(w, 80), c.more)
+            } else {
+                first_line_max(w, 80)
+            }
         }),
         _ => None,
     };
     let request = match (&pending, sc) {
-        (Some((call_id, _, _)), _) if !call_id.is_empty() => Some(call_id.clone()),
+        (Some(c), _) if !c.call_id.is_empty() => Some(c.call_id.clone()),
         (_, Some(s)) => Some(format!("hook-{}", s.at)),
         _ => None,
     };
@@ -515,30 +683,94 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
     })
 }
 
-/// Is the terminal showing Codex's approval menu? Its first line, an option `1.` and its
-/// footer, in that order, within the last 40 non-blank-padded lines: `✔ You approved …`
-/// has none of them, a stale menu in the scrollback has lost its footer to the next screen,
-/// and output that merely quotes the two strings (a `cat` of this file) has no option line
-/// between them.
-pub fn screen_shows_approval(screen: &str) -> bool {
+/// The approval menu on a Codex screen: its kind and what it asks for (the command's first
+/// line, the files a patch edits, an MCP call's `server.tool`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenMenu {
+    pub kind: ApprovalKind,
+    pub subject: Option<String>,
+}
+
+const EXEC_HEAD: &str = "Would you like to run";
+const PATCH_HEAD: &str = "Would you like to make the following edits?";
+/// The exec and patch menus' footer.
+const ENTER_FOOT: &str = "Press enter to confirm";
+/// The MCP menu's footer (an elicitation form).
+const MCP_FOOT: &str = "enter to submit | esc to cancel";
+
+/// `Allow the tiny MCP server to run tool "write_note"?` → `tiny.write_note`.
+fn mcp_head(l: &str) -> Option<String> {
+    let rest = l.trim().strip_prefix("Allow the ")?;
+    let (server, rest) = rest.split_once(" MCP server to run tool \"")?;
+    let tool = rest.strip_suffix("\"?")?;
+    (!server.is_empty() && !tool.is_empty()).then(|| format!("{server}.{tool}"))
+}
+
+/// The menu Codex shows, if any: a head, an option `1.` and that head's footer, in that order,
+/// within the last 40 non-blank-padded lines. `✔ You approved …` / `• Called …` have none of
+/// them, a stale menu in the scrollback has lost its footer to the next screen, output that
+/// merely quotes the strings (a `cat` of this file) has no option line between them, and a
+/// head is only read with its own kind's footer.
+pub fn screen_menu(screen: &str) -> Option<ScreenMenu> {
     let mut lines: Vec<&str> = screen.lines().collect();
     while lines.last().is_some_and(|l| l.trim().is_empty()) {
         lines.pop();
     }
     let tail = &lines[lines.len().saturating_sub(40)..];
-    let Some(foot) = tail
+    let foot = tail
         .iter()
-        .rposition(|l| l.contains("Press enter to confirm"))
-    else {
-        return false;
+        .rposition(|l| l.contains(ENTER_FOOT) || l.contains(MCP_FOOT))?;
+    let mcp = tail[foot].contains(MCP_FOOT);
+    let head = tail[..foot].iter().rposition(|l| {
+        if mcp {
+            mcp_head(l).is_some()
+        } else {
+            l.contains(EXEC_HEAD) || l.contains(PATCH_HEAD)
+        }
+    })?;
+    let body = &tail[head + 1..foot];
+    if !body.iter().any(|l| is_first_option(l)) {
+        return None;
+    }
+    let (kind, subject) = if mcp {
+        (ApprovalKind::Mcp, mcp_head(tail[head]))
+    } else if tail[head].contains(PATCH_HEAD) {
+        (ApprovalKind::Patch, files_line(&destinations(body)))
+    } else {
+        let cmd = body
+            .iter()
+            .find_map(|l| l.trim().strip_prefix("$ "))
+            .map(|c| first_line_max(c, 80));
+        (ApprovalKind::Exec, cmd)
     };
-    let Some(head) = tail[..foot]
-        .iter()
-        .rposition(|l| l.contains("Would you like to run"))
-    else {
-        return false;
-    };
-    tail[head + 1..foot].iter().any(|l| is_first_option(l))
+    Some(ScreenMenu { kind, subject })
+}
+
+/// A patch menu's `Destination:` paths. Codex prints the path after the label when it fits,
+/// else on the lines below, hard-wrapped at the pane width — joined back without spaces.
+fn destinations(body: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut open = false;
+    for l in body {
+        let t = l.trim();
+        if let Some(rest) = t.strip_prefix("Destination:") {
+            out.push(rest.trim().to_string());
+            open = true;
+        } else if open && !t.is_empty() && !is_first_option(l) && !t.contains(':') {
+            if let Some(last) = out.last_mut() {
+                last.push_str(t);
+            }
+        } else {
+            open = false;
+        }
+    }
+    out.retain(|p| !p.is_empty());
+    out
+}
+
+/// Is the terminal showing one of Codex's approval menus? See [`screen_menu`].
+pub fn screen_shows_approval(screen: &str) -> bool {
+    screen_menu(screen).is_some()
 }
 
 /// `› 1. …` or `  1. …`: the first option of a menu.
@@ -547,18 +779,6 @@ fn is_first_option(l: &str) -> bool {
     let l = l.strip_prefix('›').map_or(l, str::trim_start);
     l.strip_prefix("1.")
         .is_some_and(|r| r.starts_with(char::is_whitespace))
-}
-
-/// The `$ <cmd>` line of the menu on screen (its first line).
-pub fn screen_command(screen: &str) -> Option<String> {
-    let lines: Vec<&str> = screen.lines().collect();
-    let start = lines
-        .iter()
-        .rposition(|l| l.contains("Would you like to run"))?;
-    lines[start..]
-        .iter()
-        .find_map(|l| l.trim().strip_prefix("$ "))
-        .map(|c| first_line_max(c, 80))
 }
 
 /// Which peek a row's backend allows for a trigger.
@@ -579,19 +799,25 @@ pub fn truth(
     look: Look,
     peek: impl FnOnce() -> std::result::Result<String, String>,
 ) -> Option<String> {
-    let label = |cmd: Option<String>| match cmd {
-        Some(c) if !c.is_empty() => format!("{}: `{c}`", trig.label),
-        _ => trig.label.clone(),
+    let label = |what: &str, cmd: Option<String>| match cmd {
+        Some(c) if !c.is_empty() => format!("{what}: `{c}`"),
+        _ => what.to_string(),
     };
     match look {
         // Costly only while the sidecar's command has not run: answered, the menu is gone for
         // the rest of the turn, and Codex fires no hook to say so.
         Look::Cheap | Look::Costly if look == Look::Cheap || trig.sidecar_unresolved => {
             let screen = peek().ok()?;
-            screen_shows_approval(&screen)
-                .then(|| label(screen_command(&screen).or_else(|| trig.command.clone())))
+            // The screen names the kind: a trigger's guess (a patch call beside a sidecar of
+            // an earlier exec) never labels another kind's menu.
+            let menu = screen_menu(&screen)?;
+            let fallback = (menu.kind.label() == trig.label).then(|| trig.command.clone());
+            Some(label(
+                menu.kind.label(),
+                menu.subject.or(fallback.flatten()),
+            ))
         }
-        Look::None if trig.sidecar_unresolved => Some(label(trig.command.clone())),
+        Look::None if trig.sidecar_unresolved => Some(label(&trig.label, trig.command.clone())),
         _ => None,
     }
 }
@@ -1776,8 +2002,137 @@ x = 1
         patch.tool = Some("apply_patch".into());
         assert_eq!(
             trigger(&text(&[STARTED]), Some(&patch), 0).unwrap().label,
-            "apply_patch approval"
+            "patch approval"
         );
+        // Codex 0.166's MCP PermissionRequest: `tool_name: "mcp__<server>__<tool>"`, no command.
+        let mut mcp = sc(true, at, None);
+        mcp.tool = Some("mcp__tiny__write_note".into());
+        let m = trigger(&text(&[STARTED]), Some(&mcp), 0).unwrap();
+        assert_eq!(
+            (m.label.as_str(), m.command.as_deref()),
+            ("MCP approval", Some("tiny.write_note"))
+        );
+    }
+
+    // ---- patch and MCP calls, as Codex 0.166 wrote them live (mock model; paths replaced).
+    const PATCH_CALL: &str = r#"{"timestamp":"2026-11-06T08:41:24.854Z","type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_p","name":"apply_patch","input":"*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n+patched by mock 1\n*** Add File: new.txt\n+new file from mock 1\n+second line\n*** End Patch\n"}}"#;
+    const PATCH_JS: &str = r#"{"timestamp":"2026-11-06T08:44:50.046Z","type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_13","call_id":"call_pj","name":"exec","input":"text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: a.txt\\n@@\\n alpha\\n+patched by mock 13\\n*** Update File: src/deeply/nested/module_with_long_name.rs\\n@@\\n x\\n+patched by mock 13\\n*** Add File: added.md\\n+new file from mock 13\\n*** End Patch\\n\"));\n"}}"#;
+    const PATCH_OUT: &str = r#"{"timestamp":"2026-11-06T08:41:40.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_p","output":"Success"}}"#;
+    const MCP_JS: &str = r#"{"timestamp":"2026-11-06T08:42:09.300Z","type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_5","call_id":"call_m","name":"exec","input":"text(JSON.stringify(await tools.mcp__tiny__write_note({\"path\":\"/work/project/note.txt\",\"text\":\"hi\"})));\n"}}"#;
+    const MCP_FN: &str = r#"{"timestamp":"2026-11-06T08:42:09.300Z","type":"response_item","payload":{"type":"function_call","id":"fc_3","call_id":"call_mf","name":"mcp__tiny__write_note","arguments":"{\"path\":\"/work/project/note.txt\"}"}}"#;
+    const MCP_FN_OUT: &str = r#"{"timestamp":"2026-11-06T08:42:20.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_mf","output":"wrote"}}"#;
+
+    #[test]
+    fn a_pending_patch_or_mcp_call_triggers_until_it_resolves() {
+        let t = |lines: &[&str]| trigger(&text(lines), None, 0);
+        let p = t(&[STARTED, PATCH_CALL]).unwrap();
+        assert!(p.rollout && !p.sidecar);
+        assert_eq!(p.label, "patch approval");
+        assert_eq!(p.command.as_deref(), Some("a.txt, new.txt"));
+        assert_eq!(p.request.as_deref(), Some("call_p"));
+        let pj = t(&[STARTED, PATCH_JS]).unwrap();
+        assert_eq!(
+            (pj.label.as_str(), pj.command.as_deref()),
+            (
+                "patch approval",
+                Some("a.txt, module_with_long_name.rs, added.md")
+            ),
+            "code mode's tools.apply_patch(…) in an exec call"
+        );
+        assert_eq!(t(&[STARTED, PATCH_CALL, PATCH_OUT]), None);
+        assert_eq!(t(&[STARTED, PATCH_CALL, ABORTED]), None);
+        let m = t(&[STARTED, MCP_JS]).unwrap();
+        assert_eq!(
+            (m.label.as_str(), m.command.as_deref(), m.request.as_deref()),
+            ("MCP approval", Some("tiny.write_note"), Some("call_m"))
+        );
+        let f = t(&[STARTED, MCP_FN]).unwrap();
+        assert_eq!(
+            (f.label.as_str(), f.command.as_deref()),
+            ("MCP approval", Some("tiny.write_note"))
+        );
+        assert_eq!(t(&[STARTED, MCP_FN, MCP_FN_OUT]), None);
+        // An escalated `exec_command` function call (embedded mode, outside code mode).
+        let fc = r#"{"timestamp":"2026-11-06T09:17:04.537Z","type":"response_item","payload":{"type":"function_call","call_id":"call_e","name":"exec_command","arguments":"{\"cmd\":\"sleep 401; echo done401\",\"sandbox_permissions\":\"require_escalated\"}"}}"#;
+        let e = t(&[STARTED, fc]).unwrap();
+        assert_eq!(
+            (e.label.as_str(), e.command.as_deref(), e.request.as_deref()),
+            (
+                "exec approval",
+                Some("sleep 401; echo done401"),
+                Some("call_e")
+            )
+        );
+        let plain = fc.replace("require_escalated", "use_default");
+        assert_eq!(t(&[STARTED, &plain]), None, "a plain call asks nothing");
+        // A later plain exec replaces the pending call, as for exec.
+        assert_eq!(t(&[STARTED, PATCH_CALL, L75]), None);
+        // An MCP sidecar is resolved by its call's output (no command to match).
+        let at = chrono::DateTime::parse_from_rfc3339("2026-11-06T08:42:10.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let mut s = sc(true, at, None);
+        s.tool = Some("mcp__tiny__write_note".into());
+        let open = trigger(&text(&[STARTED, MCP_FN]), Some(&s), 0).unwrap();
+        assert!(open.sidecar_unresolved);
+        let done = trigger(&text(&[STARTED, MCP_FN, MCP_FN_OUT]), Some(&s), 0).unwrap();
+        assert!(done.sidecar && !done.sidecar_unresolved);
+    }
+
+    const PATCH_MENU: &str =
+        include_str!("../../../../web/tests/fixtures/codex-approval-patch.txt");
+    const PATCH_WRAPPED: &str =
+        include_str!("../../../../web/tests/fixtures/codex-approval-patch-wrapped.txt");
+    const MCP_MENU: &str = include_str!("../../../../web/tests/fixtures/codex-approval-mcp.txt");
+    const MCP_NARROW: &str =
+        include_str!("../../../../web/tests/fixtures/codex-approval-mcp-narrow.txt");
+
+    #[test]
+    fn the_screen_decides_patch_and_mcp_approvals() {
+        assert_eq!(
+            screen_menu(PATCH_MENU),
+            Some(ScreenMenu {
+                kind: ApprovalKind::Patch,
+                subject: Some("a.txt, new.txt".into())
+            })
+        );
+        assert_eq!(
+            screen_menu(PATCH_WRAPPED)
+                .and_then(|m| m.subject)
+                .as_deref(),
+            Some("a.txt, added.md, module_with_long_name.rs"),
+            "a Destination path hard-wrapped at the pane width is joined back"
+        );
+        for s in [MCP_MENU, MCP_NARROW] {
+            assert_eq!(
+                screen_menu(s),
+                Some(ScreenMenu {
+                    kind: ApprovalKind::Mcp,
+                    subject: Some("tiny.write_note".into())
+                })
+            );
+        }
+        // Answered: the history keeps the "Edited" / "Called" lines, no menu.
+        let answered = "• Called tiny.write_note\n  └ wrote /work/project/note.txt\n• done.\n› Ask Codex to do anything\n";
+        assert_eq!(screen_menu(answered), None);
+        // A head without its own footer is no menu: an MCP head over an exec footer.
+        let mixed = "  Allow the tiny MCP server to run tool \"x\"?\n  › 1. Allow\n  Press enter to confirm or esc to cancel\n";
+        assert_eq!(screen_menu(mixed), None);
+        // The label follows the screen, whatever triggered the look.
+        let trig = Trigger {
+            rollout: true,
+            label: "exec approval".into(),
+            ..Trigger::default()
+        };
+        assert_eq!(
+            truth(&trig, Look::Cheap, || Ok(PATCH_MENU.to_string())).as_deref(),
+            Some("patch approval: `a.txt, new.txt`")
+        );
+        assert_eq!(
+            truth(&trig, Look::Cheap, || Ok(MCP_MENU.to_string())).as_deref(),
+            Some("MCP approval: `tiny.write_note`")
+        );
+        assert_eq!(screen_menu(MENU).map(|m| m.kind), Some(ApprovalKind::Exec));
     }
 
     const MENU: &str = "› create a file hello.txt containing the word hi
@@ -1814,7 +2169,7 @@ x = 1
         let quoted = "• Ran cat questions.mjs\n  // Would you like to run the following command?\n  //   $ printf hi\n  // Press enter to confirm or esc to cancel\n› Ask Codex to do anything\n";
         assert!(!screen_shows_approval(quoted));
         assert_eq!(
-            screen_command(MENU).as_deref(),
+            screen_menu(MENU).and_then(|m| m.subject).as_deref(),
             Some("printf hi > hello.txt")
         );
         let trig = Trigger {

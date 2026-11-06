@@ -1,0 +1,44 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     ~/Code/project-with-a-rather-long-name/checkouts/…
+
+
+› PATCHJS: a.txt src/deeply/nested/module_with_long_name.rs added.md
+
+
+• Edited 3 files (+4 -0)
+  └ a.txt (+1 -0)
+    3 +patched by mock 13
+
+  └ added.md (+2 -0)
+    1 +new file from mock 13
+    2 +second line
+
+  └ src/deeply/nested/module_with_long_name.rs (+1 -0)
+    2 +patched by mock 13
+    + Show details
+
+
+
+
+
+
+
+  Would you like to make the following edits?
+
+  Description: Apply proposed file edits
+  Destination:
+  /work/project-with-a-rather-long-name/checkouts/feature-branch-approval-cards-p5/a.txt
+  Destination:
+  /work/project-with-a-rather-long-name/checkouts/feature-branch-approval-cards-p5/added
+  .md
+  Destination:
+  /work/project-with-a-rather-long-name/checkouts/feature-branch-approval-cards-p5/src/d
+  eeply/nested/module_with_long_name.rs
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

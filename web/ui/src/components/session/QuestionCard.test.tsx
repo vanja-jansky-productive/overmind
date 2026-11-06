@@ -52,3 +52,33 @@ test('picking the secondary option answers with its menu index', () => {
   expect(toAnswers([toggleOption(q, d, 1)])).toEqual([{ options: [1] }])
   expect(toAnswers([toggleOption(q, d, 2)])).toEqual([{ options: [2] }])
 })
+
+test("a Codex patch approval: its files and the diff preview, + and − lines marked, in the open card and the record", () => {
+  const patch: Message = {
+    ...approval,
+    questions: [
+      {
+        header: 'Edit approval',
+        question: 'Would you like to make the following edits?\nFiles:\n  a.txt\n  new.txt',
+        preview: '*** Update File: a.txt\n@@\n alpha\n-old line\n+patched by mock 1',
+        multiSelect: false,
+        noOther: true,
+        options: [
+          { label: 'Yes, proceed', description: '' },
+          { label: "Yes, and don't ask again for these files", description: 'Approves edits to these files for the rest of this session', secondary: true },
+          { label: 'No, and tell Codex what to do differently', description: '' },
+        ],
+      },
+    ],
+  }
+  for (const html of [
+    renderToStaticMarkup(<QuestionCard m={patch} actions={actions} />),
+    renderToStaticMarkup(<QuestionCard m={{ ...patch, answers: ['Yes, proceed'] }} />),
+  ]) {
+    expect(html).toContain('aria-label="Diff preview"')
+    expect(html).toMatch(/data-diff="add"[^>]*>\+patched by mock 1</)
+    expect(html).toMatch(/data-diff="del"[^>]*>-old line</)
+    expect(html).toMatch(/data-diff="file"[^>]*>\*\*\* Update File: a\.txt</)
+  }
+  expect(renderToStaticMarkup(<QuestionCard m={approval} actions={actions} />)).not.toContain('Diff preview')
+})

@@ -440,6 +440,9 @@ test('blockedWhat: a Codex approval goes to Slack as its label, never the comman
   assert.doesNotMatch(blockedWhat(w, 'codex'), /s3cr3t|curl/);
   assert.equal(blockedWhat('exec approval', 'codex'), 'exec approval');
   assert.equal(blockedWhat(null, 'codex'), 'input needed');
+  // #34 phase 5: patch and MCP approvals — the label only, never the files or the tool's call.
+  assert.equal(blockedWhat('patch approval: `secrets.env, a.txt`', 'codex'), 'patch approval');
+  assert.equal(blockedWhat('MCP approval: `vault.read_secret`', 'codex'), 'MCP approval');
 });
 
 test('reply: posts in the thread, only for the linked session, only while linked', async (t) => {

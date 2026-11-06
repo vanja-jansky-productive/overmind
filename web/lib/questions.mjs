@@ -217,9 +217,10 @@ export function parseScreenPrompt(screen) {
   return { id, questions: [q], untouched: cursorAt === 0 && !checked, cursorAt };
 }
 
-// ------------------------------------------------------------------ Codex's approval menu
+// ------------------------------------------------------------------ Codex's approval menus
 //
-// Codex 0.166 asks before an escalated command, in the terminal only (nothing is persisted):
+// Codex 0.166 asks in the terminal only (nothing is persisted), with one of three screens.
+// An escalated command:
 //     Would you like to run the following command?
 //     Thread: Agent (01a1a7b1)                     (a sub-agent's request, shown in the parent)
 //     Environment: local
@@ -229,94 +230,246 @@ export function parseScreenPrompt(screen) {
 //     2. Yes, and don't ask again for commands that start with `printf hi` (p)   (may wrap)
 //     3. No, and tell Codex what to do differently (esc)
 //     Press enter to confirm or esc to cancel
-// `›` is the cursor. ↓ moves it, Enter picks. Option 2 writes a permanent `prefix_rule(…
-// decision="allow")` to ~/.codex/rules/default.rules — for every session on the host — so it
-// is a secondary choice (`secondary: true`). Option 3 ends the turn like Esc.
+// Option 2 writes a permanent `prefix_rule(… decision="allow")` to ~/.codex/rules/default.rules —
+// for every session on the host. Option 3 ends the turn like Esc.
+// An apply_patch the sandbox does not allow (the diff is drawn above it, in the history):
+//     Would you like to make the following edits?
+//     Description: Apply proposed file edits
+//     Destination: /abs/path/a.txt                 (or the path on the next lines, hard-wrapped)
+//   › 1. Yes, proceed (y)
+//     2. Yes, and don't ask again for these files (a)     (this session only: no file written)
+//     3. No, and tell Codex what to do differently (esc)  (ends the turn)
+//     Press enter to confirm or esc to cancel
+// An MCP tool call (an elicitation form; a tool marked read-only does not ask):
+//     Field 1/1
+//     Allow the tiny MCP server to run tool "write_note"?
+//     path: /abs/pa...                             (each argument, cut to the width)
+//   › 1. Allow                   Run the tool and continue
+//     2. Allow for this session  Run the tool and remember this choice for this session
+//     3. Always allow            Run the tool and remember this choice for future tool calls
+//     4. Cancel                  Cancel this tool call         (the turn goes on)
+//     enter to submit | esc to cancel
+// "Always allow" writes `[mcp_servers.<server>.tools.<tool>] approval_mode = "approve"` to
+// Codex's config.toml. `›` is the cursor in all three; ↓ moves it, Enter picks. A pick with a
+// lasting side effect is `secondary: true`.
 
 const CODEX_HEAD = 'Would you like to run the following command?';
+const CODEX_PATCH_HEAD = 'Would you like to make the following edits?';
+const CODEX_MCP_HEAD = /^Allow the (\S+) MCP server to run tool "(.+)"\?$/;
 const CODEX_FOOT = /Press enter to confirm/;
+const CODEX_MCP_FOOT = /enter to submit \| esc to cancel/;
 const CODEX_OPTION = /^\s*(›\s*)?(\d+)\.\s+(.*)$/;
 const CODEX_HOTKEY = /\s*\((?:y|p|esc|a|n)\)\s*$/;
 
-/**
- * The approval menu Codex shows, as `{ id, questions: [q], untouched, cursorAt }`; null when none.
- * `request`: the row's `approval_id` (the escalated call, or the hook's stamp) — mixed into the id,
- * so the same command asked again is a new card, and a card for an earlier request cannot
- * answer a later one with the same text.
- */
-export function parseCodexScreenPrompt(screen, { request = null } = {}) {
-  const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
-  let head = -1;
-  for (let i = lines.length - 1; i >= 0 && head < 0; i -= 1) if (lines[i].includes(CODEX_HEAD)) head = i;
-  if (head < 0) return null;
-  const foot = lines.findIndex((l, i) => i > head && CODEX_FOOT.test(l));
-  if (foot < 0) return null;
-  const block = lines.slice(head + 1, foot);
-  // The menu's options are the last `1.` before the footer that carries the cursor or reads
-  // `Yes, …`: a heredoc in the command can hold numbered lines of its own.
-  let firstOption = -1;
-  for (let i = block.length - 1; i >= 0 && firstOption < 0; i -= 1) {
-    const m = block[i].match(CODEX_OPTION);
-    if (m && m[2] === '1' && (m[1] || /^Yes,/.test(m[3]))) firstOption = i;
-  }
-  if (firstOption < 0) return null;
+const codexHead = (l) => {
+  if (l.includes(CODEX_HEAD)) return { kind: 'exec' };
+  if (l.includes(CODEX_PATCH_HEAD)) return { kind: 'patch' };
+  const m = l.trim().match(CODEX_MCP_HEAD);
+  return m ? { kind: 'mcp', server: m[1], tool: m[2] } : null;
+};
 
-  const meta = { thread: '', reason: '' };
-  const cmd = [];
-  let field = null;
-  for (const raw of block.slice(0, firstOption)) {
-    const l = raw.trim();
-    if (!l) continue;
-    if (l.startsWith('$ ') && !cmd.length) {
-      cmd.push(l.slice(2));
-      field = 'cmd';
-    } else if (field === 'cmd') {
-      cmd.push(l);
-    } else if (/^Thread:\s/.test(l)) {
-      meta.thread = l.replace(/^Thread:\s*/, '');
-      field = null;
-    } else if (/^Environment:\s/.test(l)) {
-      field = null;
-    } else if (/^Reason:\s/.test(l)) {
-      meta.reason = l.replace(/^Reason:\s*/, '');
-      field = 'reason';
-    } else if (field === 'reason') {
-      meta.reason = `${meta.reason} ${l}`;
-    }
-  }
-  if (!cmd.length) return null;
-
+/** The menu's options from its first `1.` on: `{ options, cursorAt }`. */
+function codexOptions(lines, { columns = false } = {}) {
   const options = [];
   let cursorAt = -1;
-  for (const raw of block.slice(firstOption)) {
+  for (const raw of lines) {
     const m = raw.match(CODEX_OPTION);
     if (m && Number(m[2]) === options.length + 1) {
       if (m[1]) cursorAt = options.length;
-      options.push({ label: m[3].trim(), description: '' });
+      // The MCP form: `Allow for this session  Run the tool and …` — label, 2+ spaces, description.
+      const [label, ...rest] = columns ? m[3].trim().split(/\s{2,}/) : [m[3].trim()];
+      options.push({ label, description: rest.join(' ') });
     } else if (raw.trim() && options.length) {
       const o = options[options.length - 1];
-      o.label = `${o.label} ${raw.trim()}`; // a wrapped option: its (p) lands on the next line
+      // A wrapped option: its (p) lands on the next line; a wrapped MCP description.
+      if (columns) o.description = `${o.description} ${raw.trim()}`.trim();
+      else o.label = `${o.label} ${raw.trim()}`;
     }
   }
-  if (options.length < 2) return null;
   for (const o of options) o.label = o.label.replace(CODEX_HOTKEY, '');
-  // Exec approvals only (phase 1a): their "don't ask again" writes a host-wide prefix rule. A
-  // session-scoped variant (non-exec approvals) would need its own description.
-  const always = options.findIndex((o) => /^Yes, and don't ask again/i.test(o.label));
-  if (always >= 0) {
-    const prefix = options[always].label.match(/`([^`]+)`/)?.[1];
-    options[always].secondary = true;
-    options[always].description = prefix
-      ? `Adds a permanent allow rule for commands starting with \`${prefix}\` — for every Codex session on this host`
-      : 'Adds a permanent allow rule — for every Codex session on this host';
+  return { options, cursorAt };
+}
+
+/** The menu's first option: the last `1.` before the footer that carries the cursor or reads `Yes,` / `Allow`. */
+function firstOptionAt(block) {
+  for (let i = block.length - 1; i >= 0; i -= 1) {
+    const m = block[i].match(CODEX_OPTION);
+    if (m && m[2] === '1' && (m[1] || /^(Yes,|Allow\b)/.test(m[3]))) return i;
+  }
+  return -1;
+}
+
+/**
+ * The approval menu Codex shows, as `{ id, kind, questions: [q], untouched, cursorAt }` (+ `files`,
+ * the absolute paths a patch edits); null when none. `kind`: 'exec' | 'patch' | 'mcp'.
+ * `request`: the row's `approval_id` (the pending call, or the hook's stamp) — mixed into the id,
+ * so the same request asked again is a new card, and a card for an earlier request cannot answer
+ * a later one with the same text. `cwd`: a patch's files are shown relative to it.
+ */
+export function parseCodexScreenPrompt(screen, { request = null, cwd = null } = {}) {
+  const lines = String(screen ?? '').split('\n').map((l) => l.replace(/\s+$/, ''));
+  let head = -1;
+  let found = null;
+  for (let i = lines.length - 1; i >= 0 && head < 0; i -= 1) {
+    found = codexHead(lines[i]);
+    if (found) head = i;
+  }
+  if (head < 0) return null;
+  const footRe = found.kind === 'mcp' ? CODEX_MCP_FOOT : CODEX_FOOT;
+  const foot = lines.findIndex((l, i) => i > head && footRe.test(l));
+  if (foot < 0) return null;
+  const block = lines.slice(head + 1, foot);
+  const firstOption = firstOptionAt(block);
+  if (firstOption < 0) return null;
+  const { options, cursorAt } = codexOptions(block.slice(firstOption), { columns: found.kind === 'mcp' });
+  if (options.length < 2) return null;
+  const before = block.slice(0, firstOption);
+
+  let question;
+  let header = 'Approval';
+  let files;
+  let sigExtra = []; // a patch's id is its absolute files, not the cwd-relative text
+  if (found.kind === 'exec') {
+    const meta = { thread: '', reason: '' };
+    const cmd = [];
+    let field = null;
+    for (const raw of before) {
+      const l = raw.trim();
+      if (!l) continue;
+      if (l.startsWith('$ ') && !cmd.length) {
+        cmd.push(l.slice(2));
+        field = 'cmd';
+      } else if (field === 'cmd') {
+        cmd.push(l);
+      } else if (/^Thread:\s/.test(l)) {
+        meta.thread = l.replace(/^Thread:\s*/, '');
+        field = null;
+      } else if (/^Environment:\s/.test(l)) {
+        field = null;
+      } else if (/^Reason:\s/.test(l)) {
+        meta.reason = l.replace(/^Reason:\s*/, '');
+        field = 'reason';
+      } else if (field === 'reason') {
+        meta.reason = `${meta.reason} ${l}`;
+      }
+    }
+    if (!cmd.length) return null;
+    // Its "don't ask again" writes a host-wide prefix rule.
+    const always = options.findIndex((o) => /^Yes, and don't ask again/i.test(o.label));
+    if (always >= 0) {
+      const prefix = options[always].label.match(/`([^`]+)`/)?.[1];
+      options[always].secondary = true;
+      options[always].description = prefix
+        ? `Adds a permanent allow rule for commands starting with \`${prefix}\` — for every Codex session on this host`
+        : 'Adds a permanent allow rule — for every Codex session on this host';
+    }
+    question = [CODEX_HEAD, ...(meta.thread ? [`Thread: ${meta.thread}`] : []), `$ ${cmd.join('\n')}`, ...(meta.reason ? [`Reason: ${meta.reason}`] : [])].join('\n');
+  } else if (found.kind === 'patch') {
+    // `Destination: <path>`, or the label alone and the path on the lines below, hard-wrapped at
+    // the pane's width: joined back without spaces.
+    files = [];
+    let open = false;
+    for (const raw of before) {
+      const l = raw.trim();
+      const d = l.match(/^Destination:\s*(.*)$/);
+      if (d) {
+        files.push(d[1]);
+        open = true;
+      } else if (open && l && !/^[A-Z][\w ]*:\s/.test(l)) {
+        files[files.length - 1] += l;
+      } else {
+        open = false;
+      }
+    }
+    files = files.filter(Boolean);
+    if (!files.length) return null;
+    const base = cwd ? `${String(cwd).replace(/\/+$/, '')}/` : null;
+    const shown = files.map((f) => (base && f.startsWith(base) ? f.slice(base.length) : f));
+    header = 'Edit approval';
+    question = [CODEX_PATCH_HEAD, 'Files:', ...shown.map((f) => `  ${f}`)].join('\n');
+    sigExtra = files;
+    const these = options.findIndex((o) => /^Yes, and don't ask again for these files/i.test(o.label));
+    if (these >= 0) {
+      options[these].secondary = true;
+      options[these].description = 'Approves edits to these files for the rest of this session, without asking again';
+    }
+  } else {
+    const args = before.map((l) => l.trim()).filter(Boolean);
+    header = 'MCP approval';
+    question = [lines[head].trim(), ...args].join('\n');
+    const name = `${found.server}.${found.tool}`;
+    for (const o of options) {
+      if (/^Allow for this session$/i.test(o.label)) o.secondary = true;
+      if (/^Always allow$/i.test(o.label)) {
+        o.secondary = true;
+        o.description = `Adds approval_mode = "approve" for ${name} to Codex's config.toml — every later call, in every Codex session on this host`;
+      }
+    }
   }
 
-  const command = cmd.join('\n');
-  const question = [CODEX_HEAD, ...(meta.thread ? [`Thread: ${meta.thread}`] : []), `$ ${command}`, ...(meta.reason ? [`Reason: ${meta.reason}`] : [])].join('\n');
-  const q = { header: 'Approval', question, multiSelect: false, noOther: true, options };
-  const sig = squash([question, ...options.map((o) => o.label), ...(request ? [`request ${request}`] : [])].join('\n'));
+  const q = { header, question, multiSelect: false, noOther: true, options };
+  const sig = squash([found.kind === 'patch' ? CODEX_PATCH_HEAD : question, ...sigExtra, ...options.map((o) => o.label), ...(request ? [`request ${request}`] : [])].join('\n'));
   const id = `screen:${createHash('sha1').update(sig).digest('hex').slice(0, 12)}`;
-  return { id, questions: [q], untouched: cursorAt === 0, cursorAt };
+  return { id, kind: found.kind, ...(files ? { files } : {}), questions: [q], untouched: cursorAt === 0, cursorAt };
+}
+
+const PREVIEW_LINES = 60;
+const PREVIEW_WIDTH = 240;
+
+/** A patch's text from a pending call: an `apply_patch` call's input, or `tools.apply_patch("…")` in an exec script. */
+function patchOfCall(p) {
+  const input = typeof p.input === 'string' ? p.input : typeof p.arguments === 'string' ? p.arguments : '';
+  if (p.name === 'apply_patch') return input;
+  if (p.name !== 'exec') return null;
+  const m = input.match(/tools\.apply_patch\(\s*("(?:[^"\\]|\\.)*")/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The diff preview of a waiting patch card: the current turn's pending `apply_patch` (no output
+ * yet) whose files are exactly the menu's `files` (absolute; a patch's relative paths resolve
+ * against `cwd`) and, when the row's `request` is a call id (not the hook's `hook-…` stamp), whose
+ * call it is — so a preview never shows another patch than the one asked about. Its lines
+ * between `*** Begin Patch` and `*** End Patch`, at most PREVIEW_LINES; null when none matches.
+ * The screen stays the truth for what is asked; this only shows what Codex drew above the menu.
+ */
+export function codexPatchPreview(rolloutText, files, cwd, request = null) {
+  const pending = new Map();
+  for (const line of String(rolloutText ?? '').split('\n')) {
+    if (!/task_started|_call/.test(line)) continue;
+    let v;
+    try {
+      v = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const p = v?.payload;
+    if (!p || typeof p !== 'object') continue;
+    if (v.type === 'event_msg' && p.type === 'task_started') pending.clear();
+    else if (p.type === 'custom_tool_call' || p.type === 'function_call') {
+      const patch = patchOfCall(p);
+      if (patch) pending.set(p.call_id, patch);
+    } else if (p.type === 'custom_tool_call_output' || p.type === 'function_call_output') pending.delete(p.call_id);
+  }
+  const want = [...new Set(files ?? [])].sort().join('\n');
+  const abs = (f) => (f.startsWith('/') || !cwd ? f : `${String(cwd).replace(/\/+$/, '')}/${f}`);
+  const only = request && !String(request).startsWith('hook-') ? String(request) : null;
+  for (const [callId, patch] of [...pending.entries()].reverse()) {
+    if (only && callId !== only) continue;
+    const lines = patch.split('\n').filter((l) => !/^\*\*\* (Begin|End) Patch\s*$/.test(l));
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    const touched = lines.map((l) => l.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/)?.[1]?.trim()).filter(Boolean);
+    if ([...new Set(touched.map(abs))].sort().join('\n') !== want) continue;
+    const shown = lines.slice(0, PREVIEW_LINES).map((l) => (l.length > PREVIEW_WIDTH ? `${l.slice(0, PREVIEW_WIDTH - 1)}…` : l));
+    if (lines.length > PREVIEW_LINES) shown.push(`… ${lines.length - PREVIEW_LINES} more lines`);
+    return shown.join('\n');
+  }
+  return null;
 }
 
 /**

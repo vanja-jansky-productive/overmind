@@ -1014,6 +1014,159 @@ test('review-codex S1: the screen is read again before Enter — a moved cursor 
   assert.deepEqual(keys(), ['Down', 'Enter']);
 });
 
+/** ↓ on any Codex menu: the `›` moves to the next numbered option, indentation kept (the MCP form indents its options). */
+function menuCursorDown(screen) {
+  const lines = screen.split('\n');
+  const i = lines.findIndex((l) => /^\s*› \d+\./.test(l));
+  const j = lines.findIndex((l, k) => k > i && /^\s*\d+\./.test(l));
+  if (i < 0 || j < 0) return screen;
+  const col = lines[i].indexOf('›');
+  lines[i] = `${lines[i].slice(0, col)} ${lines[i].slice(col + 1)}`;
+  const at = lines[j].search(/\d/) - 2;
+  lines[j] = `${lines[j].slice(0, at)}›${lines[j].slice(at + 1)}`;
+  return lines.join('\n');
+}
+
+/** A Codex row waiting on `fixture`'s menu, answered from the web through a fake tmux. */
+async function codexMenuHost(t, fixture, row = {}) {
+  const id = row.session_id ?? '01a1a876-0000-7000-8000-0000000000p5';
+  const rows = [{ session_id: id, name: 'cx', harness: 'codex', status: 'waiting', backend: 'tmux', handle: '%9', updated_at: 9, ...row }];
+  const host = fakeHost('solo', rows);
+  host.transcripts = fakeTranscripts([]);
+  const menu = fs.readFileSync(new URL(`./fixtures/${fixture}`, import.meta.url), 'utf8');
+  const st = { screen: menu, onKey: () => {} };
+  host.backend.peek = async () => st.screen;
+  host.backend.keys = async (s, key) => {
+    host.calls.push(['keys', s.session_id, key]);
+    if (key === 'Down') st.screen = menuCursorDown(st.screen);
+    st.onKey(key);
+  };
+  const overmind = createOvermind({ cli: host.cli, self: 'solo' });
+  const config = normalizeConfig({ self: 'solo' }, { env: {}, home: '/home/tester' });
+  const api = createApi({ config, ...host, overmind, warmOvermind: false, sleep: async () => {} });
+  const server = createHttpServer({ handleApi: api, uiDir: os.tmpdir() });
+  const base = await listen(server);
+  t.after(() => server.close());
+  return {
+    menu,
+    st,
+    rows,
+    host,
+    card: async () => (await (await fetch(`${base}/api/hosts/solo/sessions/${id}/messages`)).json()).messages.at(-1),
+    call: async (body) => (await post(`${base}/api/hosts/solo/sessions/${id}/answer`, body)).status,
+    keys: () => host.calls.filter((c) => c[0] === 'keys' || c[0] === 'type').map((c) => c[2]),
+    reset: () => {
+      host.calls.length = 0;
+      st.screen = menu;
+      st.onKey = () => {};
+      host.backend.peek = async () => st.screen;
+    },
+  };
+}
+
+test('#34 phase 5: a Codex patch approval is a card — its files, the diff preview, picked by index with every screen check', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'om-p5-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rollout = path.join(dir, 'rollout.jsonl');
+  const patch = '*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n+patched by mock 1\n*** Add File: new.txt\n+new file from mock 1\n+second line\n*** End Patch\n';
+  fs.writeFileSync(
+    rollout,
+    [
+      { type: 'event_msg', payload: { type: 'task_started' } },
+      { type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'call_p1', name: 'apply_patch', input: patch } },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join('\n') + '\n',
+  );
+  const h = await codexMenuHost(t, 'codex-approval-patch.txt', { cwd: '/work/project', transcript: rollout, approval_id: 'call_p1', waiting_for: 'patch approval: `a.txt, new.txt`' });
+  const m = await h.card();
+  assert.equal(m.kind, 'question');
+  const [q] = m.questions;
+  assert.equal(q.header, 'Edit approval');
+  assert.equal(q.question, 'Would you like to make the following edits?\nFiles:\n  a.txt\n  new.txt');
+  assert.match(q.preview, /^\*\*\* Update File: a\.txt\n@@\n alpha\n\+patched by mock 1/);
+  assert.deepEqual(q.options.map((o) => !!o.secondary), [false, true, false]);
+
+  // Yes / don't ask again for these files / No: each is Down × index + Enter.
+  for (const [pick, want] of [[0, ['Enter']], [1, ['Down', 'Enter']], [2, ['Down', 'Down', 'Enter']]]) {
+    h.reset();
+    assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [pick] }] }), 200);
+    assert.deepEqual(h.keys(), want);
+  }
+
+  // The cursor moved in the terminal before the answer: 409, nothing typed.
+  h.reset();
+  h.st.screen = menuCursorDown(h.menu);
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [0] }] }), 409);
+  assert.deepEqual(h.keys(), []);
+  // Moved between our check and our key (option 1 is a lone Enter): 409, no Enter.
+  h.reset();
+  let peeks = 0;
+  h.host.backend.peek = async () => (++peeks === 2 ? (h.st.screen = menuCursorDown(h.st.screen)) : h.st.screen);
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [0] }] }), 409);
+  assert.deepEqual(h.keys(), []);
+  // Another patch (other files) takes its place during ↓↓: one stray ↓ at most, never an Enter.
+  h.reset();
+  h.st.onKey = (key) => key === 'Down' && (h.st.screen = h.menu.replaceAll('/work/project/new.txt', '/work/project/secrets.env'));
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [2] }] }), 409);
+  assert.deepEqual(h.keys(), ['Down']);
+  // A stale card: the same files asked again by another call — a new card, the old one answers nothing.
+  h.reset();
+  h.rows[0].approval_id = 'call_p2';
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [0] }] }), 409);
+  assert.deepEqual(h.keys(), []);
+  const fresh = await h.card();
+  assert.notEqual(fresh.id, m.id);
+  assert.equal(fresh.questions[0].preview, undefined, 'no pending call_p2 patch in the rollout: no preview, never another patch\'s');
+});
+
+test('#34 phase 5: a Codex MCP approval is a card — server, tool, arguments; four options picked by index with every screen check', async (t) => {
+  const h = await codexMenuHost(t, 'codex-approval-mcp.txt', { approval_id: 'call_m1', waiting_for: 'MCP approval: `tiny.write_note`' });
+  const m = await h.card();
+  const [q] = m.questions;
+  assert.equal(q.header, 'MCP approval');
+  assert.match(q.question, /^Allow the tiny MCP server to run tool "write_note"\?\npath: /);
+  assert.deepEqual(q.options.map((o) => o.label), ['Allow', 'Allow for this session', 'Always allow', 'Cancel']);
+  assert.deepEqual(q.options.map((o) => !!o.secondary), [false, true, true, false]);
+  for (const [pick, want] of [[0, ['Enter']], [1, ['Down', 'Enter']], [2, ['Down', 'Down', 'Enter']], [3, ['Down', 'Down', 'Down', 'Enter']]]) {
+    h.reset();
+    assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [pick] }] }), 200);
+    assert.deepEqual(h.keys(), want);
+  }
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ text: 'no' }] }), 400, 'no free text');
+  h.reset();
+  h.st.screen = menuCursorDown(h.menu);
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [1] }] }), 409, 'moved in the terminal');
+  assert.deepEqual(h.keys(), []);
+  // Another tool's approval replaces it during ↓↓↓ (Cancel): never an Enter on it.
+  h.reset();
+  h.st.onKey = (key) => key === 'Down' && (h.st.screen = h.menu.replace('run tool "write_note"', 'run tool "delete_all"'));
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [3] }] }), 409);
+  assert.deepEqual(h.keys(), ['Down']);
+  // The redraw lags a key: it waits for the cursor on "Always allow", then picks it.
+  h.reset();
+  let lag = 0;
+  h.host.backend.keys = async (s, key) => {
+    h.host.calls.push(['keys', s.session_id, key]);
+    if (key === 'Down') lag += 1;
+  };
+  h.host.backend.peek = async () => {
+    if (lag) {
+      h.st.screen = menuCursorDown(h.st.screen);
+      lag -= 1;
+      return h.menu.replace('  › 1.', '    1.').replace(/^ {4}(\d)\./m, '  › $1.'); // a stale frame: cursor not yet there
+    }
+    return h.st.screen;
+  };
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [2] }] }), 200);
+  assert.deepEqual(h.keys(), ['Down', 'Down', 'Enter']);
+  // Answered in the terminal: the history keeps "Called", no menu — 409.
+  h.reset();
+  h.st.screen = '• Called tiny.write_note\n  └ wrote /work/project/note.txt\n• done.';
+  assert.equal(await h.call({ toolUseId: m.id, answers: [{ options: [0] }] }), 409);
+  assert.deepEqual(h.keys(), []);
+});
+
 test('answer types the keys for the pending question, only when it is safe to', async (t) => {
   const id = 'cccccccc-0000-0000-0000-000000000003';
   const host = fakeHost('solo', [{ session_id: id, name: 'q', status: 'waiting', backend: 'tmux', handle: '%3', updated_at: 3 }]);

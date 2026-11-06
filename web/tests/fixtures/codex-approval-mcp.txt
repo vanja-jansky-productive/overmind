@@ -1,0 +1,47 @@
+› SAY: hello
+  Worked for <1s • 09:40
+
+
+› PATCH: a.txt new.txt
+
+
+• Edited 2 files (+3 -0)
+  └ a.txt (+1 -0)
+    2 +patched by mock 1
+
+  └ new.txt (+2 -0)
+    1 +new file from mock 1
+    2 +second line
+    + Show details
+
+• done.
+
+  Worked for 20s • 09:41
+
+
+› MCP: write_note {"path":"/work/project/note.txt","text":"hi from mcp"}
+
+
+• done.
+
+  Worked for <1s • 09:41
+
+
+› MCPJS: write_note {"path":"/work/project/note.txt","text":"hi from mcp"}
+
+
+◦ Calling tiny.write_note
+    + Show details
+
+
+  Field 1/1
+  Allow the tiny MCP server to run tool "write_note"?
+
+  path: /work/project/notes/a-rather-long-directory-name/with-a-n...
+  text: hi from mcp
+
+  › 1. Allow                   Run the tool and continue
+    2. Allow for this session  Run the tool and remember this choice for this session
+    3. Always allow            Run the tool and remember this choice for future tool calls
+    4. Cancel                  Cancel this tool call
+  enter to submit | esc to cancel

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 
 import {
   answerSteps,
+  codexPatchPreview,
   normalizeQuestions,
   parseCodexScreenPrompt,
   parseScreenPrompt,
@@ -258,4 +259,104 @@ test('the cursor off option 1 is touched; the composer › is not the cursor; no
   assert.equal(parseCodexScreenPrompt('✔ You approved codex to run printf hi > hello.txt this time\n• Working (2s • esc to interrupt)\n› Ask Codex to do anything'), null);
   assert.equal(parseCodexScreenPrompt(codexScreen.replace('Press enter to confirm or esc to cancel', '')), null, 'no footer');
   assert.equal(parseCodexScreenPrompt(''), null);
+});
+
+// ------------------------------------------------------------------ patch and MCP menus (#34 phase 5)
+// Captured from Codex 0.166 against a mock model (paths replaced): an apply_patch outside the
+// sandbox, the same at 90 columns (each Destination path hard-wrapped), an MCP tool call, and the
+// MCP menu at 90 columns (option 3's description wraps).
+const codexPatch = fs.readFileSync(new URL('./fixtures/codex-approval-patch.txt', import.meta.url), 'utf8');
+const codexPatchWrapped = fs.readFileSync(new URL('./fixtures/codex-approval-patch-wrapped.txt', import.meta.url), 'utf8');
+const codexMcp = fs.readFileSync(new URL('./fixtures/codex-approval-mcp.txt', import.meta.url), 'utf8');
+const codexMcpNarrow = fs.readFileSync(new URL('./fixtures/codex-approval-mcp-narrow.txt', import.meta.url), 'utf8');
+
+test('the Codex patch menu: its files (relative to the cwd), three options, "these files" secondary', () => {
+  const p = parseCodexScreenPrompt(codexPatch, { cwd: '/work/project' });
+  assert.equal(p.kind, 'patch');
+  assert.equal(p.untouched, true);
+  assert.equal(p.cursorAt, 0);
+  const [q] = p.questions;
+  assert.equal(q.header, 'Edit approval');
+  assert.equal(q.noOther, true);
+  assert.equal(q.question, 'Would you like to make the following edits?\nFiles:\n  a.txt\n  new.txt');
+  assert.deepEqual(p.files, ['/work/project/a.txt', '/work/project/new.txt']);
+  assert.deepEqual(
+    q.options.map((o) => o.label),
+    ['Yes, proceed', "Yes, and don't ask again for these files", 'No, and tell Codex what to do differently'],
+  );
+  assert.equal(q.options[1].secondary, true);
+  assert.match(q.options[1].description, /these files.*rest of this session/);
+  assert.equal(q.options[0].secondary, undefined);
+  assert.deepEqual(answerSteps(p.questions, [{ options: [1], text: null }]).map((s) => s.key), ['Down', 'Enter']);
+  // Without a cwd the paths stay absolute; the id does not depend on the cwd.
+  const abs = parseCodexScreenPrompt(codexPatch);
+  assert.equal(abs.questions[0].question, 'Would you like to make the following edits?\nFiles:\n  /work/project/a.txt\n  /work/project/new.txt');
+  assert.equal(abs.id, p.id);
+});
+
+test('a patch menu at 90 columns: each Destination path joined back from its hard-wrapped lines', () => {
+  const p = parseCodexScreenPrompt(codexPatchWrapped);
+  const root = '/work/project-with-a-rather-long-name/checkouts/feature-branch-approval-cards-p5';
+  assert.deepEqual(p.files, [`${root}/a.txt`, `${root}/added.md`, `${root}/src/deeply/nested/module_with_long_name.rs`]);
+  assert.equal(p.questions[0].options.length, 3);
+});
+
+test('another patch, other files or another request: another card', () => {
+  const p = parseCodexScreenPrompt(codexPatch, { request: 'call_1' });
+  assert.notEqual(parseCodexScreenPrompt(codexPatch, { request: 'call_2' }).id, p.id);
+  assert.notEqual(parseCodexScreenPrompt(codexPatch.replace('/work/project/new.txt', '/work/project/other.txt'), { request: 'call_1' }).id, p.id);
+});
+
+test('the Codex MCP menu: server, tool and the arguments it shows; four options, two secondary', () => {
+  const p = parseCodexScreenPrompt(codexMcp);
+  assert.equal(p.kind, 'mcp');
+  assert.equal(p.untouched, true);
+  const [q] = p.questions;
+  assert.equal(q.header, 'MCP approval');
+  assert.equal(q.question, 'Allow the tiny MCP server to run tool "write_note"?\npath: /work/project/notes/a-rather-long-directory-name/with-a-n...\ntext: hi from mcp');
+  assert.deepEqual(q.options.map((o) => o.label), ['Allow', 'Allow for this session', 'Always allow', 'Cancel']);
+  assert.equal(q.options[0].description, 'Run the tool and continue');
+  assert.equal(q.options[1].secondary, true);
+  assert.equal(q.options[2].secondary, true);
+  assert.match(q.options[2].description, /config\.toml.*tiny\.write_note|tiny\.write_note.*config\.toml/);
+  assert.equal(q.options[3].secondary, undefined);
+  assert.deepEqual(answerSteps(p.questions, [{ options: [3], text: null }]).map((s) => s.key), ['Down', 'Down', 'Down', 'Enter']);
+});
+
+test('the MCP menu at 90 columns: a wrapped option description stays with its option; the cursor is read', () => {
+  const p = parseCodexScreenPrompt(codexMcpNarrow);
+  assert.deepEqual(p.questions[0].options.map((o) => o.label), ['Allow', 'Allow for this session', 'Always allow', 'Cancel']);
+  const moved = codexMcpNarrow.replace('  › 1. Allow   ', '    1. Allow   ').replace('    2. Allow for', '  › 2. Allow for');
+  const m = parseCodexScreenPrompt(moved);
+  assert.equal(m.untouched, false);
+  assert.equal(m.cursorAt, 1);
+  assert.equal(m.id, p.id, 'same menu, same id');
+  assert.equal(parseCodexScreenPrompt(codexMcp.replace('enter to submit | esc to cancel', '')), null, 'no footer');
+  assert.equal(
+    parseCodexScreenPrompt('• Called tiny.write_note\n  └ wrote /work/project/note.txt\n• done.\n› Ask Codex to do anything'),
+    null,
+  );
+});
+
+test("a patch card's diff preview is the pending call's patch — only when its files are the menu's", () => {
+  const line = (o) => JSON.stringify(o);
+  const started = line({ type: 'event_msg', payload: { type: 'task_started' } });
+  const patch = '*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n+patched\n*** Add File: new.txt\n+new file\n*** End Patch\n';
+  const direct = line({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c1', name: 'apply_patch', input: patch } });
+  const viaExec = line({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c2', name: 'exec', input: `text(await tools.apply_patch(${JSON.stringify(patch)}));\n` } });
+  const out1 = line({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'c1', output: 'ok' } });
+  const files = ['/work/project/a.txt', '/work/project/new.txt'];
+  const want = '*** Update File: a.txt\n@@\n alpha\n+patched\n*** Add File: new.txt\n+new file';
+  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project'), want);
+  assert.equal(codexPatchPreview([started, viaExec].join('\n'), files, '/work/project'), want, "code mode's tools.apply_patch(\"…\")");
+  assert.equal(codexPatchPreview([started, direct, out1].join('\n'), files, '/work/project'), null, 'answered: not pending');
+  assert.equal(codexPatchPreview([started, direct].join('\n'), ['/work/project/a.txt'], '/work/project'), null, 'other files: not this menu');
+  assert.equal(codexPatchPreview([direct, started].join('\n'), files, '/work/project'), null, 'an earlier turn');
+  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project', 'c1'), want, 'the row names this call');
+  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project', 'c9'), null, 'the row names another call');
+  assert.equal(codexPatchPreview([started, direct].join('\n'), files, '/work/project', 'hook-1'), want, "a hook stamp names no call: the files decide");
+  const long = `*** Begin Patch\n*** Add File: new.txt\n${Array.from({ length: 100 }, (_, i) => `+line ${i}`).join('\n')}\n*** End Patch\n`;
+  const big = codexPatchPreview([started, line({ type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'c3', name: 'apply_patch', input: long } })].join('\n'), ['/work/project/new.txt'], '/work/project');
+  assert.equal(big.split('\n').length, 61);
+  assert.match(big, /… 41 more lines$/);
 });

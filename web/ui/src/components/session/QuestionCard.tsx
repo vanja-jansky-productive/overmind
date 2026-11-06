@@ -41,7 +41,39 @@ function Heading({ q }: { q: Question }) {
         </span>
       ) : null}
       <div className="font-medium whitespace-pre-wrap [overflow-wrap:anywhere]">{q.question}</div>
+      {q.preview ? <DiffPreview text={q.preview} /> : null}
     </div>
+  )
+}
+
+const diffKind = (l: string) => (l.startsWith('*** ') ? 'file' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hunk' : 'ctx')
+
+/** A Codex patch approval's patch: scrolls inside the card, one row per line. */
+function DiffPreview({ text }: { text: string }) {
+  return (
+    <pre
+      aria-label="Diff preview"
+      className="max-h-64 w-full overflow-auto rounded-md border border-border/70 bg-muted/40 py-1.5 font-mono text-[0.78rem] leading-snug"
+    >
+      {text.split('\n').map((l, i) => {
+        const kind = diffKind(l)
+        return (
+          <div
+            key={i}
+            data-diff={kind}
+            className={cn(
+              'px-2 whitespace-pre',
+              kind === 'add' && 'bg-diff-add/10 text-diff-add',
+              kind === 'del' && 'bg-diff-del/10 text-diff-del',
+              kind === 'file' && 'font-semibold text-foreground',
+              kind === 'hunk' && 'text-muted-foreground',
+            )}
+          >
+            {l || ' '}
+          </div>
+        )
+      })}
+    </pre>
   )
 }
 
