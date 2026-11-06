@@ -12,12 +12,13 @@ import { run } from './lib/run.mjs';
 import { createOvermindCli } from './lib/overmind-cli.mjs';
 import { createFocus } from './lib/focus.mjs';
 import { createOvermind } from './lib/overmind.mjs';
-import { createDiscoveryWatcher, discoveryRoots } from './lib/watch.mjs';
+import { createDiscoveryWatcher, discoveryRoots, readFileTail } from './lib/watch.mjs';
 import { createBackend } from './lib/backends.mjs';
 import { createTranscriptReader, locateTranscript } from './lib/transcript.mjs';
 import { createSpawner } from './lib/spawn.mjs';
 import { createBrancher } from './lib/branch.mjs';
 import { createKiller } from './lib/kill.mjs';
+import { createCodexTools } from './lib/codex-tools.mjs';
 import { createAutoNamer, createSpawnNamer } from './lib/autoname.mjs';
 import { createGrouper } from './lib/grouping.mjs';
 import { createUploader } from './lib/uploads.mjs';
@@ -289,6 +290,7 @@ const handleApi = createApi({
       const host = await overmind.localHost({ force: true });
       return host.ok ? host.sessions : null;
     },
+    tools: createCodexTools({ run, readTail: readFileTail }),
   }),
   cli,
   autoNamer,

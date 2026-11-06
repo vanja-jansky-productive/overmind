@@ -1,6 +1,6 @@
-// Close a session for good: interrupt a Codex turn, terminate the process, then tear down the terminal
-// that hosted it (the tmux window, and the tmux session when that was its only window,
-// or the iTerm tab).
+// Close a session for good: interrupt a Codex turn, stop the tool processes the session started,
+// terminate the process, then tear down the terminal that hosted it (the tmux window, and the tmux
+// session when that was its only window, or the iTerm tab).
 //
 // This lives in the web backend layer (next to lib/backends.mjs), not in the `overmind` CLI:
 // it needs nothing discovery doesn't already hand us (pid, backend, handle, tmux_session),
@@ -27,6 +27,7 @@ function isAlive(pid, killProcess) {
  *   listSessions () => Promise<rows|null> — a fresh `overmind list` of this host
  *   interruptMs  how long a Codex interrupt may take to land before SIGTERM anyway
  *   now          () => ms — the interrupt's wall clock (injected for tests)
+ *   tools        lib/codex-tools.mjs `{ find, alive }` — a Codex turn's tool processes (null: none looked for)
  */
 export function createKiller({
   run,
@@ -39,6 +40,7 @@ export function createKiller({
   listSessions = null,
   interruptMs = 5000,
   now = Date.now,
+  tools = null,
 }) {
   if (typeof run !== 'function') throw new TypeError('run must be a function');
   const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -69,6 +71,47 @@ export function createKiller({
       if (!row || row.status === 'idle') return 'interrupted';
     }
     return 'timeout';
+  }
+
+  const signal = (pid, sig) => {
+    try {
+      killProcess(pid, sig);
+    } catch {
+      /* gone already (ESRCH), or not ours to signal (EPERM): nothing more to do for it */
+    }
+  };
+
+  /**
+   * The tool processes a Codex row started (lib/codex-tools.mjs: in the pane's tree only, matched
+   * by the commands its rollout asked for), looked up after the interrupt and TERMed before the
+   * agent goes — neither Esc nor the agent's SIGTERM stops them, and a command still running when
+   * `exec_command` yielded outlives its turn, so an idle row is looked at too. Returns the lookup,
+   * for `reap` once the agent is gone; null when there is nothing to stop.
+   */
+  async function stopTools(session) {
+    if (session.harness !== 'codex' || !tools) return null;
+    const found = await tools.find(session).catch(() => null);
+    if (!found?.pids?.length) return null;
+    for (const g of found.groups ?? []) signal(-g, 'SIGTERM');
+    for (const pid of found.pids) signal(pid, 'SIGTERM');
+    return found;
+  }
+
+  /**
+   * Waits up to graceMs for `found`'s processes to end, then KILLs the ones still running — each
+   * checked again first to be the same process (pid, args, start), so a reused pid is never hit.
+   */
+  async function reap(found) {
+    const end = now() + graceMs;
+    let left = await tools.alive(found).catch(() => []);
+    while (left.length && now() < end) {
+      await wait(200);
+      left = await tools.alive(found).catch(() => []);
+    }
+    if (!left.length) return { pids: found.pids, result: 'terminated' };
+    left = await tools.alive(found).catch(() => []);
+    for (const r of left) signal(r.pid, 'SIGKILL');
+    return { pids: found.pids, result: left.length ? 'killed' : 'terminated' };
   }
 
   /** SIGTERM, wait up to graceMs, then SIGKILL. Returns how it died ('gone' if it never was alive). */
@@ -128,7 +171,8 @@ export function createKiller({
 
   /**
    * @param session a `overmind list --json` row { pid, backend, handle, tmux_session }
-   * @returns {{ process, terminal, interrupt? }} what happened to each half (+ a Codex turn's interrupt)
+   * @returns {{ process, terminal, interrupt?, tools? }} what happened to each half (+ a Codex turn's
+   *   interrupt, and its tool processes: `{ pids, result: 'terminated' | 'killed' }`)
    *   process:  'terminated' | 'killed' | 'gone' | 'skipped'
    *   terminal: 'tmux-session-killed' | 'tmux-window-killed' | 'tmux-pane-gone'
    *           | 'iterm-tab-closed' | 'iterm-tab-left' | 'left'
@@ -137,7 +181,9 @@ export function createKiller({
     const backend = String(session.backend || 'unknown');
     const shape = backend === 'tmux' && session.handle ? await tmuxShape(session.handle) : null;
     const interrupted = await interrupt(session);
+    const toolsFound = await stopTools(session);
     const processResult = await terminate(Number(session.pid));
+    const toolsResult = toolsFound ? await reap(toolsFound) : null;
     let terminal = 'left';
 
     if (backend === 'tmux' && session.handle) {
@@ -159,7 +205,12 @@ export function createKiller({
         terminal = 'iterm-tab-left'; // iTerm may refuse (prefs); the process is dead anyway
       }
     }
-    return { process: processResult, terminal, ...(interrupted === 'skipped' ? {} : { interrupt: interrupted }) };
+    return {
+      process: processResult,
+      terminal,
+      ...(interrupted === 'skipped' ? {} : { interrupt: interrupted }),
+      ...(toolsResult ? { tools: toolsResult } : {}),
+    };
   }
 
   /** Close an iTerm tab whose process already ended (a sleep): what `kill` reports for it. */

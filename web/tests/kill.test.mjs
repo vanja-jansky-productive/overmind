@@ -164,3 +164,83 @@ test('kill: an interrupt that never lands still SIGTERMs; idle Codex and Claude 
   }
   assert.deepEqual(keys, []);
 });
+
+// #34 phase 5: a Codex turn's tool process (lib/codex-tools.mjs finds it) dies with its row.
+/** Records every signal; the agent (any pid ≥ 4000) dies on SIGTERM like fakeProcess. */
+function recorder(order) {
+  const agent = fakeProcess();
+  return (pid, sig) => {
+    if (sig !== 0) order.push(`${sig} ${pid}`);
+    if (Math.abs(pid) >= 4000) agent.killProcess(pid, sig);
+  };
+}
+
+function toolsFake({ survivors = [] } = {}) {
+  const rows = [
+    { pid: 600, ppid: 510, pgid: 600, startMs: 1, args: '/bin/zsh -c sleep 61' },
+    { pid: 601, ppid: 600, pgid: 600, startMs: 1, args: 'sleep 61' },
+  ];
+  const seen = [];
+  return {
+    seen,
+    find: async (s) => (seen.push(['find', s.pid]), { leaders: [600], pids: [600, 601], groups: [600], rows }),
+    alive: async (found) => (seen.push(['alive']), found.rows.filter((r) => survivors.includes(r.pid))),
+  };
+}
+
+test('kill: a busy Codex row — Escape, its turn\'s tool processes TERMed, the agent SIGTERMed, survivors KILLed after the grace', async () => {
+  const order = [];
+  const tools = toolsFake();
+  const k = createKiller({
+    run: tmuxRun('$3 @7 1\n').run,
+    killProcess: recorder(order),
+    sleep: async () => {},
+    keys: async (s, key) => void order.push(key),
+    listSessions: async () => [{ pid: 4242, status: 'idle' }],
+    tools,
+    graceMs: 50,
+  });
+  const res = await k.kill({ pid: 4242, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%7', transcript: '/r', cwd: '/w' });
+  assert.deepEqual(order.slice(0, 5), ['Escape', 'SIGTERM -600', 'SIGTERM 600', 'SIGTERM 601', 'SIGTERM 4242'], 'the group, each pid, then the agent');
+  assert.deepEqual(res.tools, { pids: [600, 601], result: 'terminated' });
+  assert.ok(!order.some((o) => o.startsWith('SIGKILL')), 'all gone: nothing more');
+
+  // One survives the grace: KILLed — only after it is checked to be the same process still.
+  const order2 = [];
+  const stubborn = toolsFake({ survivors: [601] });
+  let clock = 0;
+  const k2 = createKiller({
+    run: noRun,
+    killProcess: recorder(order2),
+    sleep: async (ms) => void (clock += ms),
+    now: () => clock,
+    keys: async () => {},
+    listSessions: async () => [{ pid: 4242, status: 'idle' }],
+    tools: stubborn,
+    graceMs: 1000,
+  });
+  const res2 = await k2.kill({ pid: 4242, harness: 'codex', status: 'waiting', backend: 'tmux', handle: '%7' });
+  assert.deepEqual(res2.tools, { pids: [600, 601], result: 'killed' });
+  assert.deepEqual(order2.filter((o) => o.startsWith('SIGKILL')), ['SIGKILL 601'], 'only the verified survivor; never its old group');
+  assert.ok(stubborn.seen.filter((s) => s[0] === 'alive').length >= 2, 'checked while waiting and again right before the KILL');
+});
+
+test('kill: an idle Codex row still gets its tool processes stopped (a yielded command outlives its turn); Claude rows look for none', async () => {
+  const order = [];
+  const tools = toolsFake();
+  const k = createKiller({ run: noRun, killProcess: recorder(order), sleep: async () => {}, keys: async () => order.push('Escape'), listSessions: async () => [], tools });
+  const idle = await k.kill({ pid: 4243, harness: 'codex', status: 'idle', backend: 'tmux', handle: '%8' });
+  assert.deepEqual(idle.tools, { pids: [600, 601], result: 'terminated' });
+  assert.equal(idle.interrupt, undefined, 'no Escape for an idle row');
+  assert.deepEqual(order.slice(0, 4), ['SIGTERM -600', 'SIGTERM 600', 'SIGTERM 601', 'SIGTERM 4243']);
+  tools.seen.length = 0;
+  assert.equal((await k.kill({ pid: 4244, harness: 'claude', status: 'busy', backend: 'tmux', handle: '%9' })).tools, undefined);
+  assert.deepEqual(tools.seen, []);
+  const none = { find: async () => ({ leaders: [], pids: [], groups: [], rows: [] }), alive: async () => [] };
+  const k2 = createKiller({ run: noRun, killProcess: recorder([]), sleep: async () => {}, keys: async () => {}, listSessions: async () => [], tools: none });
+  assert.equal((await k2.kill({ pid: 4245, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%8' })).tools, undefined);
+  // A failing lookup never fails the close.
+  const broken = { find: async () => { throw new Error('ps: boom'); }, alive: async () => [] };
+  const k3 = createKiller({ run: noRun, killProcess: recorder([]), sleep: async () => {}, keys: async () => {}, listSessions: async () => [], tools: broken });
+  assert.equal((await k3.kill({ pid: 4246, harness: 'codex', status: 'busy', backend: 'tmux', handle: '%8' })).process, 'terminated');
+});
