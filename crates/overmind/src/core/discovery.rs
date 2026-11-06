@@ -623,21 +623,23 @@ fn apply_approval(
     trig: &crate::core::codex_hooks::Trigger,
     peek: impl FnOnce(&Session) -> Result<String, String>,
 ) {
-    use crate::core::codex_hooks::{Look, truth};
+    use crate::core::codex_hooks::{Look, seen};
     let look = match (s.backend, s.handle.is_some()) {
         (Backend::Tmux, true) => Look::Cheap,
         (Backend::Iterm, true) => Look::Costly,
         _ => Look::None,
     };
     let mut looked = false;
-    let seen = truth(trig, look, || {
+    let on_screen = seen(trig, look, || {
         looked = true;
         peek(s)
     });
-    if let Some(w) = seen {
+    if let Some((w, request)) = on_screen {
         s.status = "waiting".into();
         s.waiting_for = Some(w);
-        s.approval_id = trig.request.clone();
+        // The screen's menu kind picks the request: an older running call of another kind
+        // (a direct MCP call still running when a patch asks) is not the one asking.
+        s.approval_id = request;
     } else if looked {
         s.approval_unseen = Some(trig.request.clone().unwrap_or_default());
     }
@@ -1308,7 +1310,7 @@ mod tests {
 
     #[test]
     fn a_codex_approval_is_waiting_only_while_the_screen_shows_the_menu() {
-        use crate::core::codex_hooks::Trigger;
+        use crate::core::codex_hooks::{ApprovalKind, Trigger};
         let trig = Trigger {
             rollout: true,
             label: "exec approval".into(),
@@ -1347,6 +1349,24 @@ mod tests {
             s.approval_unseen, None,
             "seen: waiting, nothing to look again for"
         );
+        // A running MCP call older than the patch the screen asks about: the patch's call is
+        // the request (its card's preview binds to it), not the MCP call's.
+        let both = Trigger {
+            rollout: true,
+            label: "MCP approval".into(),
+            request: Some("call_mf".into()),
+            pending: vec![
+                (ApprovalKind::Mcp, "call_mf".into()),
+                (ApprovalKind::Patch, "call_p".into()),
+            ],
+            ..Default::default()
+        };
+        let mut s = row(Backend::Tmux);
+        apply_approval(&mut s, &both, |_| {
+            Ok(include_str!("../../../../web/tests/fixtures/codex-approval-patch.txt").into())
+        });
+        assert_eq!(s.status, "waiting");
+        assert_eq!(s.approval_id.as_deref(), Some("call_p"));
         // iTerm without the hook: no osascript, busy — and no look to repeat.
         let mut s = row(Backend::Iterm);
         apply_approval(&mut s, &trig, |_| panic!("no peek"));

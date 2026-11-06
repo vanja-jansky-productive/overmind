@@ -335,7 +335,7 @@ function drawnPatch(lines, head) {
  * The approval menu Codex shows, as `{ id, kind, questions: [q], untouched, cursorAt }` (+ for a
  * patch `files`, the absolute paths it edits, and `drawn`, the `+`/`-` lines Codex drew above the
  * menu or null); null when none. `kind`: 'exec' | 'patch' | 'mcp'.
- * `request`: the row's `approval_id` (the oldest unanswered call that may ask, or the hook's
+ * `request`: the row's `approval_id` (the oldest unanswered call of the menu's kind, or the hook's
  * stamp) — mixed into the id, so the same request asked again is a new card, and a card for an
  * earlier request cannot answer a later one with the same text. One call can ask twice (a script
  * with two `tools.apply_patch`, or two MCP calls): what the screen draws is mixed in too — a

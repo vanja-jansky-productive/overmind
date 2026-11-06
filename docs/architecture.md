@@ -357,7 +357,10 @@ hook's `tool_name` only where nothing can peek: `Bash` → exec, `apply_patch` �
 MCP, else `<tool> approval`); the menu text is the web card's. The trigger's request (`approval_id`)
 is the current turn's **oldest** unanswered call that may ask (an escalated exec, a patch, an MCP
 call) — Codex asks them in order; a call that cannot ask (`update_plan`, a plain exec) neither sets
-nor clears it, and a turn start or end clears them all. The patch card adds a diff preview: the
+nor clears it, and a turn start or end clears them all. Once the screen shows the menu, the row's
+`approval_id` is the oldest such call **of the menu's kind** (else the oldest): a call that may ask
+need not (an approved exec still running, an MCP call Codex never gates — the rollout cannot tell),
+so an older running MCP call never takes a later patch's request. The patch card adds a diff preview: the
 pending `apply_patch` call's patch from the rollout (≤ 60 lines), only when that call is the row's
 `approval_id` (any pending one for a hook stamp), its files are exactly the menu's `Destination:`
 paths **and** its `+`/`-` lines are exactly the ones Codex drew above the menu (`• Edited …`) —

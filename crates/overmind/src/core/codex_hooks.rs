@@ -316,6 +316,25 @@ pub struct Trigger {
     /// This request's identity: the pending call's `call_id`, else the sidecar's stamp. The
     /// same command asked again is another request (the web's card id mixes it in).
     pub request: Option<String>,
+    /// The current turn's unanswered calls that may ask, oldest first: their kind and
+    /// `call_id`. A call that may ask need not (an approved exec still running, an MCP call
+    /// Codex never gates — the rollout cannot tell), so the screen's menu picks among them
+    /// ([`Trigger::request_for`]).
+    pub pending: Vec<(ApprovalKind, String)>,
+}
+
+impl Trigger {
+    /// The request a menu of `kind` is about: the oldest unanswered call of that kind (Codex
+    /// asks in order, so an older one of the same kind is already past its ask), else
+    /// [`Trigger::request`]. An older running call of another kind — a direct MCP call still
+    /// running when a patch asks — is not the menu's.
+    pub fn request_for(&self, kind: ApprovalKind) -> Option<String> {
+        self.pending
+            .iter()
+            .find(|(k, id)| *k == kind && !id.is_empty())
+            .map(|(_, id)| id.clone())
+            .or_else(|| self.request.clone())
+    }
 }
 
 /// What a Codex 0.166 approval menu asks for — each kind has its own screen
@@ -644,6 +663,10 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
             _ => {}
         }
     }
+    let calls = pending
+        .iter()
+        .map(|c| (c.kind, c.call_id.clone()))
+        .collect();
     let pending = pending.first();
     let rollout = pending.is_some();
     if !rollout && !sidecar_live {
@@ -684,6 +707,7 @@ pub fn trigger(text: &str, sidecar: Option<&Sidecar>, proc_start_ms: i64) -> Opt
         label,
         command,
         request,
+        pending: calls,
     })
 }
 
@@ -803,6 +827,16 @@ pub fn truth(
     look: Look,
     peek: impl FnOnce() -> std::result::Result<String, String>,
 ) -> Option<String> {
+    seen(trig, look, peek).map(|(w, _)| w)
+}
+
+/// [`truth`], with the request the row waits on: the one of the screen's menu kind
+/// ([`Trigger::request_for`]), or the trigger's own when no screen was read.
+pub fn seen(
+    trig: &Trigger,
+    look: Look,
+    peek: impl FnOnce() -> std::result::Result<String, String>,
+) -> Option<(String, Option<String>)> {
     let label = |what: &str, cmd: Option<String>| match cmd {
         Some(c) if !c.is_empty() => format!("{what}: `{c}`"),
         _ => what.to_string(),
@@ -816,12 +850,15 @@ pub fn truth(
             // an earlier exec) never labels another kind's menu.
             let menu = screen_menu(&screen)?;
             let fallback = (menu.kind.label() == trig.label).then(|| trig.command.clone());
-            Some(label(
-                menu.kind.label(),
-                menu.subject.or(fallback.flatten()),
+            Some((
+                label(menu.kind.label(), menu.subject.or(fallback.flatten())),
+                trig.request_for(menu.kind),
             ))
         }
-        Look::None if trig.sidecar_unresolved => Some(label(&trig.label, trig.command.clone())),
+        Look::None if trig.sidecar_unresolved => Some((
+            label(&trig.label, trig.command.clone()),
+            trig.request.clone(),
+        )),
         _ => None,
     }
 }
@@ -2134,6 +2171,44 @@ x = 1
         );
     }
 
+    #[test]
+    fn a_running_call_of_another_kind_does_not_take_the_screens_request() {
+        // A direct MCP call still running (approved, or never gated: the rollout cannot say)
+        // when a later patch asks. The oldest is the MCP call — what a look is announced with —
+        // but the screen's patch menu is the patch's request.
+        let trig = trigger(&text(&[STARTED, MCP_FN, PATCH_CALL]), None, 0).unwrap();
+        assert_eq!(trig.request.as_deref(), Some("call_mf"));
+        assert_eq!(
+            trig.request_for(ApprovalKind::Patch).as_deref(),
+            Some("call_p")
+        );
+        assert_eq!(
+            trig.request_for(ApprovalKind::Mcp).as_deref(),
+            Some("call_mf")
+        );
+        assert_eq!(
+            trig.request_for(ApprovalKind::Exec).as_deref(),
+            Some("call_mf"),
+            "no call of the screen's kind: the oldest, as before"
+        );
+        assert_eq!(
+            seen(&trig, Look::Cheap, || Ok(PATCH_MENU.to_string())),
+            Some((
+                "patch approval: `a.txt, new.txt`".to_string(),
+                Some("call_p".to_string())
+            ))
+        );
+        // No backend to look with: the trigger's own request.
+        let hooked = Trigger {
+            sidecar_unresolved: true,
+            ..trig.clone()
+        };
+        assert_eq!(
+            seen(&hooked, Look::None, || panic!("no peek")).map(|s| s.1),
+            Some(Some("call_mf".to_string()))
+        );
+    }
+
     const PATCH_MENU: &str =
         include_str!("../../../../web/tests/fixtures/codex-approval-patch.txt");
     const PATCH_WRAPPED: &str =
@@ -2234,6 +2309,7 @@ x = 1
             label: "exec approval".into(),
             command: Some("from rollout".into()),
             request: None,
+            pending: Vec::new(),
         };
         let menu = || Ok(MENU.to_string());
         assert_eq!(
