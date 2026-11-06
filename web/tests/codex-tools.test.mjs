@@ -33,6 +33,11 @@ test("rolloutCommands: every script the current turn asked to run, with when —
   // An interrupt (the close's Escape) does not start a turn: the aborted turn's commands stay.
   const aborted = line({ timestamp: '2026-11-06T08:46:00.000Z', type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } });
   assert.deepEqual(rolloutCommands([started(), exec('await tools.exec_command({cmd:"x"})'), aborted].join('\n')), [{ cmd: 'x', atMs: T0 + 209 }]);
+  // A completed turn: no current turn, so nothing of it is this turn's (an idle row stops nothing).
+  const complete = line({ timestamp: '2026-11-06T08:46:00.000Z', type: 'event_msg', payload: { type: 'task_complete' } });
+  assert.deepEqual(rolloutCommands([started(), exec('await tools.exec_command({cmd:"x"})'), complete].join('\n')), []);
+  assert.deepEqual(rolloutCommands([exec('await tools.exec_command({cmd:"x"})'), complete].join('\n')), [], 'a tail that starts mid-turn, then completes');
+  assert.deepEqual(rolloutCommands([started(), exec('await tools.exec_command({cmd:"x"})'), complete, started('2026-11-06T08:47:00.000Z'), exec('await tools.exec_command({cmd:"y"})', '2026-11-06T08:47:01.000Z')].join('\n')), [{ cmd: 'y', atMs: T0 + 79_000 }], 'the next turn');
   assert.deepEqual(rolloutCommands('garbage\n'), []);
 });
 

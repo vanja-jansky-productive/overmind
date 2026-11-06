@@ -10,8 +10,9 @@
 //     session's by construction, and nothing else is ever signalled;
 //   - it runs `<shell> -c|-lc <script>` (or `<script>` itself: the shell execs a lone simple
 //     command in its own place) with `<script>` a command the row's CURRENT turn (the
-//     rollout tail after its last `task_started`) asked to run (`exec_command({cmd:…})` in an
-//     `exec` script, an `exec_command` / `shell` function call, a `CommandExecution` item), and
+//     rollout tail after its last `task_started`; none once a `task_complete` follows it) asked
+//     to run (`exec_command({cmd:…})` in an `exec` script, an `exec_command` / `shell` function
+//     call, a `CommandExecution` item), and
 //     it started no earlier than that call (2 s slack);
 //   - its cwd is the row's cwd or below it (never by cwd when the row's cwd is `/`).
 // What it started is killed with it: its process group when it leads one, else its descendants.
@@ -64,13 +65,15 @@ function cmdLiteral(seg) {
 /**
  * The shell scripts the current turn of a Codex rollout (`text`, its tail: the lines after its
  * last `task_started`, or all of it when it has none) asked to run, each with when it asked (ms,
- * the line's timestamp): `[{ cmd, atMs }]`, oldest first. A line without a timestamp is skipped —
- * its process could not be told from an older one.
+ * the line's timestamp): `[{ cmd, atMs }]`, oldest first. A `task_complete` after the last
+ * `task_started` means no current turn: none. A `turn_aborted` does not end it (the close's own
+ * Esc writes one). A line without a timestamp is skipped — its process could not be told from an
+ * older one.
  */
 export function rolloutCommands(text) {
   let out = [];
   for (const line of String(text ?? '').split('\n')) {
-    if (!/_call"|CommandExecution|"task_started"/.test(line)) continue;
+    if (!/_call"|CommandExecution|"task_(started|complete)"/.test(line)) continue;
     let v;
     try {
       v = JSON.parse(line);
@@ -78,7 +81,7 @@ export function rolloutCommands(text) {
       continue;
     }
     const p = v?.payload;
-    if (v?.type === 'event_msg' && p?.type === 'task_started') {
+    if (v?.type === 'event_msg' && (p?.type === 'task_started' || p?.type === 'task_complete')) {
       out = [];
       continue;
     }
