@@ -18,7 +18,9 @@
 //!   tool result or an assistant turn that stopped for a tool call.
 //!
 //! A process is matched to a transcript by an id on its command line (`codex resume <id>`,
-//! `pi --session <id>`), else by cwd and start time: the newest transcript in its cwd that
+//! `pi --session <id>`), or by the transcript it holds open itself (an embedded Codex TUI
+//! writes its own rollout; in daemon mode the daemon holds every pane's, which tells
+//! nothing), else by cwd and start time: the newest transcript in its cwd that
 //! was created after it started (one its own older thread kept writing past is a closed
 //! sibling's, not this process's `/new`; one another process ran, by the owners discovery
 //! records, is never taken; a contested one, which several could have started, is taken by
@@ -947,12 +949,23 @@ pub struct Proc {
     pub start_ms: i64,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
+    /// `.jsonl` files the process itself holds open (an embedded Codex TUI's rollout).
+    pub held: Vec<PathBuf>,
 }
 
 impl Proc {
     /// A session id named on the command line.
     pub fn explicit_session(&self) -> Option<String> {
         explicit_session(self.harness, &self.argv)
+    }
+
+    /// Whether this process names `t` on its command line or holds it open itself: either
+    /// way, certainly its thread.
+    fn names(&self, t: &TranscriptRef) -> bool {
+        self.held.contains(&t.path)
+            || self
+                .explicit_session()
+                .is_some_and(|id| t.session_id == id || t.session_id.starts_with(&id))
     }
 
     /// `--model` / `-m` from the command line.
@@ -1110,6 +1123,7 @@ fn parse_ps_line(line: &str, now_ms: i64) -> Option<Proc> {
         start_ms: now_ms - etime * 1000,
         argv,
         cwd: None,
+        held: Vec::new(),
     })
 }
 
@@ -1130,21 +1144,48 @@ pub fn processes() -> Vec<Proc> {
         .lines()
         .filter_map(|l| parse_ps_line(l, now))
         .collect();
-    let cwds = cwds_of(&procs.iter().map(|p| p.pid).collect::<Vec<_>>());
+    let mut files = files_of(&procs.iter().map(|p| p.pid).collect::<Vec<_>>());
     for p in &mut procs {
-        p.cwd = cwds.get(&p.pid).cloned();
+        if let Some(f) = files.remove(&p.pid) {
+            p.cwd = f.cwd;
+            p.held = f.held;
+        }
     }
     procs
 }
 
-/// The working directory of each pid: `/proc/<pid>/cwd`, else one `lsof` call.
-fn cwds_of(pids: &[i64]) -> HashMap<i64, String> {
-    let mut out = HashMap::new();
+/// A process's working directory and the `.jsonl` files it holds open.
+#[derive(Default)]
+struct Files {
+    cwd: Option<String>,
+    held: Vec<PathBuf>,
+}
+
+fn is_jsonl(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "jsonl")
+}
+
+/// [`Files`] of each pid: `/proc/<pid>/{cwd,fd}`, else one `lsof` call.
+fn files_of(pids: &[i64]) -> HashMap<i64, Files> {
+    let mut out: HashMap<i64, Files> = HashMap::new();
     let mut rest = Vec::new();
     for &pid in pids {
         match std::fs::read_link(format!("/proc/{pid}/cwd")) {
             Ok(p) => {
-                out.insert(pid, p.display().to_string());
+                let held = std::fs::read_dir(format!("/proc/{pid}/fd"))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter_map(|e| std::fs::read_link(e.path()).ok())
+                    .filter(|p| is_jsonl(p))
+                    .collect();
+                out.insert(
+                    pid,
+                    Files {
+                        cwd: Some(p.display().to_string()),
+                        held,
+                    },
+                );
             }
             Err(_) => rest.push(pid.to_string()),
         }
@@ -1153,20 +1194,34 @@ fn cwds_of(pids: &[i64]) -> HashMap<i64, String> {
         return out;
     }
     let Ok(o) = Command::new("lsof")
-        .args(["-a", "-d", "cwd", "-Fpn", "-p", &rest.join(",")])
+        .args(["-a", "-Fpfn", "-p", &rest.join(",")])
         .output()
     else {
         return out;
     };
+    parse_lsof(&String::from_utf8_lossy(&o.stdout), &mut out);
+    out
+}
+
+/// `lsof -Fpfn` output (`p<pid>`, then `f<fd>` / `n<name>` per file) into `out`: the `cwd`
+/// entry, and every `.jsonl` open on a numbered fd.
+fn parse_lsof(text: &str, out: &mut HashMap<i64, Files>) {
     let mut pid = None;
-    for line in String::from_utf8_lossy(&o.stdout).lines() {
+    let mut fd = "";
+    for line in text.lines() {
         if let Some(p) = line.strip_prefix('p') {
             pid = p.parse::<i64>().ok();
+        } else if let Some(f) = line.strip_prefix('f') {
+            fd = f;
         } else if let (Some(n), Some(p)) = (line.strip_prefix('n'), pid) {
-            out.insert(p, n.to_string());
+            let e = out.entry(p).or_default();
+            if fd == "cwd" {
+                e.cwd = Some(n.to_string());
+            } else if fd.starts_with(|c: char| c.is_ascii_digit()) && is_jsonl(Path::new(n)) {
+                e.held.push(PathBuf::from(n));
+            }
         }
     }
-    out
 }
 
 // --- transcripts --------------------------------------------------------------
@@ -1297,7 +1352,8 @@ pub fn transcripts(h: Harness, root: &Path, procs: &[&Proc]) -> Vec<TranscriptRe
                     for d in subdirs(&m) {
                         for f in jsonl_in(&d) {
                             let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            let named = wanted.iter().any(|w| name.contains(w.as_str()));
+                            let named = wanted.iter().any(|w| name.contains(w.as_str()))
+                                || procs.iter().any(|p| p.held.contains(&f));
                             let recent = mtime_ms(&f).is_some_and(|m| m >= since);
                             if (named || recent)
                                 && let Some(t) = transcript_ref(h, &f)
@@ -1526,12 +1582,7 @@ pub fn assign_owned(
     let mut out = HashMap::new();
     let mut taken: HashSet<&Path> = HashSet::new();
     for p in procs {
-        if let Some(id) = p.explicit_session()
-            && let Some(t) = ts
-                .iter()
-                .filter(|t| t.session_id == id || t.session_id.starts_with(&id))
-                .max_by_key(|t| t.mtime_ms)
-        {
+        if let Some(t) = ts.iter().filter(|t| p.names(t)).max_by_key(|t| t.mtime_ms) {
             taken.insert(&t.path);
             out.insert(p.pid, t.clone());
         }
@@ -1662,9 +1713,7 @@ pub fn owners_after(
         let Some(t) = assigned.get(&p.pid) else {
             continue;
         };
-        let named = p
-            .explicit_session()
-            .is_some_and(|id| t.session_id == id || t.session_id.starts_with(&id));
+        let named = p.names(t);
         // The first start seen stays: a wobble alone is no change (no rewrite).
         let had = next.get(&t.session_id);
         if had.is_some_and(|o| o.is(p) || (o.contested() && !named)) {
@@ -2681,6 +2730,7 @@ mod tests {
             start_ms: start,
             argv: argv("pi"),
             cwd: Some(cwd.into()),
+            held: Vec::new(),
         }
     }
 
@@ -2719,6 +2769,58 @@ mod tests {
             owners_after(&owners, &got, &[&a, &b], &ts)["b"],
             owner(2, 2_000_000)
         );
+    }
+
+    #[test]
+    fn a_thread_its_process_holds_open_is_its_own_though_a_sibling_could_have_started_it() {
+        // The live case: a pane opened beside a sibling idle since long ago; its thread was
+        // stamped a minute after it started, so the sibling's `/new` fits it as well.
+        let a = proc_(1, "/w", 1_000_000);
+        let mut b = proc_(2, "/w", 5_000_000);
+        let ts = vec![
+            tref("a", "/w", 1_000_500, 2_000_000),
+            tref("b", "/w", 5_060_000, 5_100_000),
+        ];
+        let got = assign(&[&a, &b], &ts);
+        assert!(
+            !got.contains_key(&2),
+            "contested without the open file: {got:?}"
+        );
+        b.held = vec![PathBuf::from("/t/b.jsonl")];
+        let owners = owners_after(&Owners::new(), &got, &[&a, &b], &ts);
+        assert!(owners["b"].contested());
+        let got = assign_owned(&[&a, &b], &ts, &owners);
+        assert_eq!(got[&1].session_id, "a");
+        assert_eq!(got[&2].session_id, "b");
+        assert_eq!(
+            owners_after(&owners, &got, &[&a, &b], &ts)["b"],
+            owner(2, 5_000_000)
+        );
+    }
+
+    #[test]
+    fn a_held_thread_goes_to_its_holder_over_a_recorded_owner() {
+        // a's `/new` moved it to a2 while a list still records a1 as a's.
+        let mut a = proc_(1, "/w", 1_000_000);
+        a.held = vec![PathBuf::from("/t/a2.jsonl")];
+        let ts = vec![
+            tref("a1", "/w", 1_000_500, 3_000_000),
+            tref("a2", "/w", 2_000_000, 2_500_000),
+        ];
+        let mut owners = Owners::new();
+        owners.insert("a1".into(), owner(1, 1_000_000));
+        assert_eq!(assign_owned(&[&a], &ts, &owners)[&1].session_id, "a2");
+    }
+
+    #[test]
+    fn lsof_output_gives_the_cwd_and_the_jsonl_files_held_on_numbered_fds() {
+        let text = "p7\nfcwd\nn/w\nftxt\nn/bin/x.jsonl\nf94u\nn/s/r.jsonl\nf3r\nn/s/notes.txt\np8\nfcwd\nn/v\n";
+        let mut out = HashMap::new();
+        parse_lsof(text, &mut out);
+        assert_eq!(out[&7].cwd.as_deref(), Some("/w"));
+        assert_eq!(out[&7].held, vec![PathBuf::from("/s/r.jsonl")]);
+        assert_eq!(out[&8].cwd.as_deref(), Some("/v"));
+        assert!(out[&8].held.is_empty());
     }
 
     fn owner(pid: i64, start_ms: i64) -> Owner {

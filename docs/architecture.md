@@ -238,7 +238,11 @@ newest by version, ties to Codex's lower `priority` — in Codex's priority orde
 version is a family of its own. Its first entry reads plain `Default`, exactly like Claude's: it does not
 name `config.toml`'s `model` (pi's does, `Default (x)`).
 
-Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) wins; otherwise,
+Matching: an id on the command line (`codex resume <id>`, `pi --session <id>`) wins, and so does a
+transcript the process holds open itself (`lsof`, or `/proc/<pid>/fd` on Linux): an embedded Codex
+TUI keeps its own rollout open, so its row shows its thread even where the guards below would
+leave it contested. In daemon mode the app-server daemon holds every pane's rollout, which tells
+nothing, and the rest applies. Otherwise,
 later-started processes first, the newest transcript in the process's cwd created after it
 started (3 s slack), then the newest written to since it started. Three guards keep a closed
 sibling's transcript (same cwd) from taking a survivor's row, and one pane's thread from another's
@@ -268,7 +272,8 @@ sibling's transcript (same cwd) from taking a survivor's row, and one pane's thr
   more than 10 s past that, then it goes to the one process that could have taken it up. The
   costs are mostly a missing thread; the one known case of another pane's thread is under "Left open":
   - A pane opened beside an idle Codex pane in the same cwd shows no thread until the idle pane is
-    used again (its next turn proves it was not the `/new`).
+    used again (its next turn proves it was not the `/new`) — in daemon mode; an embedded pane
+    holds its rollout open and shows it at once.
   - Two panes opened within 3 s of each other in one cwd show none for as long as both stay open
     without a recorded thread; when one closes, the other's shows once it is written again.
   - A `/new` pane's row stays on its older thread until its sibling is busy on its own.
