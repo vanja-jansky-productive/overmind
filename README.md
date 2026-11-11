@@ -104,6 +104,7 @@ Building the whole setup from scratch (always-on Mac, Tailscale, ssh, tmux, phon
 | git repos | `repos` · `repos sync` · `repos install-service` — fetch + fast-forward every repo under `~/Code`, on a timer |
 | bots | `bots` · `bots show\|run\|enable\|disable` · `bots check\|forget` · `bots install-service` — agent sessions a host starts from a recipe (prompt + schedule, or a GitHub trigger: a new branch matching a pattern), like Claude Code routines; everything a bot session spawns joins its run. `jobs` is the old name, still an alias |
 | web | `web serve` · `web build` · `web install-service` |
+| lessons | `lesson learn\|list\|recall\|confirm\|retire` · `lesson proposals\|accept\|reject` · `lesson import\|export` — what sessions learned, injected into new ones by a Claude Code hook and mined from finished ones; agent-memory JSONL interop ([docs/lessons.md](docs/lessons.md)) |
 | agents | `mcp` — every command above as an MCP tool, for Claude Code and other agents |
 
 Global flags: `-H, --host <name>`, `--local`, `--json` (where it applies). Full reference:

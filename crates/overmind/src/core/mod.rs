@@ -16,6 +16,8 @@ pub mod grouping;
 pub mod harness;
 pub mod hosts;
 pub mod jobs;
+pub mod lessons;
+pub mod lessons_mine;
 pub mod naming;
 pub mod prompted;
 pub mod prs;
